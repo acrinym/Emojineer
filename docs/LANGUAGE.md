@@ -61,7 +61,7 @@ Conditions are strict booleans. Arithmetic is strict numeric except `➕`, which
 
 ## Bytecode and VM
 
-`.emoji` source compiles to `.emjbc` files with the `EMJBC` magic header and bytecode format version 1. The bytecode contains a constant pool plus fixed-width instructions. Implemented opcodes cover constants, globals, runtime type assertions, arithmetic, comparison, input/output, jumps, and halt.
+`.emoji` source compiles to `.emjbc` files with the `EMJBC` magic header and bytecode format version 1. Multi-byte fields are explicitly little-endian, numeric constants are serialized as IEEE-754 binary64 bit patterns, and readers enforce bounded constant/string/instruction sizes before allocation. The bytecode contains a constant pool plus fixed-width instructions. Implemented opcodes cover constants, globals, runtime type assertions, arithmetic, comparison, input/output, jumps, and halt.
 
 The VM has an execution-fuel counter so runaway loops terminate instead of consuming a host indefinitely. v0.1 exposes only stdin/stdout. It has no implicit filesystem, network, shell, FFI, or host-language escape hatch.
 
