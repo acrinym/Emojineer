@@ -55,6 +55,16 @@ void test_crlf_normalization() {
     const std::string source = "📝 📜hello📜\r\n";
     require(emojineer::format_source(source) == "📝 📜hello📜\n",
             "formatter should normalize CRLF to LF");
+    const auto diagnostics = emojineer::diagnose_source_style(source);
+    bool found_line_ending = false;
+    for (const auto& diagnostic : diagnostics) {
+        if (diagnostic.message.find("line endings") != std::string::npos) {
+            found_line_ending = true;
+            break;
+        }
+    }
+    require(found_line_ending,
+            "lint should reject CRLF source when LF is the canonical line ending");
 }
 
 } // namespace
