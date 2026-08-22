@@ -10,7 +10,7 @@ enum class TokenKind {
     Var, Assign, Print, If, Else, While, End, Input, True, False,
     TypeNumber, TypeString, TypeBool, Function, Return,
     Add, Subtract, Multiply, Divide, Modulo, Equal, Less, Greater, Not,
-    GroupStart, GroupEnd
+    GroupStart, GroupEnd, Array, Index, Length, Append, SetIndex
 };
 
 struct Token {

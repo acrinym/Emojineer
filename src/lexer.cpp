@@ -15,7 +15,7 @@ std::string join_canonical(const std::vector<Grapheme>& gs,size_t i,size_t n){st
 
 std::string token_kind_name(TokenKind k){switch(k){
 #define K(x) case TokenKind::x:return #x
-K(Eof);K(Newline);K(Number);K(String);K(Identifier);K(Var);K(Assign);K(Print);K(If);K(Else);K(While);K(End);K(Input);K(True);K(False);K(TypeNumber);K(TypeString);K(TypeBool);K(Function);K(Return);K(Add);K(Subtract);K(Multiply);K(Divide);K(Modulo);K(Equal);K(Less);K(Greater);K(Not);K(GroupStart);K(GroupEnd);
+K(Eof);K(Newline);K(Number);K(String);K(Identifier);K(Var);K(Assign);K(Print);K(If);K(Else);K(While);K(End);K(Input);K(True);K(False);K(TypeNumber);K(TypeString);K(TypeBool);K(Function);K(Return);K(Add);K(Subtract);K(Multiply);K(Divide);K(Modulo);K(Equal);K(Less);K(Greater);K(Not);K(GroupStart);K(GroupEnd);K(Array);K(Index);K(Length);K(Append);K(SetIndex);
 #undef K
 }return"Unknown";}
 

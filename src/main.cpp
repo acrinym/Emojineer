@@ -15,7 +15,7 @@
 namespace {
 std::string read_text(const std::filesystem::path&p){std::ifstream i(p,std::ios::binary);if(!i)throw std::runtime_error("cannot open '"+p.string()+"'");return{std::istreambuf_iterator<char>(i),{}};}
 struct Cli{std::string command;std::filesystem::path input;std::vector<std::string> cer;std::optional<std::filesystem::path> output;};
-void usage(){std::cerr<<"Emojineer 0.3\nusage:\n  emojineer <run|check|explain> <file.emoji> [--cer registry.json ...]\n  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n  emojineer exec <file.emjbc>\n";}
+void usage(){std::cerr<<"Emojineer 0.4\nusage:\n  emojineer <run|check|explain> <file.emoji> [--cer registry.json ...]\n  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n  emojineer exec <file.emjbc>\n";}
 Cli parse_cli(int argc,char**argv){if(argc<3){usage();throw std::runtime_error("missing command or input");}Cli c{argv[1],argv[2],{},std::nullopt};for(int i=3;i<argc;++i){std::string a=argv[i];if(a=="--cer"){if(++i>=argc)throw std::runtime_error("--cer requires a registry path");c.cer.push_back(argv[i]);}else if(a=="-o"){if(++i>=argc)throw std::runtime_error("-o requires an output path");c.output=std::filesystem::path(argv[i]);}else throw std::runtime_error("unknown option '"+a+"'");}return c;}
 emojineer::CustomEmojiRegistry registry_for(const Cli&c){emojineer::CustomEmojiRegistry r;for(const auto&p:c.cer)r.load_file(p);return r;}
 emojineer::Chunk compile_source(const std::string&s,emojineer::CustomEmojiRegistry r){emojineer::Lexer l(s,std::move(r));emojineer::Parser p(l.tokenize());emojineer::Compiler c;return c.compile(p.parse());}

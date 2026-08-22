@@ -7,7 +7,7 @@
 #include <vector>
 namespace emojineer::ast {
 using LiteralValue=std::variant<double,bool,std::string>;
-enum class DeclaredType{Number,String,Bool};
+enum class DeclaredType{Number,String,Bool,Array};
 struct Expr{virtual ~Expr()=default;std::size_t line{1};};using ExprPtr=std::unique_ptr<Expr>;
 struct LiteralExpr final:Expr{LiteralValue value;};
 struct VariableExpr final:Expr{std::string name;};
@@ -15,6 +15,11 @@ struct InputExpr final:Expr{};
 struct UnaryExpr final:Expr{TokenKind op;ExprPtr right;};
 struct BinaryExpr final:Expr{ExprPtr left;TokenKind op;ExprPtr right;};
 struct CallExpr final:Expr{std::string callee;std::vector<ExprPtr> arguments;};
+struct ArrayExpr final:Expr{std::vector<ExprPtr> elements;};
+struct IndexExpr final:Expr{ExprPtr collection;ExprPtr index;};
+struct LengthExpr final:Expr{ExprPtr value;};
+struct AppendExpr final:Expr{ExprPtr collection;ExprPtr value;};
+struct SetIndexExpr final:Expr{ExprPtr collection;ExprPtr index;ExprPtr value;};
 struct Stmt{virtual ~Stmt()=default;std::size_t line{1};};using StmtPtr=std::unique_ptr<Stmt>;
 struct VarDecl final:Stmt{std::string name;std::optional<DeclaredType> declared_type;ExprPtr initializer;};
 struct Assignment final:Stmt{std::string name;ExprPtr value;};

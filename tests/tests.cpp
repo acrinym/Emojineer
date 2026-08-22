@@ -17,23 +17,12 @@ void globals_in_functions(){const std::string s="🐍 🌍 🔢 🟰 10\n🛠️
 void arity_error(){try{(void)compile("🛠️ 🚀 🫴 🍎 🤲\n📦 🍎\n🏁\n📝 🚀 🫴 1 2 🤲\n");throw std::runtime_error("test failed: expected arity error");}catch(const std::runtime_error&e){require(std::string(e.what()).find("expects 1")!=std::string::npos,"arity error text");}}
 void roundtrip_functions(){auto c=compile("🛠️ 🚀 🫴 🍎 🤲\n📦 🍎 ➕ 1\n🏁\n📝 🚀 🫴 4 🤲\n");std::stringstream bytes(std::ios::in|std::ios::out|std::ios::binary);emojineer::write_bytecode(c,bytes);bytes.seekg(0);auto r=emojineer::read_bytecode(bytes);require(r.functions.size()==1,"function metadata roundtrip");std::istringstream in;std::ostringstream out;emojineer::VM vm(in,out);vm.execute(r);require(out.str()=="5\n","function bytecode roundtrip");}
 void overflow(){emojineer::Chunk c;c.constants={std::int64_t(INT64_MIN),std::int64_t(-1)};c.code={{emojineer::OpCode::Constant,0,1},{emojineer::OpCode::Constant,1,1},{emojineer::OpCode::MultiplyInt,0,1},{emojineer::OpCode::Print,0,1},{emojineer::OpCode::Halt,0,1}};std::istringstream in;std::ostringstream out;emojineer::VM vm(in,out);try{vm.execute(c);throw std::runtime_error("test failed: expected multiply overflow");}catch(const std::runtime_error&e){require(std::string(e.what()).find("overflow")!=std::string::npos,"overflow detected");}}
-void cer_tokens(){
-    const std::string json=R"({"tokens":[{"glyph":"🤖🔥","alias":":fire_print:","description":"custom fire print","maps_to":"Print"}]})";
-    emojineer::CustomEmojiRegistry reg; reg.load_json(json,"test");
-    emojineer::Lexer lex("🤖🔥 📜hello📜\n",reg); auto ts=lex.tokenize();
-    require(ts[0].kind==emojineer::TokenKind::Print,"CER longest-match token lowering");
-    require(ts[0].lexeme=="🤖🔥","CER must consume multi-grapheme token");
-    emojineer::Parser p(std::move(ts)); emojineer::Compiler comp; auto chunk=comp.compile(p.parse());
-    std::istringstream in; std::ostringstream out; emojineer::VM vm(in,out); vm.execute(chunk);
-    require(out.str()=="hello\n","custom CER syntax must execute");
-    std::string explained=lex.explain();
-    require(explained.find(":fire_print:")!=std::string::npos && explained.find("id 0x")!=std::string::npos,"CER explain metadata");
+void cer_tokens(){const std::string json=R"({"tokens":[{"glyph":"🤖🔥","alias":":fire_print:","description":"custom fire print","maps_to":"Print"}]})";emojineer::CustomEmojiRegistry reg; reg.load_json(json,"test");emojineer::Lexer lex("🤖🔥 📜hello📜\n",reg); auto ts=lex.tokenize();require(ts[0].kind==emojineer::TokenKind::Print,"CER longest-match token lowering");require(ts[0].lexeme=="🤖🔥","CER must consume multi-grapheme token");emojineer::Parser p(std::move(ts)); emojineer::Compiler comp; auto chunk=comp.compile(p.parse());std::istringstream in; std::ostringstream out; emojineer::VM vm(in,out); vm.execute(chunk);require(out.str()=="hello\n","custom CER syntax must execute");std::string explained=lex.explain();require(explained.find(":fire_print:")!=std::string::npos && explained.find("id 0x")!=std::string::npos,"CER explain metadata");}
+void cer_collisions(){emojineer::CustomEmojiRegistry reg;try { reg.load_json(R"({"tokens":[{"glyph":"✖","alias":":mul:","description":"collision","maps_to":"Multiply"}]})","collision"); throw std::runtime_error("test failed: CER canonical collision must throw"); }catch(const std::runtime_error&e){ require(std::string(e.what()).find("collision")!=std::string::npos,"CER collision diagnostic"); }}
+void collections_basic(){require(run("🐍 🧺 📚 🟰 📚 🫴 1 2 3 🤲\n📝 🧺\n📝 📏 🧺\n📝 🔎 🫴 🧺 1 🤲\n")=="[1, 2, 3]\n3\n2\n","array literal/length/index");require(run("📝 📏 📜👩‍💻a📜\n")=="2\n","text length must count grapheme clusters");require(run("📝 📚 🫴 1 📚 🫴 2 3 🤲 🤲\n")=="[1, [2, 3]]\n","nested arrays");}
+void collections_value_semantics(){const std::string s="🐍 🧺 📚 🟰 📚 🫴 1 2 🤲\n🐍 🎒 📚 🟰 📎 🫴 🧺 3 🤲\n🐍 🧰 📚 🟰 🧷 🫴 🎒 0 9 🤲\n📝 🧺\n📝 🎒\n📝 🧰\n";require(run(s)=="[1, 2]\n[1, 2, 3]\n[9, 2, 3]\n","array transforms must preserve prior values");require(run("📝 📚 🫴 1 2 🤲 🟰 📚 🫴 1 2 🤲\n")=="✅\n","array equality must be structural");}
+void collections_iteration(){const std::string s="🐍 🧺 📚 🟰 📚 🫴 2 4 6 🤲\n🐍 🧭 🔢 🟰 0\n🔁 🧭 🔽 📏 🧺\n📝 🔎 🫴 🧺 🧭 🤲\n✏️ 🧭 🟰 🧭 ➕ 1\n🏁\n";require(run(s)=="2\n4\n6\n","arrays must be iterable with core control flow");}
+void collections_roundtrip(){auto c=compile("🐍 🧺 📚 🟰 📚 🫴 4 5 🤲\n📝 📎 🫴 🧺 6 🤲\n");std::stringstream bytes(std::ios::in|std::ios::out|std::ios::binary);emojineer::write_bytecode(c,bytes);bytes.seekg(0);auto r=emojineer::read_bytecode(bytes);std::istringstream in;std::ostringstream out;emojineer::VM vm(in,out);vm.execute(r);require(out.str()=="[4, 5, 6]\n","collection bytecode roundtrip");}
+void collections_errors(){try{(void)run("🐍 🧺 📚 🟰 📚 🫴 1 🤲\n📝 🔎 🫴 🧺 2 🤲\n");throw std::runtime_error("test failed: expected index error");}catch(const std::runtime_error&e){require(std::string(e.what()).find("out of range")!=std::string::npos,"index bounds diagnostic");}try{(void)run("🐍 🧺 📚 🟰 3\n");throw std::runtime_error("test failed: expected array type error");}catch(const std::runtime_error&e){require(std::string(e.what()).find("📚")!=std::string::npos,"array type diagnostic");}}
 }
-void cer_collisions(){
-    emojineer::CustomEmojiRegistry reg;
-    try { reg.load_json(R"({"tokens":[{"glyph":"✖","alias":":mul:","description":"collision","maps_to":"Multiply"}]})","collision"); throw std::runtime_error("test failed: CER canonical collision must throw"); }
-    catch(const std::runtime_error&e){ require(std::string(e.what()).find("collision")!=std::string::npos,"CER collision diagnostic"); }
-}
-
-}
-int main(){try{baseline();functions();recursion();globals_in_functions();arity_error();roundtrip_functions();overflow();cer_tokens();cer_collisions();std::cout<<"✅ all Emojineer tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{baseline();functions();recursion();globals_in_functions();arity_error();roundtrip_functions();overflow();cer_tokens();cer_collisions();collections_basic();collections_value_semantics();collections_iteration();collections_roundtrip();collections_errors();std::cout<<"✅ all Emojineer tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}
