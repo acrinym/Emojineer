@@ -2,7 +2,7 @@
 
 Emojineer builds two command-line executables:
 
-- `emojineer` — source, bytecode, formatting, REPL, and execution tools;
+- `emojineer` — source, bytecode, formatting, REPL, standard-library, and execution tools;
 - `emji` — local project and lockfile workflow.
 
 ## Build
@@ -27,7 +27,7 @@ ctest --test-dir build --output-on-failure
 emojineer run program.emoji
 ```
 
-Compiles the source and executes it on the Emojineer VM. If the entry contains module syntax, the local module graph is resolved before compilation.
+Compiles the source and executes it on the Emojineer VM. If the entry contains module syntax, the module graph is resolved before compilation. Module imports may be local `.emoji` paths or built-in `std:<module>` specifiers.
 
 ### Check
 
@@ -70,7 +70,7 @@ Diagnoses differences from canonical formatting, including noncanonical CR/CRLF 
 emojineer dump program.emoji
 ```
 
-Compiles source in memory and disassembles the resulting chunk.
+Compiles source in memory, including local and standard-module linking, and disassembles the resulting chunk.
 
 ### Compile
 
@@ -80,6 +80,22 @@ emojineer compile program.emoji -o output.emjbc
 ```
 
 Writes serialized sovereign `EMJBC` bytecode. Without `-o`, the source extension is replaced with `.emjbc`.
+
+## Standard library catalog
+
+```text
+emojineer stdlib
+```
+
+Prints the standard modules built into this Emojineer toolchain and a short description of each one. In v0.9 the catalog contains:
+
+- `std:math`;
+- `std:arrays`;
+- `std:text`.
+
+Standard modules are implemented as Emojineer source and compiled through the normal language pipeline. See [STDLIB.md](STDLIB.md).
+
+`stdlib` takes no source input and does not accept `--cer` or `-o`.
 
 ## Bytecode commands
 
@@ -119,7 +135,7 @@ Commands:
 
 The REPL and VM intentionally share the same input stream. After `:run`, `📥` consumes the following input line from that stream.
 
-The REPL is currently single-source. `🧩`, `🔗`, and `📤` require file-based compilation because imports need a concrete source path and module root.
+The REPL is currently single-source. `🧩`, `🔗`, and `📤`, including `std:` imports, require file-based compilation because imports need the module linker.
 
 ## Custom Emoji Registry options
 
@@ -151,7 +167,7 @@ emji check
 emji check path/to/project
 ```
 
-Validates the manifest, entry source, current lock metadata when present, and the entry's local Emojineer module graph.
+Validates the manifest, entry source, current lock metadata when present, and the entry's Emojineer module graph. Built-in `std:` imports are valid graph members and do not require files in the project.
 
 ### Write lockfile
 
@@ -177,4 +193,4 @@ Successful commands return zero. Parse, compile, bytecode, project, I/O, or runt
 
 ## Current boundaries
 
-The current toolchain has no remote package registry, package publication command, language server, debugger, host FFI, network API, or filesystem standard-library API yet. Those are later product trains rather than undocumented hidden behavior.
+The v0.9 standard library is intentionally pure and capability-free. The toolchain still has no remote package registry, package publication command, language server, debugger, arbitrary host FFI, network standard-library API, or filesystem standard-library API. Those are later product trains rather than undocumented hidden behavior.
