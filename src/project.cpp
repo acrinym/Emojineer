@@ -1,4 +1,5 @@
 #include "emojineer/project.hpp"
+#include "emojineer/module.hpp"
 
 #include <cctype>
 #include <cstdint>
@@ -214,6 +215,12 @@ std::vector<ProjectDiagnostic> check_project(const std::filesystem::path& root) 
         diagnostics.push_back({"entry source does not exist: " + manifest.entry.generic_string()});
     } else if (!std::filesystem::is_regular_file(entry_path)) {
         diagnostics.push_back({"entry source is not a regular file: " + manifest.entry.generic_string()});
+    } else {
+        try {
+            (void)compile_file(entry_path, {}, root);
+        } catch (const std::exception& error) {
+            diagnostics.push_back({std::string("source graph: ") + error.what()});
+        }
     }
 
     const auto lock_path = root / "emojineer.lock";

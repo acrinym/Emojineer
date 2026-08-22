@@ -28,5 +28,8 @@ struct ReturnStmt final:Stmt{ExprPtr expression;};
 struct IfStmt final:Stmt{ExprPtr condition;std::vector<StmtPtr> then_branch;std::vector<StmtPtr> else_branch;};
 struct WhileStmt final:Stmt{ExprPtr condition;std::vector<StmtPtr> body;};
 struct FunctionDecl final:Stmt{std::string name;std::vector<std::string> parameters;std::vector<StmtPtr> body;};
+struct ModuleDecl final:Stmt{std::string name;};
+struct ImportStmt final:Stmt{std::string path;};
+struct ExportStmt final:Stmt{std::string name;};
 struct Program{std::vector<StmtPtr> statements;};
 }

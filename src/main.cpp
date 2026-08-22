@@ -1,9 +1,8 @@
 #include "emojineer/bytecode.hpp"
 #include "emojineer/cer.hpp"
-#include "emojineer/compiler.hpp"
 #include "emojineer/disassembler.hpp"
 #include "emojineer/lexer.hpp"
-#include "emojineer/parser.hpp"
+#include "emojineer/module.hpp"
 #include "emojineer/repl.hpp"
 #include "emojineer/source_tools.hpp"
 #include "emojineer/vm.hpp"
@@ -42,7 +41,7 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.6\n"
+        << "Emojineer 0.8\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...]\n"
         << "  emojineer <run|check|explain|dump|lint> <file.emoji> [--cer registry.json ...]\n"
@@ -89,14 +88,6 @@ emojineer::CustomEmojiRegistry registry_for(const Cli& cli) {
     emojineer::CustomEmojiRegistry registry;
     for (const auto& path : cli.cer) registry.load_file(path);
     return registry;
-}
-
-emojineer::Chunk compile_source(const std::string& source,
-                                emojineer::CustomEmojiRegistry registry) {
-    emojineer::Lexer lexer(source, std::move(registry));
-    emojineer::Parser parser(lexer.tokenize());
-    emojineer::Compiler compiler;
-    return compiler.compile(parser.parse());
 }
 
 emojineer::Chunk read_chunk(const std::filesystem::path& path) {
@@ -166,14 +157,14 @@ int main(int argc, char** argv) {
 
         if (cli.command == "check") {
             if (cli.output) throw std::runtime_error("check does not accept -o");
-            (void)compile_source(read_text(*cli.input), std::move(registry));
+            (void)emojineer::compile_file(*cli.input, std::move(registry));
             std::cout << "✅ " << cli.input->string() << " is valid Emojineer source\n";
             return 0;
         }
 
         if (cli.command == "run") {
             if (cli.output) throw std::runtime_error("run does not accept -o");
-            auto chunk = compile_source(read_text(*cli.input), std::move(registry));
+            auto chunk = emojineer::compile_file(*cli.input, std::move(registry));
             emojineer::VM vm(std::cin, std::cout);
             vm.execute(chunk);
             return 0;
@@ -181,13 +172,13 @@ int main(int argc, char** argv) {
 
         if (cli.command == "dump") {
             if (cli.output) throw std::runtime_error("dump does not accept -o");
-            auto chunk = compile_source(read_text(*cli.input), std::move(registry));
+            auto chunk = emojineer::compile_file(*cli.input, std::move(registry));
             emojineer::disassemble(chunk, std::cout);
             return 0;
         }
 
         if (cli.command == "compile") {
-            auto chunk = compile_source(read_text(*cli.input), std::move(registry));
+            auto chunk = emojineer::compile_file(*cli.input, std::move(registry));
             auto output_path = cli.output.value_or(*cli.input);
             if (!cli.output) output_path.replace_extension(".emjbc");
             std::ofstream output(output_path, std::ios::binary);

@@ -119,6 +119,7 @@ TokenKind token_kind_from_name(const std::string& n) {
         {"Var",TokenKind::Var},{"Assign",TokenKind::Assign},{"Print",TokenKind::Print},
         {"If",TokenKind::If},{"Else",TokenKind::Else},{"While",TokenKind::While},{"End",TokenKind::End},
         {"Input",TokenKind::Input},{"True",TokenKind::True},{"False",TokenKind::False},
+        {"Module",TokenKind::Module},{"Import",TokenKind::Import},{"Export",TokenKind::Export},
         {"TypeNumber",TokenKind::TypeNumber},{"TypeString",TokenKind::TypeString},{"TypeBool",TokenKind::TypeBool},
         {"Function",TokenKind::Function},{"Return",TokenKind::Return},{"Add",TokenKind::Add},
         {"Subtract",TokenKind::Subtract},{"Multiply",TokenKind::Multiply},{"Divide",TokenKind::Divide},
@@ -141,6 +142,8 @@ CustomEmojiRegistry::CustomEmojiRegistry() {
     core("🙅",TokenKind::Else,"begin else block"); core("🔁",TokenKind::While,"begin while loop");
     core("🏁",TokenKind::End,"end block"); core("📥",TokenKind::Input,"read one line of input");
     core("✅",TokenKind::True,"boolean true"); core("❌",TokenKind::False,"boolean false");
+    core("🧩",TokenKind::Module,"declare module"); core("🔗",TokenKind::Import,"import local module");
+    core("📤",TokenKind::Export,"export module symbol");
     core("🔢",TokenKind::TypeNumber,"number type"); core("🔤",TokenKind::TypeString,"text type");
     core("🎯",TokenKind::TypeBool,"boolean type"); core("🛠️",TokenKind::Function,"define function");
     core("📦",TokenKind::Return,"return from function"); core("➕",TokenKind::Add,"addition or text concatenation");
