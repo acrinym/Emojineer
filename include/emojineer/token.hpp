@@ -8,6 +8,7 @@ namespace emojineer {
 enum class TokenKind {
     Eof, Newline, Number, String, Identifier,
     Var, Assign, Print, If, Else, While, End, Input, True, False,
+    Module, Import, Export,
     TypeNumber, TypeString, TypeBool, Function, Return,
     Add, Subtract, Multiply, Divide, Modulo, Equal, Less, Greater, Not,
     GroupStart, GroupEnd, Array, Index, Length, Append, SetIndex
