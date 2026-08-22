@@ -1,0 +1,16 @@
+{
+  "tokens": [
+    {
+      "glyph": "🤖🔥",
+      "alias": ":fire_print:",
+      "description": "print a value using a custom two-grapheme token",
+      "maps_to": "Print"
+    },
+    {
+      "glyph": "🧠➕",
+      "alias": ":mind_add:",
+      "description": "custom addition operator",
+      "maps_to": "Add"
+    }
+  ]
+}
