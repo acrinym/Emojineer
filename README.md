@@ -1,21 +1,39 @@
 # Emojineer 🧑‍💻✨
 
-**A ground-up emoji-native programming language.**
+**A sovereign, ground-up emoji-native programming language.**
 
-Emojineer is not emoji syntax painted over Python or JavaScript. `.emoji` source is lexed as Unicode grapheme clusters, parsed into an AST, compiled to Emojineer's own `EMJBC` bytecode, and executed by Emojineer's own VM.
+Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another host language. `.emoji` source is tokenized as Unicode grapheme clusters, parsed into an Emojineer AST, linked across source modules when needed, compiled into Emojineer's own `EMJBC` bytecode, and executed by Emojineer's own VM.
 
 ```text
-UTF-8 .emoji → grapheme lexer → parser → AST → EMJBC bytecode → Emojineer VM
+UTF-8 .emoji → grapheme lexer → parser → AST → module linker → EMJBC → Emojineer VM
 ```
 
-## It runs now
+Current language/toolchain version: **0.8**.
+
+## What works now
+
+Product Trains 1 through 8 are landed:
+
+- Unicode/grapheme-aware emoji-native syntax and canonical token identity;
+- variables, optional runtime declaration types, arithmetic, comparisons, booleans, input/output;
+- `🤔` / `🙅` conditionals and `🔁` loops;
+- `🛠️` functions, parameters, locals, recursion, forward references, and `📦` return;
+- `📚` arrays, nested collections, structural equality, indexing, length, append, and replacement;
+- Custom Emoji Registry packs with multi-grapheme longest-match tokens;
+- sovereign `EMJBC` bytecode, verifier, VM execution fuel, dump/disassembly tooling;
+- buffered REPL;
+- canonical formatter and linter;
+- `emji` project manifests and deterministic lock metadata;
+- deterministic multi-file `🧩` modules with local `🔗` imports and explicit `📤` exports.
+
+## A small program
 
 ```emoji
 🐍 🍎 🔢 🟰 3
 
 🔁 🍎 🔼 0
-  📝 🍎
-  ✏️ 🍎 🟰 🍎 ➖ 1
+    📝 🍎
+    ✏️ 🍎 🟰 🍎 ➖ 1
 🏁
 
 📝 📜Liftoff 🚀📜
@@ -30,6 +48,35 @@ Output:
 Liftoff 🚀
 ```
 
+## Multi-file Emojineer
+
+`math.emoji`:
+
+```emoji
+🧩 🧮
+
+🛠️ 🧠 🫴 🍎 🤲
+    📦 🍎 ➕ 1
+🏁
+
+📤 🧠
+```
+
+`main.emoji`:
+
+```emoji
+🧩 🚀
+🔗 📜math.emoji📜
+
+📝 🧠 🫴 41 🤲
+```
+
+Output:
+
+```text
+42
+```
+
 ## Build
 
 Requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`).
@@ -40,21 +87,48 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Then:
+## Use the toolchain
 
 ```bash
 ./build/emojineer run examples/hello.emoji
+./build/emojineer run examples/modules/main.emoji
+./build/emojineer check examples/modules/main.emoji
 ./build/emojineer explain examples/countdown.emoji
+./build/emojineer fmt examples/countdown.emoji
+./build/emojineer lint examples/countdown.emoji
 ./build/emojineer compile examples/countdown.emoji
 ./build/emojineer exec examples/countdown.emjbc
+./build/emojineer dump examples/collections.emoji
+./build/emojineer repl
 ```
+
+Project workflow:
+
+```bash
+./build/emji init my-project
+./build/emji check my-project
+./build/emji lock my-project
+./build/emji show my-project
+```
+
+## Documentation
+
+Start with **[`docs/README.md`](docs/README.md)**.
+
+Key references:
+
+- [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — current v0.8 language reference and grammar;
+- [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1/v2/v3 format and VM contract;
+- [`docs/CLI.md`](docs/CLI.md) — full command-line/toolchain guide;
+- [`docs/MODULES.md`](docs/MODULES.md) — module/import/export semantics;
+- [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects and lockfiles;
+- [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — next product trains.
 
 ## Why ICU is here
 
-Emoji are extended grapheme clusters, not reliably one code point. Emojineer normalizes token identity and deliberately ignores text-vs-emoji variation selectors while preserving meaningful ZWJ/modifier sequences. That prevents an editor from silently changing program semantics just because it rendered the same glyph differently.
+Emoji are extended grapheme clusters, not reliably one Unicode code point. Emojineer deliberately normalizes canonical token identity while preserving meaningful ZWJ and modifier sequences. A source editor should not silently change program meaning merely because it chose a different emoji presentation selector.
 
-See [`docs/LANGUAGE.md`](docs/LANGUAGE.md) for the v0.1 language contract and bytecode model.
+## Project direction
 
-## Status
-
-Train 1 establishes the sovereign executable spine: Unicode token identity, lexer, parser, AST, compiler, bytecode serializer, VM, typed globals, arithmetic, control flow, I/O, explain mode, examples, and tests. Functions, collections, CER/custom tokens, package management, interop capabilities, LSP/editor support, and native code generation build on this spine.
+The next product frontier is the native standard-library foundation and real local dependency resolution. After those foundations are working, the roadmap continues into a registry protocol, language-server/editor tooling, debugging, capability-gated host facilities, WASM/HIL interop, low-level ABI work, and later native compilation.
