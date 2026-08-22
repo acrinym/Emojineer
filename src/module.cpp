@@ -4,6 +4,7 @@
 #include "emojineer/compiler.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/parser.hpp"
+#include "emojineer/stdlib.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -48,16 +49,22 @@ std::string read_text(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
-ast::Program parse_source(const std::filesystem::path& path,
-                          const CustomEmojiRegistry& registry,
-                          const std::string& identity) {
+ast::Program parse_text(const std::string& source,
+                        const CustomEmojiRegistry& registry,
+                        const std::string& identity) {
     try {
-        Lexer lexer(read_text(path), registry);
+        Lexer lexer(source, registry);
         Parser parser(lexer.tokenize());
         return parser.parse();
     } catch (const std::exception& error) {
         throw std::runtime_error("module '" + identity + "': " + error.what());
     }
+}
+
+ast::Program parse_source(const std::filesystem::path& path,
+                          const CustomEmojiRegistry& registry,
+                          const std::string& identity) {
+    return parse_text(read_text(path), registry, identity);
 }
 
 bool has_module_syntax_stmt(const ast::Stmt& stmt) {
@@ -388,6 +395,33 @@ public:
     }
 
 private:
+    [[noreturn]] void cycle_error(const std::string& identity,
+                                  const std::vector<std::string>& stack) const {
+        std::ostringstream cycle;
+        cycle << "cyclic module import: ";
+        auto first = std::find(stack.begin(), stack.end(), identity);
+        if (first == stack.end()) first = stack.begin();
+        bool sep = false;
+        for (auto it = first; it != stack.end(); ++it) {
+            if (sep) cycle << " -> ";
+            sep = true;
+            cycle << *it;
+        }
+        if (sep) cycle << " -> ";
+        cycle << identity;
+        throw std::runtime_error(cycle.str());
+    }
+
+    void register_unit(ModuleUnit unit) {
+        const std::string identity = unit.identity;
+        if (auto existing = module_names_.find(unit.module_name); existing != module_names_.end()) {
+            throw std::runtime_error("duplicate 🧩 module name declared by '" + existing->second +
+                                     "' and '" + identity + "'");
+        }
+        module_names_[unit.module_name] = identity;
+        units_.emplace(identity, std::move(unit));
+    }
+
     std::filesystem::path resolve_import(const ModuleUnit& importer, const ImportSpec& spec) const {
         const std::filesystem::path requested(spec.requested);
         if (requested.empty() || requested.is_absolute()) {
@@ -403,7 +437,7 @@ private:
         if (requested.extension() != ".emoji") {
             throw std::runtime_error("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
-                                     ": 🔗 import must target a .emoji source file");
+                                     ": 🔗 import must target a .emoji source file or std:<module>");
         }
         const auto candidate = importer.path.parent_path() / requested;
         if (!std::filesystem::exists(candidate)) {
@@ -425,6 +459,48 @@ private:
         return canonical;
     }
 
+    std::string visit_standard(const std::string& specifier,
+                               std::vector<std::string>& stack) {
+        const auto source = standard_module_source(specifier);
+        if (!source) throw std::runtime_error("unknown standard module '" + specifier + "'");
+        const std::string identity = specifier;
+        if (auto state = states_.find(identity); state != states_.end()) {
+            if (state->second == VisitState::Done) return identity;
+            cycle_error(identity, stack);
+        }
+
+        states_[identity] = VisitState::Visiting;
+        stack.push_back(identity);
+
+        ModuleUnit unit;
+        unit.identity = identity;
+        unit.program = parse_text(std::string(*source), registry_, identity);
+        analyze_unit(unit);
+        register_unit(std::move(unit));
+
+        std::unordered_set<std::string> direct;
+        const std::size_t import_count = units_.at(identity).imports.size();
+        for (std::size_t index = 0; index < import_count; ++index) {
+            const ImportSpec spec = units_.at(identity).imports[index];
+            if (spec.requested.rfind("std:", 0) != 0) {
+                throw std::runtime_error("standard module '" + identity + "' line " +
+                                         std::to_string(spec.line) +
+                                         ": standard modules may import only std:<module> sources");
+            }
+            if (!direct.insert(spec.requested).second) {
+                throw std::runtime_error("standard module '" + identity + "' line " +
+                                         std::to_string(spec.line) +
+                                         ": duplicate 🔗 import of '" + spec.requested + "'");
+            }
+            units_.at(identity).imports[index].identity = visit_standard(spec.requested, stack);
+        }
+
+        stack.pop_back();
+        states_[identity] = VisitState::Done;
+        order_.push_back(identity);
+        return identity;
+    }
+
     std::string visit(const std::filesystem::path& path, std::vector<std::string>& stack) {
         const auto canonical = std::filesystem::canonical(path);
         if (!within(root_, canonical)) {
@@ -433,19 +509,7 @@ private:
         const std::string identity = identity_for(root_, canonical);
         if (auto state = states_.find(identity); state != states_.end()) {
             if (state->second == VisitState::Done) return identity;
-            std::ostringstream cycle;
-            cycle << "cyclic module import: ";
-            auto first = std::find(stack.begin(), stack.end(), identity);
-            if (first == stack.end()) first = stack.begin();
-            bool sep = false;
-            for (auto it = first; it != stack.end(); ++it) {
-                if (sep) cycle << " -> ";
-                sep = true;
-                cycle << *it;
-            }
-            if (sep) cycle << " -> ";
-            cycle << identity;
-            throw std::runtime_error(cycle.str());
+            cycle_error(identity, stack);
         }
 
         states_[identity] = VisitState::Visiting;
@@ -456,17 +520,22 @@ private:
         unit.identity = identity;
         unit.program = parse_source(canonical, registry_, identity);
         analyze_unit(unit);
-        if (auto existing = module_names_.find(unit.module_name); existing != module_names_.end()) {
-            throw std::runtime_error("duplicate 🧩 module name declared by '" + existing->second +
-                                     "' and '" + identity + "'");
-        }
-        module_names_[unit.module_name] = identity;
-        units_.emplace(identity, std::move(unit));
+        register_unit(std::move(unit));
 
         std::unordered_set<std::string> direct;
         const std::size_t import_count = units_.at(identity).imports.size();
         for (std::size_t index = 0; index < import_count; ++index) {
             const ImportSpec spec = units_.at(identity).imports[index];
+            if (spec.requested.rfind("std:", 0) == 0) {
+                if (!direct.insert(spec.requested).second) {
+                    throw std::runtime_error("module '" + identity + "' line " +
+                                             std::to_string(spec.line) +
+                                             ": duplicate 🔗 import of '" + spec.requested + "'");
+                }
+                units_.at(identity).imports[index].identity = visit_standard(spec.requested, stack);
+                continue;
+            }
+
             const auto dependency_path = resolve_import(units_.at(identity), spec);
             const std::string dependency_id = identity_for(root_, dependency_path);
             if (!direct.insert(dependency_id).second) {

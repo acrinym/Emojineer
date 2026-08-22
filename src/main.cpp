@@ -5,6 +5,7 @@
 #include "emojineer/module.hpp"
 #include "emojineer/repl.hpp"
 #include "emojineer/source_tools.hpp"
+#include "emojineer/stdlib.hpp"
 #include "emojineer/vm.hpp"
 
 #include <filesystem>
@@ -41,9 +42,10 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.8\n"
+        << "Emojineer 0.9\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...]\n"
+        << "  emojineer stdlib\n"
         << "  emojineer <run|check|explain|dump|lint> <file.emoji> [--cer registry.json ...]\n"
         << "  emojineer fmt <file.emoji> [-o file.emoji] [--cer registry.json ...]\n"
         << "  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n"
@@ -60,7 +62,7 @@ Cli parse_cli(int argc, char** argv) {
     cli.command = argv[1];
 
     int i = 2;
-    if (cli.command != "repl") {
+    if (cli.command != "repl" && cli.command != "stdlib") {
         if (i >= argc) {
             usage();
             throw std::runtime_error("missing input");
@@ -105,6 +107,16 @@ int main(int argc, char** argv) {
         if (cli.command == "repl") {
             if (cli.output) throw std::runtime_error("repl does not accept -o");
             return emojineer::run_repl(std::cin, std::cout, std::cerr, registry_for(cli));
+        }
+
+        if (cli.command == "stdlib") {
+            if (cli.output || !cli.cer.empty()) {
+                throw std::runtime_error("stdlib does not accept source CER or -o options");
+            }
+            for (const auto& module : emojineer::standard_modules()) {
+                std::cout << module.specifier << "  " << module.description << '\n';
+            }
+            return 0;
         }
 
         if (!cli.input) throw std::runtime_error("missing input");

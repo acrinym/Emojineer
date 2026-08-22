@@ -90,33 +90,33 @@ This roadmap tracks usable language/toolchain capabilities. Landed trains are im
 - module-aware file CLI and `emji check`;
 - no VM opcode or EMJBC version bump required.
 
-## Next product trains
-
 ### Train 9 — Native standard-library foundation
 
-Build useful facilities owned by Emojineer rather than a fake host-language facade.
+- deterministic `std:<module>` imports through the ordinary module linker;
+- `std:math` with absolute value, min, max, and clamp;
+- `std:arrays` with membership, numeric sum, and reverse;
+- `std:text` with empty check, concatenation, and repeat;
+- standard modules authored as Emojineer source and compiled by the normal lexer/parser/linker/compiler/VM pipeline;
+- `emojineer stdlib` catalog command;
+- standard and file modules interoperate under the same explicit export/collision rules;
+- deterministic standard-module bytecode independent of absolute checkout path;
+- no host-language callbacks, ambient capabilities, new VM opcodes, or EMJBC version bump.
 
-Initial target families:
-
-- text/string utilities beyond core grapheme length;
-- collection utilities beyond core index/length/append/replace;
-- practical math utilities;
-- a stable standard-library module/intrinsic boundary that keeps semantics owned by Emojineer;
-- capability-gated filesystem/I/O only where a real safety model is defined.
-
-Prefer a small working library with tests and examples over a huge list of unimplemented names.
+## Next product train
 
 ### Train 10 — Real local dependency resolution
 
 Extend `emji` with an actual dependency model:
 
-- dependency declarations in `emojineer.toml`;
+- strict dependency declarations in `emojineer.toml`;
 - `emji add` and `emji remove`;
 - local/path dependencies first;
 - deterministic graph resolution;
 - lockfile dependency graph;
-- package content hashes appropriate for artifact integrity;
-- integration between dependency packages and source module resolution.
+- cryptographic package content hashes for artifact identity/integrity;
+- explicit package coordinates for cross-package imports;
+- integration between dependency packages and source module resolution;
+- cycle, duplicate-package, path-escape, and stale-lock diagnostics.
 
 Do not invent remote package publication before a registry protocol exists.
 
@@ -179,4 +179,4 @@ Do not invent remote package publication before a registry protocol exists.
 
 ## Ongoing language evolution
 
-Future language-level additions can include records/user structures, richer error values, pattern matching, interfaces/protocols, additional collection types, and accessibility-oriented textual aliases. Each should extend the sovereign language model rather than route source through another programming language.
+Future language-level additions can include records/user structures, richer error values, pattern matching, interfaces/protocols, additional collection types, richer standard modules, and accessibility-oriented textual aliases. Each should extend the sovereign language model rather than route source through another programming language.
