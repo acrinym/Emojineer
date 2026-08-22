@@ -142,6 +142,14 @@ std::string format_source(const std::string& raw_source, CustomEmojiRegistry reg
 std::vector<StyleDiagnostic> diagnose_source_style(const std::string& source,
                                                    CustomEmojiRegistry registry) {
     std::vector<StyleDiagnostic> diagnostics;
+
+    const std::size_t first_cr = source.find('\r');
+    if (first_cr != std::string::npos) {
+        const std::size_t line = 1 + static_cast<std::size_t>(
+            std::count(source.begin(), source.begin() + static_cast<std::ptrdiff_t>(first_cr), '\n'));
+        diagnostics.push_back({line, "source uses noncanonical CR/CRLF line endings; use LF"});
+    }
+
     const std::string normalized = normalize_newlines(source);
     const std::string formatted = format_source(source, std::move(registry));
     const auto original_lines = split_lines(normalized);
