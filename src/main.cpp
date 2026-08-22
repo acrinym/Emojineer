@@ -5,6 +5,7 @@
 #include "emojineer/lexer.hpp"
 #include "emojineer/parser.hpp"
 #include "emojineer/repl.hpp"
+#include "emojineer/source_tools.hpp"
 #include "emojineer/vm.hpp"
 
 #include <filesystem>
@@ -25,6 +26,13 @@ std::string read_text(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
+void write_text(const std::filesystem::path& path, const std::string& text) {
+    std::ofstream output(path, std::ios::binary);
+    if (!output) throw std::runtime_error("cannot write '" + path.string() + "'");
+    output.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (!output) throw std::runtime_error("failed while writing '" + path.string() + "'");
+}
+
 struct Cli {
     std::string command;
     std::optional<std::filesystem::path> input;
@@ -34,10 +42,11 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.5\n"
+        << "Emojineer 0.6\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...]\n"
-        << "  emojineer <run|check|explain|dump> <file.emoji> [--cer registry.json ...]\n"
+        << "  emojineer <run|check|explain|dump|lint> <file.emoji> [--cer registry.json ...]\n"
+        << "  emojineer fmt <file.emoji> [-o file.emoji] [--cer registry.json ...]\n"
         << "  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n"
         << "  emojineer <exec|disasm> <file.emjbc>\n";
 }
@@ -125,6 +134,29 @@ int main(int argc, char** argv) {
         }
 
         auto registry = registry_for(cli);
+
+        if (cli.command == "fmt") {
+            const std::string formatted =
+                emojineer::format_source(read_text(*cli.input), std::move(registry));
+            if (cli.output) write_text(*cli.output, formatted);
+            else std::cout << formatted;
+            return 0;
+        }
+
+        if (cli.command == "lint") {
+            if (cli.output) throw std::runtime_error("lint does not accept -o");
+            const auto diagnostics =
+                emojineer::diagnose_source_style(read_text(*cli.input), std::move(registry));
+            if (diagnostics.empty()) {
+                std::cout << "✅ " << cli.input->string() << " is canonically formatted\n";
+                return 0;
+            }
+            for (const auto& diagnostic : diagnostics) {
+                std::cout << cli.input->string() << ':' << diagnostic.line
+                          << ": " << diagnostic.message << '\n';
+            }
+            return 1;
+        }
 
         if (cli.command == "explain") {
             if (cli.output) throw std::runtime_error("explain does not accept -o");
