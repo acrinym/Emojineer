@@ -20,6 +20,7 @@ private:
     const Value& peek(std::uint32_t line) const;
     bool pop_bool(std::uint32_t line);
     double pop_number(std::uint32_t line);
+    std::int64_t pop_int64(std::uint32_t line);
     std::string constant_string(const Chunk& chunk, std::int32_t index, std::uint32_t line) const;
     [[noreturn]] void runtime_error(std::uint32_t line, const std::string& message) const;
 

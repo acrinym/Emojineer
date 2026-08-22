@@ -108,6 +108,9 @@ void write_bytecode(const Chunk& chunk, std::ostream& out) {
             static_assert(sizeof(double) == sizeof(std::uint64_t));
             write_u8(out, 1);
             write_u64_le(out, std::bit_cast<std::uint64_t>(*number));
+        } else if (const auto* integer = std::get_if<std::int64_t>(&value)) {
+            write_u8(out, 4);
+            write_u64_le(out, static_cast<std::uint64_t>(*integer));
         } else if (const auto* boolean = std::get_if<bool>(&value)) {
             write_u8(out, 2);
             write_u8(out, *boolean ? 1 : 0);
@@ -151,6 +154,7 @@ Chunk read_bytecode(std::istream& in) {
                 break;
             }
             case 3: chunk.constants.emplace_back(read_string(in)); break;
+            case 4: chunk.constants.emplace_back(static_cast<std::int64_t>(read_u64_le(in))); break;
             default: throw std::runtime_error("invalid constant tag in bytecode");
         }
     }
@@ -183,6 +187,9 @@ std::string opcode_name(OpCode op) {
         case OpCode::Multiply: return "Multiply";
         case OpCode::Divide: return "Divide";
         case OpCode::Modulo: return "Modulo";
+        case OpCode::AddInt: return "AddInt";
+        case OpCode::SubtractInt: return "SubtractInt";
+        case OpCode::MultiplyInt: return "MultiplyInt";
         case OpCode::Equal: return "Equal";
         case OpCode::Less: return "Less";
         case OpCode::Greater: return "Greater";
@@ -206,6 +213,9 @@ std::string value_to_string(const Value& value) {
             out << std::setprecision(15) << *number;
         }
         return out.str();
+    }
+    if (const auto* integer = std::get_if<std::int64_t>(&value)) {
+        return std::to_string(*integer);
     }
     if (const auto* boolean = std::get_if<bool>(&value)) return *boolean ? "✅" : "❌";
     return std::get<std::string>(value);

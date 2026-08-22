@@ -8,7 +8,7 @@
 
 namespace emojineer {
 
-using Value = std::variant<double, bool, std::string>;
+using Value = std::variant<std::int64_t, double, bool, std::string>;
 
 enum class OpCode : std::uint8_t {
     Constant,
@@ -22,6 +22,9 @@ enum class OpCode : std::uint8_t {
     Multiply,
     Divide,
     Modulo,
+    AddInt,
+    SubtractInt,
+    MultiplyInt,
     Equal,
     Less,
     Greater,

@@ -107,11 +107,29 @@ ast::ExprPtr Parser::primary() {
     error(peek(), "expected an expression");
 }
 
+// Helper to get a reference to a sentinel EOF token
+static const Token& eof_token() {
+    static Token eof{TokenKind::Eof, "", "", 0, 0};
+    return eof;
+}
+
 bool Parser::match(TokenKind kind) { if (!check(kind)) return false; advance(); return true; }
 bool Parser::check(TokenKind kind) const { return peek().kind == kind; }
-const Token& Parser::advance() { if (!check(TokenKind::Eof)) ++current_; return previous(); }
-const Token& Parser::previous() const { return tokens_.at(current_ - 1); }
-const Token& Parser::peek() const { return tokens_.at(current_); }
+const Token& Parser::advance() {
+    if (!check(TokenKind::Eof)) {
+        if (current_ < tokens_.size()) ++current_;
+    }
+    return previous();
+}
+const Token& Parser::previous() const {
+    if (current_ == 0) return eof_token();
+    if (current_ > tokens_.size()) return eof_token();
+    return tokens_.at(current_ - 1);
+}
+const Token& Parser::peek() const {
+    if (current_ >= tokens_.size()) return eof_token();
+    return tokens_.at(current_);
+}
 const Token& Parser::consume(TokenKind kind, const std::string& message) { if (check(kind)) return advance(); error(peek(), message); }
 void Parser::consume_line_end() { if (match(TokenKind::Newline) || check(TokenKind::Eof)) return; error(peek(), "expected end of line"); }
 void Parser::skip_newlines() { while (match(TokenKind::Newline)) {} }
