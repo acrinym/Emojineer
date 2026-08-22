@@ -1,6 +1,6 @@
-# Emojineer Language Reference — v0.8
+# Emojineer Language Reference — v0.9
 
-Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The compiler owns its lexer, AST, linker, bytecode, VM, package workflow, and semantic evolution.
+Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The compiler owns its lexer, AST, linker, bytecode, VM, standard library, package workflow, and semantic evolution.
 
 ```text
 UTF-8 .emoji
@@ -13,7 +13,7 @@ UTF-8 .emoji
   -> Emojineer VM
 ```
 
-This page describes implemented behavior through Product Train 8.
+This page describes implemented behavior through Product Train 9.
 
 ## 1. Source files and Unicode
 
@@ -66,7 +66,7 @@ Examples of valid identifiers include `🍎`, `👤`, `🌍`, and a single ZWJ e
 | `🛠️` | function declaration |
 | `📦` | return |
 | `🧩` | module declaration |
-| `🔗` | local module import |
+| `🔗` | module import |
 | `📤` | module export |
 | `➕` | addition or text concatenation |
 | `➖` | subtraction or unary negation |
@@ -266,20 +266,9 @@ Call it:
 📝 🚀 🫴 2 3 🤲
 ```
 
-Implemented behavior includes:
+Implemented behavior includes parameters, local slots, return values, recursion, forward references to functions in the same linked program, arity checking, global reads from functions, and bounded VM call depth.
 
-- parameters;
-- local slots;
-- return values;
-- recursion;
-- forward references to functions in the same linked program;
-- arity checking;
-- global reads from functions;
-- bounded VM call depth.
-
-Nested function declarations are not supported.
-
-If execution reaches the end of a function without `📦`, the compiler emits an implicit `❌` return value.
+Nested function declarations are not supported. If execution reaches the end of a function without `📦`, the compiler emits an implicit `❌` return value.
 
 See [FUNCTIONS.md](FUNCTIONS.md).
 
@@ -291,31 +280,7 @@ Create an array:
 🐍 🧺 📚 🟰 📚 🫴 2 4 6 🤲
 ```
 
-Index:
-
-```emoji
-📝 🔎 🫴 🧺 1 🤲
-```
-
-Length:
-
-```emoji
-📝 📏 🧺
-```
-
-Append without mutating the previous array value:
-
-```emoji
-🐍 🎒 📚 🟰 📎 🫴 🧺 8 🤲
-```
-
-Replace one element without mutating the previous array value:
-
-```emoji
-🐍 🧰 📚 🟰 🧷 🫴 🎒 0 9 🤲
-```
-
-Arrays can be nested. Equality is structural and recursive. Indexes must be whole, nonnegative, in-range numbers.
+Index, length, append, and value-style element replacement use `🔎`, `📏`, `📎`, and `🧷` respectively. Arrays can be nested. Equality is structural and recursive. Indexes must be whole, nonnegative, in-range numbers.
 
 `📏` also measures text by Unicode extended grapheme clusters rather than bytes or Unicode scalar count.
 
@@ -329,10 +294,16 @@ A multi-file source unit begins with a module declaration:
 🧩 🚀
 ```
 
-Import another local source file:
+Import another project-local source file:
 
 ```emoji
 🔗 📜lib/math.emoji📜
+```
+
+Import a built-in standard module:
+
+```emoji
+🔗 📜std:math📜
 ```
 
 Expose a module-owned function or declared global:
@@ -346,20 +317,36 @@ Current module rules:
 
 - `🧩` must be the first statement in a multi-file source unit;
 - one module declaration per unit;
-- `🔗` imports are local/relative `.emoji` paths;
+- ordinary `🔗` imports are relative `.emoji` paths confined to the module root;
+- `std:<name>` imports resolve deterministic built-in standard modules;
 - imports appear before executable/declaration statements;
 - imported modules expose only explicit `📤` symbols;
 - imports do not automatically re-export their imports;
 - dependency initialization is depth-first, dependency-first, and once per program;
 - cycles are rejected;
-- imports cannot escape the module root, including through canonical path resolution;
-- module-local symbols are rewritten to deterministic root-relative internal names before ordinary bytecode compilation.
+- local imports cannot escape the module root, including through canonical path resolution;
+- local module symbols are rewritten to deterministic root-relative internal names;
+- standard module symbols use deterministic `std:<name>` virtual identities.
 
-Modules do not add VM opcodes and do not require a new EMJBC version.
+Modules and the standard-library foundation do not add VM opcodes and do not require a new EMJBC version.
 
-See [MODULES.md](MODULES.md).
+See [MODULES.md](MODULES.md) and [STDLIB.md](STDLIB.md).
 
-## 13. Comments and formatting
+## 13. Native standard library
+
+Emojineer v0.9 includes three built-in standard modules:
+
+- `std:math` — `🧭` absolute value, `🤏` min, `👐` max, `🎚️` clamp;
+- `std:arrays` — `🧲` membership, `🧮` numeric sum, `🔃` reverse;
+- `std:text` — `🈳` empty test, `🪢` concatenate, `🔂` repeat.
+
+These modules are authored as Emojineer source strings and pass through the same lexer, parser, linker, compiler, EMJBC writer, and VM as user code. They are not C++/Python/JavaScript callbacks disguised as library functions.
+
+The v0.9 stdlib intentionally has no ambient filesystem, network, process, clock, randomness, shell, or FFI authority.
+
+See [STDLIB.md](STDLIB.md).
+
+## 14. Comments and formatting
 
 A comment begins with `💭` and runs to the newline outside a string.
 
@@ -369,7 +356,7 @@ Canonical files use LF line endings and should end with a newline.
 
 See [SOURCE_TOOLING.md](SOURCE_TOOLING.md).
 
-## 14. Custom Emoji Registry
+## 15. Custom Emoji Registry
 
 CER packs can add custom emoji sequences that map to an existing semantic token kind. Longest-match lexing lets multi-grapheme sequences act as one token.
 
@@ -377,36 +364,37 @@ CER provides aliases, descriptions, deterministic semantic IDs, and canonical-co
 
 See [CER.md](CER.md).
 
-## 15. Errors and current runtime boundaries
+## 16. Errors and current runtime boundaries
 
-Current compile/runtime diagnostics cover malformed source, undefined symbols, arity mismatch, invalid module graphs, bytecode corruption, division/modulo by zero, invalid collection operations, input failure, stack/call-frame errors, fuel exhaustion, and type assertions.
+Current compile/runtime diagnostics cover malformed source, undefined symbols, arity mismatch, invalid module graphs, unknown standard modules, bytecode corruption, division/modulo by zero, invalid collection operations, input failure, stack/call-frame errors, fuel exhaustion, and type assertions.
 
 The language does not currently expose implicit filesystem, network, process, shell, host FFI, or remote package-registry capabilities.
 
-## 16. Bytecode and VM
+## 17. Bytecode and VM
 
 The current compiler writes `EMJBC` version 3. The reader supports v1, v2, and v3. Bytecode is verified before execution and bounded against oversized constants, strings, function tables, and instruction streams.
 
+Standard modules are linked before bytecode generation, so Train 9 does not require an EMJBC v4.
+
 See [BYTECODE.md](BYTECODE.md) for the serialized format and VM contract.
 
-## 17. Toolchain
+## 18. Toolchain
 
-The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm commands. `emji` provides init/check/lock/show for local projects.
+The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm plus `stdlib` for listing built-in standard modules. `emji` provides init/check/lock/show for local projects.
 
 See [CLI.md](CLI.md) and [PROJECTS.md](PROJECTS.md).
 
-## 18. Deliberate future work
+## 19. Deliberate future work
 
-Not yet implemented as of v0.8:
+Not yet implemented as of v0.9:
 
-- native standard-library families beyond core language primitives;
 - local dependency declarations and dependency graph lock data;
 - remote registry/publication/cache protocol;
 - records/user-defined structures and interfaces;
 - richer error values and pattern matching;
 - language server and editor integration;
 - source debugger;
-- capability-gated filesystem/network/process APIs;
+- capability-gated filesystem/network/process standard-library APIs;
 - C/WASM/host interop boundary;
 - low-level EASM/ABI work;
 - native/LLVM backend.
