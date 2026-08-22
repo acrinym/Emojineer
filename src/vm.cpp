@@ -1,61 +1,34 @@
 #include "emojineer/vm.hpp"
-
 #include <climits>
 #include <cmath>
 #include <istream>
 #include <ostream>
 #include <stdexcept>
-
-namespace emojineer {
-
-namespace {
-
-// Checked integer arithmetic with overflow detection
-std::int64_t checked_add(std::int64_t lhs, std::int64_t rhs, std::uint32_t line, const char* op, auto runtime_err) {
-    if (rhs > 0 && lhs > INT64_MAX - rhs) runtime_err(line, "integer overflow: " + std::string(op) + " overflow");
-    if (rhs < 0 && lhs < INT64_MIN - rhs) runtime_err(line, "integer overflow: " + std::string(op) + " overflow");
-    return lhs + rhs;
+namespace emojineer { namespace {
+constexpr std::size_t MaxCallDepth=4096;
+std::int64_t checked_add(std::int64_t a,std::int64_t b,std::uint32_t line,auto fail){if((b>0&&a>INT64_MAX-b)||(b<0&&a<INT64_MIN-b))fail(line,"integer overflow: ➕ overflow");return a+b;}
+std::int64_t checked_sub(std::int64_t a,std::int64_t b,std::uint32_t line,auto fail){if((b<0&&a>INT64_MAX+b)||(b>0&&a<INT64_MIN+b))fail(line,"integer overflow: ➖ overflow");return a-b;}
+std::int64_t checked_mul(std::int64_t a,std::int64_t b,std::uint32_t line,auto fail){if(a==0||b==0)return 0;if((a==-1&&b==INT64_MIN)||(b==-1&&a==INT64_MIN))fail(line,"integer overflow: ✖️ overflow");if(a>0){if(b>0){if(a>INT64_MAX/b)fail(line,"integer overflow: ✖️ overflow");}else if(b<INT64_MIN/a)fail(line,"integer overflow: ✖️ overflow");}else{if(b>0){if(a<INT64_MIN/b)fail(line,"integer overflow: ✖️ overflow");}else if(a<INT64_MAX/b)fail(line,"integer overflow: ✖️ overflow");}return a*b;}
 }
-
-std::int64_t checked_subtract(std::int64_t lhs, std::int64_t rhs, std::uint32_t line, const char* op, auto runtime_err) {
-    if (rhs < 0 && lhs > INT64_MAX + rhs) runtime_err(line, "integer overflow: " + std::string(op) + " overflow");
-    if (rhs > 0 && lhs < INT64_MIN + rhs) runtime_err(line, "integer overflow: " + std::string(op) + " overflow");
-    return lhs - rhs;
-}
-
-std::int64_t checked_multiply(std::int64_t lhs, std::int64_t rhs, std::uint32_t line, const char* op, auto runtime_err) {
-    if (lhs == 0 || rhs == 0) return 0;
-    if (lhs > INT64_MAX / rhs) runtime_err(line, "integer overflow: " + std::string(op) + " overflow");
-    if (lhs < INT64_MIN / rhs) runtime_err(line, "integer overflow: " + std::string(op) + " overflow");
-    return lhs * rhs;
-}
-
-} // anonymous namespace
-
-VM::VM(std::istream& input,std::ostream& output,std::uint64_t fuel):input_(input),output_(output),fuel_(fuel){}
-void VM::execute(const Chunk& chunk){stack_.clear();globals_.clear();std::size_t ip=0;while(ip<chunk.code.size()){if(fuel_==0)runtime_error(chunk.code[ip].line,"execution fuel exhausted (possible infinite loop)");--fuel_;const Instruction ins=chunk.code[ip++];const auto line=ins.line;switch(ins.op){
-case OpCode::Constant:if(ins.operand<0||static_cast<std::size_t>(ins.operand)>=chunk.constants.size())runtime_error(line,"invalid constant index");stack_.push_back(chunk.constants[static_cast<std::size_t>(ins.operand)]);break;
-case OpCode::LoadGlobal:{const std::string name=constant_string(chunk,ins.operand,line);auto it=globals_.find(name);if(it==globals_.end())runtime_error(line,"undefined emoji variable '"+name+"'");stack_.push_back(it->second);break;}
-case OpCode::StoreGlobal:{const std::string name=constant_string(chunk,ins.operand,line);globals_[name]=pop(line);break;}
-case OpCode::AssertNumber:if(!std::holds_alternative<double>(peek(line)) && !std::holds_alternative<std::int64_t>(peek(line)))runtime_error(line,"🔢 variable requires a number");break;
+VM::VM(std::istream&i,std::ostream&o,std::uint64_t fuel):input_(i),output_(o),fuel_(fuel){}
+void VM::execute(const Chunk& c){verify_bytecode(c);stack_.clear();frames_.clear();globals_.clear();std::size_t ip=0;std::uint64_t remaining=fuel_;while(ip<c.code.size()){if(remaining==0)runtime_error(c.code[ip].line,"execution fuel exhausted (possible infinite loop)");--remaining;const Instruction ins=c.code[ip++];const auto line=ins.line;switch(ins.op){
+case OpCode::Constant:stack_.push_back(c.constants.at(static_cast<std::size_t>(ins.operand)));break;
+case OpCode::LoadGlobal:{auto n=constant_string(c,ins.operand,line);auto it=globals_.find(n);if(it==globals_.end())runtime_error(line,"undefined emoji variable '"+n+"'");stack_.push_back(it->second);break;}
+case OpCode::StoreGlobal:{auto n=constant_string(c,ins.operand,line);globals_[n]=pop(line);break;}
+case OpCode::LoadLocal:{auto&f=frame(line);auto s=static_cast<std::size_t>(ins.operand);if(s>=f.locals.size())runtime_error(line,"invalid local slot");stack_.push_back(f.locals[s]);break;}
+case OpCode::StoreLocal:{auto&f=frame(line);auto s=static_cast<std::size_t>(ins.operand);if(s>=f.locals.size())runtime_error(line,"invalid local slot");f.locals[s]=pop(line);break;}
+case OpCode::AssertNumber:if(!std::holds_alternative<double>(peek(line))&&!std::holds_alternative<std::int64_t>(peek(line)))runtime_error(line,"🔢 variable requires a number");break;
 case OpCode::AssertString:if(!std::holds_alternative<std::string>(peek(line)))runtime_error(line,"🔤 variable requires text");break;
 case OpCode::AssertBool:if(!std::holds_alternative<bool>(peek(line)))runtime_error(line,"🎯 variable requires ✅ or ❌");break;
-case OpCode::Add:{Value r=pop(line),l=pop(line);if(auto*ln=std::get_if<double>(&l)){if(auto*rn=std::get_if<double>(&r))stack_.emplace_back(*ln+*rn);else runtime_error(line,"➕ requires two numbers or two text values");}else if(auto*ls=std::get_if<std::string>(&l)){if(auto*rs=std::get_if<std::string>(&r))stack_.emplace_back(*ls+*rs);else runtime_error(line,"➕ requires two numbers or two text values");}else runtime_error(line,"➕ requires two numbers or two text values");break;}
-case OpCode::Subtract:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l-r);break;}case OpCode::Multiply:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l*r);break;}case OpCode::Divide:{double r=pop_number(line),l=pop_number(line);if(r==0.0)runtime_error(line,"division by zero");stack_.emplace_back(l/r);break;}case OpCode::Modulo:{double r=pop_number(line),l=pop_number(line);if(r==0.0)runtime_error(line,"modulo by zero");stack_.emplace_back(std::fmod(l,r));break;}
-case OpCode::AddInt:{std::int64_t r=pop_int64(line),l=pop_int64(line);stack_.emplace_back(checked_add(l,r,line,"➕",[this](std::uint32_t l,const std::string& m){runtime_error(l,m);}));break;}case OpCode::SubtractInt:{std::int64_t r=pop_int64(line),l=pop_int64(line);stack_.emplace_back(checked_subtract(l,r,line,"➖",[this](std::uint32_t l,const std::string& m){runtime_error(l,m);}));break;}case OpCode::MultiplyInt:{std::int64_t r=pop_int64(line),l=pop_int64(line);stack_.emplace_back(checked_multiply(l,r,line,"✖️",[this](std::uint32_t l,const std::string& m){runtime_error(l,m);}));break;}
-case OpCode::Equal:{Value r=pop(line),l=pop(line);stack_.emplace_back(l==r);break;}case OpCode::Less:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l<r);break;}case OpCode::Greater:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l>r);break;}
-case OpCode::Negate:stack_.emplace_back(-pop_number(line));break;case OpCode::Not:stack_.emplace_back(!pop_bool(line));break;
-case OpCode::ReadLine:{std::string value;if(!std::getline(input_,value))runtime_error(line,"📥 could not read input");stack_.emplace_back(std::move(value));break;}
-case OpCode::Print:output_<<value_to_string(pop(line))<<'\n';break;
-case OpCode::JumpIfFalse:{bool condition=pop_bool(line);if(!condition){if(ins.operand<0||static_cast<std::size_t>(ins.operand)>chunk.code.size())runtime_error(line,"invalid jump target");ip=static_cast<std::size_t>(ins.operand);}break;}
-case OpCode::Jump:if(ins.operand<0||static_cast<std::size_t>(ins.operand)>chunk.code.size())runtime_error(line,"invalid jump target");ip=static_cast<std::size_t>(ins.operand);break;
-case OpCode::Halt:if(!stack_.empty())runtime_error(line,"VM halted with a non-empty stack");return;}}
+case OpCode::Add:{Value r=pop(line),l=pop(line);if(auto*ln=std::get_if<double>(&l)){if(auto*rn=std::get_if<double>(&r))stack_.emplace_back(*ln+*rn);else runtime_error(line,"➕ requires two numbers or two text values");}else if(auto*li=std::get_if<std::int64_t>(&l)){if(auto*ri=std::get_if<std::int64_t>(&r))stack_.emplace_back(checked_add(*li,*ri,line,[this](auto q,const auto&m){runtime_error(q,m);}));else runtime_error(line,"➕ requires two numbers or two text values");}else if(auto*ls=std::get_if<std::string>(&l)){if(auto*rs=std::get_if<std::string>(&r))stack_.emplace_back(*ls+*rs);else runtime_error(line,"➕ requires two numbers or two text values");}else runtime_error(line,"➕ requires two numbers or two text values");break;}
+case OpCode::Subtract:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l-r);break;}case OpCode::Multiply:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l*r);break;}case OpCode::Divide:{double r=pop_number(line),l=pop_number(line);if(r==0)runtime_error(line,"division by zero");stack_.emplace_back(l/r);break;}case OpCode::Modulo:{double r=pop_number(line),l=pop_number(line);if(r==0)runtime_error(line,"modulo by zero");stack_.emplace_back(std::fmod(l,r));break;}
+case OpCode::AddInt:{auto r=pop_int64(line),l=pop_int64(line);stack_.emplace_back(checked_add(l,r,line,[this](auto q,const auto&m){runtime_error(q,m);}));break;}case OpCode::SubtractInt:{auto r=pop_int64(line),l=pop_int64(line);stack_.emplace_back(checked_sub(l,r,line,[this](auto q,const auto&m){runtime_error(q,m);}));break;}case OpCode::MultiplyInt:{auto r=pop_int64(line),l=pop_int64(line);stack_.emplace_back(checked_mul(l,r,line,[this](auto q,const auto&m){runtime_error(q,m);}));break;}
+case OpCode::Equal:{Value r=pop(line),l=pop(line);stack_.emplace_back(l==r);break;}case OpCode::Less:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l<r);break;}case OpCode::Greater:{double r=pop_number(line),l=pop_number(line);stack_.emplace_back(l>r);break;}case OpCode::Negate:stack_.emplace_back(-pop_number(line));break;case OpCode::Not:stack_.emplace_back(!pop_bool(line));break;
+case OpCode::ReadLine:{std::string v;if(!std::getline(input_,v))runtime_error(line,"📥 could not read input");stack_.emplace_back(std::move(v));break;}case OpCode::Print:output_<<value_to_string(pop(line))<<'\n';break;
+case OpCode::JumpIfFalse:{bool cond=pop_bool(line);if(!cond)ip=static_cast<std::size_t>(ins.operand);break;}case OpCode::Jump:ip=static_cast<std::size_t>(ins.operand);break;
+case OpCode::Call:{auto fi=static_cast<std::size_t>(ins.operand);const auto&fn=c.functions[fi];if(stack_.size()<fn.arity)runtime_error(line,"not enough call arguments on VM stack");if(frames_.size()>=MaxCallDepth)runtime_error(line,"maximum function call depth exceeded");CallFrame f;f.return_ip=ip;f.stack_base=stack_.size()-fn.arity;f.function_index=fi;f.locals.resize(fn.local_count,false);for(std::size_t n=fn.arity;n>0;--n)f.locals[n-1]=pop(line);frames_.push_back(std::move(f));ip=fn.entry;break;}
+case OpCode::Return:{if(frames_.empty())runtime_error(line,"Return executed outside a function");Value result=pop(line);CallFrame f=std::move(frames_.back());frames_.pop_back();if(stack_.size()!=f.stack_base)runtime_error(line,"function returned with leaked operand stack values");ip=f.return_ip;stack_.push_back(std::move(result));break;}
+case OpCode::Halt:if(!frames_.empty())runtime_error(line,"VM halted inside a function");if(!stack_.empty())runtime_error(line,"VM halted with a non-empty stack");return;}}
 runtime_error(0,"bytecode terminated without Halt");}
-Value VM::pop(std::uint32_t line){if(stack_.empty())runtime_error(line,"VM stack underflow");Value v=std::move(stack_.back());stack_.pop_back();return v;}
-const Value& VM::peek(std::uint32_t line)const{if(stack_.empty())runtime_error(line,"VM stack underflow");return stack_.back();}
-bool VM::pop_bool(std::uint32_t line){Value v=pop(line);if(auto*b=std::get_if<bool>(&v))return*b;runtime_error(line,"condition requires ✅ or ❌");}
-double VM::pop_number(std::uint32_t line){Value v=pop(line);if(auto*n=std::get_if<double>(&v))return*n;if(auto*i=std::get_if<std::int64_t>(&v))return static_cast<double>(*i);runtime_error(line,"numeric operation requires numbers");}
-std::int64_t VM::pop_int64(std::uint32_t line){Value v=pop(line);if(auto*i=std::get_if<std::int64_t>(&v))return*i;if(auto*n=std::get_if<double>(&v))return static_cast<std::int64_t>(*n);runtime_error(line,"integer operation requires integers");}
-std::string VM::constant_string(const Chunk& chunk,std::int32_t index,std::uint32_t line)const{if(index<0||static_cast<std::size_t>(index)>=chunk.constants.size())runtime_error(line,"invalid constant index");const auto*value=std::get_if<std::string>(&chunk.constants[static_cast<std::size_t>(index)]);if(!value)runtime_error(line,"bytecode expected string constant");return*value;}
-[[noreturn]] void VM::runtime_error(std::uint32_t line,const std::string& message)const{if(line!=0)throw std::runtime_error("runtime line "+std::to_string(line)+": "+message);throw std::runtime_error("runtime: "+message);}
-} // namespace emojineer
+Value VM::pop(std::uint32_t line){if(stack_.empty())runtime_error(line,"VM stack underflow");Value v=std::move(stack_.back());stack_.pop_back();return v;}const Value&VM::peek(std::uint32_t line)const{if(stack_.empty())runtime_error(line,"VM stack underflow");return stack_.back();}bool VM::pop_bool(std::uint32_t line){Value v=pop(line);if(auto*b=std::get_if<bool>(&v))return*b;runtime_error(line,"condition requires ✅ or ❌");}double VM::pop_number(std::uint32_t line){Value v=pop(line);if(auto*n=std::get_if<double>(&v))return*n;if(auto*i=std::get_if<std::int64_t>(&v))return static_cast<double>(*i);runtime_error(line,"numeric operation requires numbers");}std::int64_t VM::pop_int64(std::uint32_t line){Value v=pop(line);if(auto*i=std::get_if<std::int64_t>(&v))return*i;runtime_error(line,"integer operation requires integers");}std::string VM::constant_string(const Chunk&c,std::int32_t idx,std::uint32_t line)const{if(idx<0||static_cast<std::size_t>(idx)>=c.constants.size())runtime_error(line,"invalid constant index");auto*s=std::get_if<std::string>(&c.constants[static_cast<std::size_t>(idx)]);if(!s)runtime_error(line,"bytecode expected string constant");return*s;}VM::CallFrame&VM::frame(std::uint32_t line){if(frames_.empty())runtime_error(line,"local variable access outside function");return frames_.back();}const VM::CallFrame&VM::frame(std::uint32_t line)const{if(frames_.empty())runtime_error(line,"local variable access outside function");return frames_.back();}[[noreturn]]void VM::runtime_error(std::uint32_t line,const std::string&m)const{if(line)throw std::runtime_error("runtime line "+std::to_string(line)+": "+m);throw std::runtime_error("runtime: "+m);}
+}
