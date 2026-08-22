@@ -123,7 +123,9 @@ TokenKind token_kind_from_name(const std::string& n) {
         {"Function",TokenKind::Function},{"Return",TokenKind::Return},{"Add",TokenKind::Add},
         {"Subtract",TokenKind::Subtract},{"Multiply",TokenKind::Multiply},{"Divide",TokenKind::Divide},
         {"Modulo",TokenKind::Modulo},{"Equal",TokenKind::Equal},{"Less",TokenKind::Less},{"Greater",TokenKind::Greater},
-        {"Not",TokenKind::Not},{"GroupStart",TokenKind::GroupStart},{"GroupEnd",TokenKind::GroupEnd}
+        {"Not",TokenKind::Not},{"GroupStart",TokenKind::GroupStart},{"GroupEnd",TokenKind::GroupEnd},
+        {"Array",TokenKind::Array},{"Index",TokenKind::Index},{"Length",TokenKind::Length},
+        {"Append",TokenKind::Append},{"SetIndex",TokenKind::SetIndex}
     };
     auto it = map.find(n);
     if (it == map.end()) throw std::runtime_error("CER maps_to references unknown core token kind '" + n + "'");
@@ -147,6 +149,9 @@ CustomEmojiRegistry::CustomEmojiRegistry() {
     core("🟰",TokenKind::Equal,"assignment separator or equality comparison"); core("🔽",TokenKind::Less,"less-than comparison");
     core("🔼",TokenKind::Greater,"greater-than comparison"); core("🚫",TokenKind::Not,"boolean negation");
     core("🫴",TokenKind::GroupStart,"begin grouped expression or argument list"); core("🤲",TokenKind::GroupEnd,"end grouped expression or argument list");
+    core("📚",TokenKind::Array,"array type or array literal"); core("🔎",TokenKind::Index,"read array element by index");
+    core("📏",TokenKind::Length,"array or text length"); core("📎",TokenKind::Append,"return array with appended value");
+    core("🧷",TokenKind::SetIndex,"return array with element replaced");
 }
 
 void CustomEmojiRegistry::add_definition(std::string glyph, TokenKind kind, std::string alias,
