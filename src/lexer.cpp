@@ -4,17 +4,56 @@
 #include <sstream>
 #include <stdexcept>
 #include <utility>
+
 namespace emojineer { namespace {
-bool is_ascii_digit_grapheme(const Grapheme& g){return g.display.size()==1&&std::isdigit(static_cast<unsigned char>(g.display[0]));}
-bool is_ascii_space(const Grapheme& g){return g.display==" "||g.display=="\t"||g.display=="\r";}
-std::string normalize_newlines(std::string source){std::string out;out.reserve(source.size());for(std::size_t i=0;i<source.size();++i){if(source[i]=='\r'){if(i+1<source.size()&&source[i+1]=='\n')++i;out.push_back('\n');}else out.push_back(source[i]);}return out;}
+bool digit(const Grapheme& g){return g.display.size()==1&&std::isdigit(static_cast<unsigned char>(g.display[0]));}
+bool space(const Grapheme& g){return g.display==" "||g.display=="\t"||g.display=="\r";}
+std::string normalize_newlines(std::string s){std::string o;o.reserve(s.size());for(size_t i=0;i<s.size();++i){if(s[i]=='\r'){if(i+1<s.size()&&s[i+1]=='\n')++i;o+='\n';}else o+=s[i];}return o;}
+std::string join_display(const std::vector<Grapheme>& gs,size_t i,size_t n){std::string s;for(size_t k=0;k<n;++k)s+=gs[i+k].display;return s;}
+std::string join_canonical(const std::vector<Grapheme>& gs,size_t i,size_t n){std::string s;for(size_t k=0;k<n;++k)s+=gs[i+k].canonical;return s;}
+} // namespace
+
+std::string token_kind_name(TokenKind k){switch(k){
+#define K(x) case TokenKind::x:return #x
+K(Eof);K(Newline);K(Number);K(String);K(Identifier);K(Var);K(Assign);K(Print);K(If);K(Else);K(While);K(End);K(Input);K(True);K(False);K(TypeNumber);K(TypeString);K(TypeBool);K(Function);K(Return);K(Add);K(Subtract);K(Multiply);K(Divide);K(Modulo);K(Equal);K(Less);K(Greater);K(Not);K(GroupStart);K(GroupEnd);
+#undef K
+}return"Unknown";}
+
+Lexer::Lexer(std::string source):source_(normalize_newlines(std::move(source))),registry_(){}
+Lexer::Lexer(std::string source,CustomEmojiRegistry registry):source_(normalize_newlines(std::move(source))),registry_(std::move(registry)){}
+
+std::vector<Token> Lexer::tokenize() const {
+    const auto gs=segment_graphemes(source_);
+    const std::string fence=canonicalize_token("📜"),comment=canonicalize_token("💭");
+    std::vector<Token> out;size_t line=1,col=1;
+    for(size_t i=0;i<gs.size();){const auto&g=gs[i];
+        if(g.display=="\n"){out.push_back({TokenKind::Newline,"\n","\n","",line,col});++line;col=1;++i;continue;}
+        if(space(g)){++col;++i;continue;}
+        if(g.canonical==comment){while(i<gs.size()&&gs[i].display!="\n"){++i;++col;}continue;}
+        if(g.canonical==fence){size_t sl=line,sc=col;std::string lit,lex=g.display;++i;++col;bool closed=false;while(i<gs.size()){const auto&p=gs[i];if(p.canonical==fence){lex+=p.display;++i;++col;closed=true;break;}if(p.display=="\n"){++line;col=1;}else ++col;lit+=p.display;lex+=p.display;++i;}if(!closed)throw std::runtime_error("line "+std::to_string(sl)+", column "+std::to_string(sc)+": unterminated 📜 string literal");out.push_back({TokenKind::String,lex,fence,lit,sl,sc});continue;}
+        if(digit(g)){size_t sc=col;bool dot=false;std::string num;while(i<gs.size()){const auto&p=gs[i];if(digit(p)){num+=p.display;++i;++col;continue;}if(p.display=="."&&!dot){dot=true;num+='.';++i;++col;continue;}break;}if(!num.empty()&&num.back()=='.')throw std::runtime_error("line "+std::to_string(line)+": number cannot end with '.'");out.push_back({TokenKind::Number,num,num,num,line,sc});continue;}
+        size_t consumed=0;const auto* def=registry_.match(gs,i,consumed);
+        if(def){const size_t sc=col;std::string lex=join_display(gs,i,consumed),canon=join_canonical(gs,i,consumed);out.push_back({def->kind,lex,canon,"",line,sc});i+=consumed;col+=consumed;continue;}
+        if(is_emoji_grapheme(g.canonical)){out.push_back({TokenKind::Identifier,g.display,g.canonical,g.canonical,line,col});++i;++col;continue;}
+        std::ostringstream msg;msg<<"line "<<line<<", column "<<col<<": unexpected grapheme '"<<g.display<<"' ("<<codepoints_hex(g.display)<<")";throw std::runtime_error(msg.str());
+    }
+    out.push_back({TokenKind::Eof,"","","",line,col});return out;
 }
-TokenRegistry::TokenRegistry(){auto add=[&](const std::string& glyph,TokenKind kind,const std::string& description){definitions_.emplace(canonicalize_token(glyph),TokenDefinition{kind,description});};
-add("🐍",TokenKind::Var,"declare variable");add("✏️",TokenKind::Assign,"assign variable");add("📝",TokenKind::Print,"print value");add("🤔",TokenKind::If,"begin if block");add("🙅",TokenKind::Else,"begin else block");add("🔁",TokenKind::While,"begin while loop");add("🏁",TokenKind::End,"end block");add("📥",TokenKind::Input,"read one line of input");add("✅",TokenKind::True,"boolean true");add("❌",TokenKind::False,"boolean false");add("🔢",TokenKind::TypeNumber,"number type");add("🔤",TokenKind::TypeString,"text type");add("🎯",TokenKind::TypeBool,"boolean type");add("🛠️",TokenKind::Function,"define function");add("📦",TokenKind::Return,"return from function");add("➕",TokenKind::Add,"addition or text concatenation");add("➖",TokenKind::Subtract,"subtraction or numeric negation");add("✖️",TokenKind::Multiply,"multiplication");add("➗",TokenKind::Divide,"division");add("🪄",TokenKind::Modulo,"remainder");add("🟰",TokenKind::Equal,"assignment separator or equality comparison");add("🔽",TokenKind::Less,"less-than comparison");add("🔼",TokenKind::Greater,"greater-than comparison");add("🚫",TokenKind::Not,"boolean negation");add("🫴",TokenKind::GroupStart,"begin grouped expression or argument list");add("🤲",TokenKind::GroupEnd,"end grouped expression or argument list");}
-const TokenDefinition* TokenRegistry::find(const std::string& canonical)const{auto it=definitions_.find(canonical);return it==definitions_.end()?nullptr:&it->second;}
-std::string TokenRegistry::describe(TokenKind kind)const{for(const auto& [_,d]:definitions_)if(d.kind==kind)return d.description;switch(kind){case TokenKind::Number:return"numeric literal";case TokenKind::String:return"text literal";case TokenKind::Identifier:return"emoji identifier";case TokenKind::Newline:return"end of source line";case TokenKind::Eof:return"end of file";default:return token_kind_name(kind);}}
-std::string token_kind_name(TokenKind kind){switch(kind){case TokenKind::Eof:return"Eof";case TokenKind::Newline:return"Newline";case TokenKind::Number:return"Number";case TokenKind::String:return"String";case TokenKind::Identifier:return"Identifier";case TokenKind::Var:return"Var";case TokenKind::Assign:return"Assign";case TokenKind::Print:return"Print";case TokenKind::If:return"If";case TokenKind::Else:return"Else";case TokenKind::While:return"While";case TokenKind::End:return"End";case TokenKind::Input:return"Input";case TokenKind::True:return"True";case TokenKind::False:return"False";case TokenKind::TypeNumber:return"TypeNumber";case TokenKind::TypeString:return"TypeString";case TokenKind::TypeBool:return"TypeBool";case TokenKind::Function:return"Function";case TokenKind::Return:return"Return";case TokenKind::Add:return"Add";case TokenKind::Subtract:return"Subtract";case TokenKind::Multiply:return"Multiply";case TokenKind::Divide:return"Divide";case TokenKind::Modulo:return"Modulo";case TokenKind::Equal:return"Equal";case TokenKind::Less:return"Less";case TokenKind::Greater:return"Greater";case TokenKind::Not:return"Not";case TokenKind::GroupStart:return"GroupStart";case TokenKind::GroupEnd:return"GroupEnd";}return"Unknown";}
-Lexer::Lexer(std::string source):source_(normalize_newlines(std::move(source))){}
-std::vector<Token> Lexer::tokenize()const{const auto graphemes=segment_graphemes(source_);const std::string string_fence=canonicalize_token("📜"),comment=canonicalize_token("💭");std::vector<Token> tokens;std::size_t line=1,column=1;for(std::size_t i=0;i<graphemes.size();){const Grapheme& g=graphemes[i];if(g.display=="\n"){tokens.push_back({TokenKind::Newline,"\n","\n","",line,column});++line;column=1;++i;continue;}if(is_ascii_space(g)){++column;++i;continue;}if(g.canonical==comment){while(i<graphemes.size()&&graphemes[i].display!="\n"){++i;++column;}continue;}if(g.canonical==string_fence){const std::size_t sl=line,sc=column;std::string literal,lexeme=g.display;++i;++column;bool closed=false;while(i<graphemes.size()){const auto& part=graphemes[i];if(part.canonical==string_fence){lexeme+=part.display;++i;++column;closed=true;break;}if(part.display=="\n"){++line;column=1;}else ++column;literal+=part.display;lexeme+=part.display;++i;}if(!closed){std::ostringstream msg;msg<<"line "<<sl<<", column "<<sc<<": unterminated 📜 string literal";throw std::runtime_error(msg.str());}tokens.push_back({TokenKind::String,lexeme,string_fence,literal,sl,sc});continue;}if(is_ascii_digit_grapheme(g)){const std::size_t sc=column;bool dot=false;std::string number;while(i<graphemes.size()){const auto& p=graphemes[i];if(is_ascii_digit_grapheme(p)){number+=p.display;++i;++column;continue;}if(p.display=="."&&!dot){dot=true;number+='.';++i;++column;continue;}break;}if(!number.empty()&&number.back()=='.')throw std::runtime_error("line "+std::to_string(line)+": number cannot end with '.'");tokens.push_back({TokenKind::Number,number,number,number,line,sc});continue;}if(const auto* def=registry_.find(g.canonical)){tokens.push_back({def->kind,g.display,g.canonical,"",line,column});++column;++i;continue;}if(is_emoji_grapheme(g.canonical)){tokens.push_back({TokenKind::Identifier,g.display,g.canonical,g.canonical,line,column});++column;++i;continue;}std::ostringstream msg;msg<<"line "<<line<<", column "<<column<<": unexpected grapheme '"<<g.display<<"' ("<<codepoints_hex(g.display)<<")";throw std::runtime_error(msg.str());}tokens.push_back({TokenKind::Eof,"","","",line,column});return tokens;}
-std::string Lexer::explain()const{std::ostringstream out;for(const Token& token:tokenize()){if(token.kind==TokenKind::Eof||token.kind==TokenKind::Newline)continue;out<<token.line<<':'<<token.column<<"  "<<token.lexeme<<"  →  "<<registry_.describe(token.kind);if(token.kind==TokenKind::Identifier)out<<" [canonical "<<codepoints_hex(token.canonical)<<']';else if(token.kind==TokenKind::Number||token.kind==TokenKind::String)out<<" = "<<token.literal;out<<'\n';}return out.str();}
+
+std::string Lexer::explain() const {
+    std::ostringstream out;
+    for(const Token&t:tokenize()){
+        if(t.kind==TokenKind::Eof||t.kind==TokenKind::Newline)continue;
+        out<<t.line<<':'<<t.column<<"  "<<t.lexeme<<"  →  ";
+        auto gs=segment_graphemes(t.lexeme);size_t n=0;const auto*d=registry_.match(gs,0,n);
+        if(d&&n==gs.size()){
+            out<<d->description;
+            if(!d->alias.empty())out<<" ["<<d->alias<<"]";
+            out<<" [id 0x"<<std::hex<<std::uppercase<<d->semantic_id<<std::dec<<']';
+        }else if(t.kind==TokenKind::Identifier)out<<"emoji identifier [canonical "<<codepoints_hex(t.canonical)<<']';
+        else if(t.kind==TokenKind::Number||t.kind==TokenKind::String)out<<(t.kind==TokenKind::Number?"numeric literal":"text literal")<<" = "<<t.literal;
+        else out<<registry_.describe(t.kind);
+        out<<'\n';
+    }return out.str();
 }
+} // namespace emojineer
