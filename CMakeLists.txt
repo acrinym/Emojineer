@@ -15,12 +15,15 @@ add_library(emojineer_core
     src/disassembler.cpp
     src/repl.cpp
     src/source_tools.cpp
+    src/project.cpp
 )
 target_include_directories(emojineer_core PUBLIC include)
 target_link_libraries(emojineer_core PUBLIC ICU::uc ICU::i18n)
 target_compile_options(emojineer_core PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(emojineer src/main.cpp)
 target_link_libraries(emojineer PRIVATE emojineer_core)
+add_executable(emji src/emji_main.cpp)
+target_link_libraries(emji PRIVATE emojineer_core)
 include(CTest)
 if(BUILD_TESTING)
  add_executable(emojineer_tests tests/tests.cpp)
@@ -29,4 +32,10 @@ if(BUILD_TESTING)
  add_executable(emojineer_source_tools_tests tests/source_tools_tests.cpp)
  target_link_libraries(emojineer_source_tools_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_source_tools_tests COMMAND emojineer_source_tools_tests)
+ add_executable(emojineer_project_tests tests/project_tests.cpp)
+ target_link_libraries(emojineer_project_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_project_tests COMMAND emojineer_project_tests)
+ add_executable(emojineer_repl_stream_tests tests/repl_stream_tests.cpp)
+ target_link_libraries(emojineer_repl_stream_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_repl_stream_tests COMMAND emojineer_repl_stream_tests)
 endif()
