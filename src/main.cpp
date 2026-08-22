@@ -1,9 +1,12 @@
 #include "emojineer/bytecode.hpp"
 #include "emojineer/cer.hpp"
 #include "emojineer/compiler.hpp"
+#include "emojineer/disassembler.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/parser.hpp"
+#include "emojineer/repl.hpp"
 #include "emojineer/vm.hpp"
+
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -11,13 +14,161 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
+
 namespace {
-std::string read_text(const std::filesystem::path&p){std::ifstream i(p,std::ios::binary);if(!i)throw std::runtime_error("cannot open '"+p.string()+"'");return{std::istreambuf_iterator<char>(i),{}};}
-struct Cli{std::string command;std::filesystem::path input;std::vector<std::string> cer;std::optional<std::filesystem::path> output;};
-void usage(){std::cerr<<"Emojineer 0.4\nusage:\n  emojineer <run|check|explain> <file.emoji> [--cer registry.json ...]\n  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n  emojineer exec <file.emjbc>\n";}
-Cli parse_cli(int argc,char**argv){if(argc<3){usage();throw std::runtime_error("missing command or input");}Cli c{argv[1],argv[2],{},std::nullopt};for(int i=3;i<argc;++i){std::string a=argv[i];if(a=="--cer"){if(++i>=argc)throw std::runtime_error("--cer requires a registry path");c.cer.push_back(argv[i]);}else if(a=="-o"){if(++i>=argc)throw std::runtime_error("-o requires an output path");c.output=std::filesystem::path(argv[i]);}else throw std::runtime_error("unknown option '"+a+"'");}return c;}
-emojineer::CustomEmojiRegistry registry_for(const Cli&c){emojineer::CustomEmojiRegistry r;for(const auto&p:c.cer)r.load_file(p);return r;}
-emojineer::Chunk compile_source(const std::string&s,emojineer::CustomEmojiRegistry r){emojineer::Lexer l(s,std::move(r));emojineer::Parser p(l.tokenize());emojineer::Compiler c;return c.compile(p.parse());}
+
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
-int main(int argc,char**argv){try{Cli c=parse_cli(argc,argv);if(c.command=="exec"){if(!c.cer.empty()||c.output)throw std::runtime_error("exec does not use source CER or -o options");std::ifstream in(c.input,std::ios::binary);if(!in)throw std::runtime_error("cannot open '"+c.input.string()+"'");auto chunk=emojineer::read_bytecode(in);emojineer::VM vm(std::cin,std::cout);vm.execute(chunk);return 0;}auto reg=registry_for(c);if(c.command=="explain"){std::cout<<emojineer::Lexer(read_text(c.input),std::move(reg)).explain();return 0;}if(c.command=="check"){(void)compile_source(read_text(c.input),std::move(reg));std::cout<<"✅ "<<c.input.string()<<" is valid Emojineer source\n";return 0;}if(c.command=="run"){auto chunk=compile_source(read_text(c.input),std::move(reg));emojineer::VM vm(std::cin,std::cout);vm.execute(chunk);return 0;}if(c.command=="compile"){auto chunk=compile_source(read_text(c.input),std::move(reg));auto outpath=c.output.value_or(c.input);if(!c.output)outpath.replace_extension(".emjbc");std::ofstream out(outpath,std::ios::binary);if(!out)throw std::runtime_error("cannot write '"+outpath.string()+"'");emojineer::write_bytecode(chunk,out);std::cout<<"✅ wrote "<<outpath.string()<<'\n';return 0;}usage();return 2;}catch(const std::exception&e){std::cerr<<"emojineer: "<<e.what()<<'\n';return 1;}}
+
+struct Cli {
+    std::string command;
+    std::optional<std::filesystem::path> input;
+    std::vector<std::string> cer;
+    std::optional<std::filesystem::path> output;
+};
+
+void usage() {
+    std::cerr
+        << "Emojineer 0.5\n"
+        << "usage:\n"
+        << "  emojineer repl [--cer registry.json ...]\n"
+        << "  emojineer <run|check|explain|dump> <file.emoji> [--cer registry.json ...]\n"
+        << "  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n"
+        << "  emojineer <exec|disasm> <file.emjbc>\n";
+}
+
+Cli parse_cli(int argc, char** argv) {
+    if (argc < 2) {
+        usage();
+        throw std::runtime_error("missing command");
+    }
+
+    Cli cli;
+    cli.command = argv[1];
+
+    int i = 2;
+    if (cli.command != "repl") {
+        if (i >= argc) {
+            usage();
+            throw std::runtime_error("missing input");
+        }
+        cli.input = std::filesystem::path(argv[i++]);
+    }
+
+    for (; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--cer") {
+            if (++i >= argc) throw std::runtime_error("--cer requires a registry path");
+            cli.cer.push_back(argv[i]);
+        } else if (arg == "-o") {
+            if (++i >= argc) throw std::runtime_error("-o requires an output path");
+            cli.output = std::filesystem::path(argv[i]);
+        } else {
+            throw std::runtime_error("unknown option '" + arg + "'");
+        }
+    }
+
+    return cli;
+}
+
+emojineer::CustomEmojiRegistry registry_for(const Cli& cli) {
+    emojineer::CustomEmojiRegistry registry;
+    for (const auto& path : cli.cer) registry.load_file(path);
+    return registry;
+}
+
+emojineer::Chunk compile_source(const std::string& source,
+                                emojineer::CustomEmojiRegistry registry) {
+    emojineer::Lexer lexer(source, std::move(registry));
+    emojineer::Parser parser(lexer.tokenize());
+    emojineer::Compiler compiler;
+    return compiler.compile(parser.parse());
+}
+
+emojineer::Chunk read_chunk(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
+    return emojineer::read_bytecode(input);
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    try {
+        Cli cli = parse_cli(argc, argv);
+
+        if (cli.command == "repl") {
+            if (cli.output) throw std::runtime_error("repl does not accept -o");
+            return emojineer::run_repl(std::cin, std::cout, std::cerr, registry_for(cli));
+        }
+
+        if (!cli.input) throw std::runtime_error("missing input");
+
+        if (cli.command == "exec" || cli.command == "disasm") {
+            if (!cli.cer.empty() || cli.output) {
+                throw std::runtime_error(cli.command + " does not use source CER or -o options");
+            }
+            auto chunk = read_chunk(*cli.input);
+            if (cli.command == "disasm") {
+                emojineer::verify_bytecode(chunk);
+                emojineer::disassemble(chunk, std::cout);
+                return 0;
+            }
+            emojineer::VM vm(std::cin, std::cout);
+            vm.execute(chunk);
+            return 0;
+        }
+
+        auto registry = registry_for(cli);
+
+        if (cli.command == "explain") {
+            if (cli.output) throw std::runtime_error("explain does not accept -o");
+            std::cout << emojineer::Lexer(read_text(*cli.input), std::move(registry)).explain();
+            return 0;
+        }
+
+        if (cli.command == "check") {
+            if (cli.output) throw std::runtime_error("check does not accept -o");
+            (void)compile_source(read_text(*cli.input), std::move(registry));
+            std::cout << "✅ " << cli.input->string() << " is valid Emojineer source\n";
+            return 0;
+        }
+
+        if (cli.command == "run") {
+            if (cli.output) throw std::runtime_error("run does not accept -o");
+            auto chunk = compile_source(read_text(*cli.input), std::move(registry));
+            emojineer::VM vm(std::cin, std::cout);
+            vm.execute(chunk);
+            return 0;
+        }
+
+        if (cli.command == "dump") {
+            if (cli.output) throw std::runtime_error("dump does not accept -o");
+            auto chunk = compile_source(read_text(*cli.input), std::move(registry));
+            emojineer::disassemble(chunk, std::cout);
+            return 0;
+        }
+
+        if (cli.command == "compile") {
+            auto chunk = compile_source(read_text(*cli.input), std::move(registry));
+            auto output_path = cli.output.value_or(*cli.input);
+            if (!cli.output) output_path.replace_extension(".emjbc");
+            std::ofstream output(output_path, std::ios::binary);
+            if (!output) throw std::runtime_error("cannot write '" + output_path.string() + "'");
+            emojineer::write_bytecode(chunk, output);
+            std::cout << "✅ wrote " << output_path.string() << '\n';
+            return 0;
+        }
+
+        usage();
+        return 2;
+    } catch (const std::exception& error) {
+        std::cerr << "emojineer: " << error.what() << '\n';
+        return 1;
+    }
+}
