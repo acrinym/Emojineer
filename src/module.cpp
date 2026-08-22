@@ -1,0 +1,560 @@
+#include "emojineer/module.hpp"
+
+#include "emojineer/ast.hpp"
+#include "emojineer/compiler.hpp"
+#include "emojineer/lexer.hpp"
+#include "emojineer/parser.hpp"
+
+#include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+namespace emojineer {
+namespace {
+
+struct ImportSpec {
+    std::string requested;
+    std::size_t line{0};
+    std::string identity;
+};
+
+struct ModuleUnit {
+    std::filesystem::path path;
+    std::string identity;
+    std::string module_name;
+    ast::Program program;
+    std::vector<ImportSpec> imports;
+    std::unordered_set<std::string> exports;
+    std::unordered_set<std::string> declared_globals;
+    std::unordered_set<std::string> implicit_globals;
+    std::unordered_set<std::string> functions;
+    std::unordered_map<std::string, std::string> imported_globals;
+    std::unordered_map<std::string, std::string> imported_functions;
+};
+
+enum class VisitState { Visiting, Done };
+
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+ast::Program parse_source(const std::filesystem::path& path,
+                          const CustomEmojiRegistry& registry,
+                          const std::string& identity) {
+    try {
+        Lexer lexer(read_text(path), registry);
+        Parser parser(lexer.tokenize());
+        return parser.parse();
+    } catch (const std::exception& error) {
+        throw std::runtime_error("module '" + identity + "': " + error.what());
+    }
+}
+
+bool has_module_syntax_stmt(const ast::Stmt& stmt) {
+    if (dynamic_cast<const ast::ModuleDecl*>(&stmt) ||
+        dynamic_cast<const ast::ImportStmt*>(&stmt) ||
+        dynamic_cast<const ast::ExportStmt*>(&stmt)) return true;
+    if (const auto* branch = dynamic_cast<const ast::IfStmt*>(&stmt)) {
+        for (const auto& child : branch->then_branch) if (has_module_syntax_stmt(*child)) return true;
+        for (const auto& child : branch->else_branch) if (has_module_syntax_stmt(*child)) return true;
+    }
+    if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(&stmt)) {
+        for (const auto& child : loop->body) if (has_module_syntax_stmt(*child)) return true;
+    }
+    if (const auto* fn = dynamic_cast<const ast::FunctionDecl*>(&stmt)) {
+        for (const auto& child : fn->body) if (has_module_syntax_stmt(*child)) return true;
+    }
+    return false;
+}
+
+bool has_module_syntax(const ast::Program& program) {
+    for (const auto& stmt : program.statements) if (has_module_syntax_stmt(*stmt)) return true;
+    return false;
+}
+
+std::filesystem::path discover_root(const std::filesystem::path& entry) {
+    std::filesystem::path dir = entry.parent_path();
+    while (!dir.empty()) {
+        if (std::filesystem::exists(dir / "emojineer.toml")) return dir;
+        const auto parent = dir.parent_path();
+        if (parent == dir) break;
+        dir = parent;
+    }
+    return entry.parent_path();
+}
+
+bool within(const std::filesystem::path& root, const std::filesystem::path& path) {
+    auto r = root.begin();
+    auto p = path.begin();
+    for (; r != root.end(); ++r, ++p) {
+        if (p == path.end() || *r != *p) return false;
+    }
+    return true;
+}
+
+std::string identity_for(const std::filesystem::path& root,
+                         const std::filesystem::path& path) {
+    return std::filesystem::relative(path, root).generic_string();
+}
+
+std::string internal_name(const ModuleUnit& unit, const std::string& source_name) {
+    return "@module/" + unit.identity + "::" + source_name;
+}
+
+void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
+                                 const std::string& identity) {
+    for (const auto& stmt : block) {
+        if (dynamic_cast<const ast::ModuleDecl*>(stmt.get()) ||
+            dynamic_cast<const ast::ImportStmt*>(stmt.get()) ||
+            dynamic_cast<const ast::ExportStmt*>(stmt.get())) {
+            throw std::runtime_error("module '" + identity + "' line " +
+                                     std::to_string(stmt->line) +
+                                     ": 🧩, 🔗, and 📤 are top-level only");
+        }
+        if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
+            reject_nested_module_syntax(branch->then_branch, identity);
+            reject_nested_module_syntax(branch->else_branch, identity);
+        } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
+            reject_nested_module_syntax(loop->body, identity);
+        } else if (const auto* fn = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
+            reject_nested_module_syntax(fn->body, identity);
+        }
+    }
+}
+
+void collect_module_globals(const std::vector<ast::StmtPtr>& block, ModuleUnit& unit) {
+    for (const auto& stmt : block) {
+        if (const auto* var = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
+            unit.declared_globals.insert(var->name);
+        } else if (const auto* assignment = dynamic_cast<const ast::Assignment*>(stmt.get())) {
+            unit.implicit_globals.insert(assignment->name);
+        } else if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
+            collect_module_globals(branch->then_branch, unit);
+            collect_module_globals(branch->else_branch, unit);
+        } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
+            collect_module_globals(loop->body, unit);
+        }
+    }
+}
+
+void collect_function_locals(const std::vector<ast::StmtPtr>& block,
+                             std::unordered_set<std::string>& locals) {
+    for (const auto& stmt : block) {
+        if (const auto* var = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
+            locals.insert(var->name);
+        } else if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
+            collect_function_locals(branch->then_branch, locals);
+            collect_function_locals(branch->else_branch, locals);
+        } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
+            collect_function_locals(loop->body, locals);
+        }
+    }
+}
+
+void collect_function_implicit_globals(const std::vector<ast::StmtPtr>& block,
+                                       const std::unordered_set<std::string>& locals,
+                                       ModuleUnit& unit) {
+    for (const auto& stmt : block) {
+        if (const auto* assignment = dynamic_cast<const ast::Assignment*>(stmt.get())) {
+            if (!locals.contains(assignment->name)) unit.implicit_globals.insert(assignment->name);
+        } else if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
+            collect_function_implicit_globals(branch->then_branch, locals, unit);
+            collect_function_implicit_globals(branch->else_branch, locals, unit);
+        } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
+            collect_function_implicit_globals(loop->body, locals, unit);
+        }
+    }
+}
+
+void analyze_unit(ModuleUnit& unit) {
+    if (unit.program.statements.empty() ||
+        !dynamic_cast<ast::ModuleDecl*>(unit.program.statements.front().get())) {
+        throw std::runtime_error("module '" + unit.identity +
+                                 "': multi-file source must begin with 🧩 <emoji-module-name>");
+    }
+
+    bool saw_module = false;
+    bool saw_runtime = false;
+    for (std::size_t i = 0; i < unit.program.statements.size(); ++i) {
+        auto& stmt = unit.program.statements[i];
+        if (auto* module = dynamic_cast<ast::ModuleDecl*>(stmt.get())) {
+            if (i != 0 || saw_module) {
+                throw std::runtime_error("module '" + unit.identity + "' line " +
+                                         std::to_string(stmt->line) +
+                                         ": exactly one 🧩 declaration is allowed and it must be first");
+            }
+            saw_module = true;
+            unit.module_name = module->name;
+            continue;
+        }
+        if (auto* import = dynamic_cast<ast::ImportStmt*>(stmt.get())) {
+            if (saw_runtime) {
+                throw std::runtime_error("module '" + unit.identity + "' line " +
+                                         std::to_string(stmt->line) +
+                                         ": 🔗 imports must appear before executable/declaration statements");
+            }
+            unit.imports.push_back({import->path, import->line, {}});
+            continue;
+        }
+        if (auto* export_stmt = dynamic_cast<ast::ExportStmt*>(stmt.get())) {
+            if (!unit.exports.insert(export_stmt->name).second) {
+                throw std::runtime_error("module '" + unit.identity + "' line " +
+                                         std::to_string(stmt->line) +
+                                         ": duplicate 📤 export");
+            }
+            continue;
+        }
+        saw_runtime = true;
+        if (auto* fn = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
+            unit.functions.insert(fn->name);
+            std::unordered_set<std::string> locals(fn->parameters.begin(), fn->parameters.end());
+            collect_function_locals(fn->body, locals);
+            collect_function_implicit_globals(fn->body, locals, unit);
+        }
+    }
+
+    for (const auto& stmt : unit.program.statements) {
+        if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
+            reject_nested_module_syntax(branch->then_branch, unit.identity);
+            reject_nested_module_syntax(branch->else_branch, unit.identity);
+        } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
+            reject_nested_module_syntax(loop->body, unit.identity);
+        } else if (const auto* fn = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
+            reject_nested_module_syntax(fn->body, unit.identity);
+        }
+    }
+    collect_module_globals(unit.program.statements, unit);
+
+    for (const auto& name : unit.exports) {
+        if (!unit.declared_globals.contains(name) && !unit.functions.contains(name)) {
+            throw std::runtime_error("module '" + unit.identity +
+                                     "': 📤 exports a symbol that is not declared in this module");
+        }
+    }
+}
+
+void rewrite_expr(ast::Expr& expr, ModuleUnit& unit,
+                  const std::unordered_set<std::string>* locals);
+
+std::string resolve_global(const ModuleUnit& unit, const std::string& name,
+                           std::size_t line, bool assignment) {
+    if (unit.declared_globals.contains(name)) return internal_name(unit, name);
+    if (auto it = unit.imported_globals.find(name); it != unit.imported_globals.end()) return it->second;
+    if (unit.implicit_globals.contains(name)) return internal_name(unit, name);
+    if (assignment) return internal_name(unit, name);
+    throw std::runtime_error("module '" + unit.identity + "' line " + std::to_string(line) +
+                             ": undefined or non-exported emoji variable '" + name + "'");
+}
+
+std::string resolve_function(const ModuleUnit& unit, const std::string& name,
+                             std::size_t line) {
+    if (unit.functions.contains(name)) return internal_name(unit, name);
+    if (auto it = unit.imported_functions.find(name); it != unit.imported_functions.end()) return it->second;
+    throw std::runtime_error("module '" + unit.identity + "' line " + std::to_string(line) +
+                             ": undefined or non-exported emoji function '" + name + "'");
+}
+
+void rewrite_stmt(ast::Stmt& stmt, ModuleUnit& unit,
+                  const std::unordered_set<std::string>* locals) {
+    const bool in_function = locals != nullptr;
+    if (auto* var = dynamic_cast<ast::VarDecl*>(&stmt)) {
+        rewrite_expr(*var->initializer, unit, locals);
+        if (!in_function) var->name = internal_name(unit, var->name);
+        return;
+    }
+    if (auto* assignment = dynamic_cast<ast::Assignment*>(&stmt)) {
+        rewrite_expr(*assignment->value, unit, locals);
+        if (!(in_function && locals->contains(assignment->name))) {
+            assignment->name = resolve_global(unit, assignment->name, assignment->line, true);
+        }
+        return;
+    }
+    if (auto* print = dynamic_cast<ast::PrintStmt*>(&stmt)) {
+        rewrite_expr(*print->expression, unit, locals);
+        return;
+    }
+    if (auto* ret = dynamic_cast<ast::ReturnStmt*>(&stmt)) {
+        rewrite_expr(*ret->expression, unit, locals);
+        return;
+    }
+    if (auto* branch = dynamic_cast<ast::IfStmt*>(&stmt)) {
+        rewrite_expr(*branch->condition, unit, locals);
+        for (auto& child : branch->then_branch) rewrite_stmt(*child, unit, locals);
+        for (auto& child : branch->else_branch) rewrite_stmt(*child, unit, locals);
+        return;
+    }
+    if (auto* loop = dynamic_cast<ast::WhileStmt*>(&stmt)) {
+        rewrite_expr(*loop->condition, unit, locals);
+        for (auto& child : loop->body) rewrite_stmt(*child, unit, locals);
+        return;
+    }
+    if (auto* fn = dynamic_cast<ast::FunctionDecl*>(&stmt)) {
+        std::unordered_set<std::string> fn_locals(fn->parameters.begin(), fn->parameters.end());
+        collect_function_locals(fn->body, fn_locals);
+        for (auto& child : fn->body) rewrite_stmt(*child, unit, &fn_locals);
+        fn->name = internal_name(unit, fn->name);
+        return;
+    }
+    if (dynamic_cast<ast::ModuleDecl*>(&stmt) || dynamic_cast<ast::ImportStmt*>(&stmt) ||
+        dynamic_cast<ast::ExportStmt*>(&stmt)) {
+        throw std::runtime_error("module linker encountered an unresolved module statement");
+    }
+}
+
+void rewrite_expr(ast::Expr& expr, ModuleUnit& unit,
+                  const std::unordered_set<std::string>* locals) {
+    if (dynamic_cast<ast::LiteralExpr*>(&expr) || dynamic_cast<ast::InputExpr*>(&expr)) return;
+    if (auto* variable = dynamic_cast<ast::VariableExpr*>(&expr)) {
+        if (!(locals && locals->contains(variable->name))) {
+            variable->name = resolve_global(unit, variable->name, variable->line, false);
+        }
+        return;
+    }
+    if (auto* unary = dynamic_cast<ast::UnaryExpr*>(&expr)) {
+        rewrite_expr(*unary->right, unit, locals);
+        return;
+    }
+    if (auto* binary = dynamic_cast<ast::BinaryExpr*>(&expr)) {
+        rewrite_expr(*binary->left, unit, locals);
+        rewrite_expr(*binary->right, unit, locals);
+        return;
+    }
+    if (auto* call = dynamic_cast<ast::CallExpr*>(&expr)) {
+        for (auto& arg : call->arguments) rewrite_expr(*arg, unit, locals);
+        call->callee = resolve_function(unit, call->callee, call->line);
+        return;
+    }
+    if (auto* array = dynamic_cast<ast::ArrayExpr*>(&expr)) {
+        for (auto& element : array->elements) rewrite_expr(*element, unit, locals);
+        return;
+    }
+    if (auto* index = dynamic_cast<ast::IndexExpr*>(&expr)) {
+        rewrite_expr(*index->collection, unit, locals);
+        rewrite_expr(*index->index, unit, locals);
+        return;
+    }
+    if (auto* length = dynamic_cast<ast::LengthExpr*>(&expr)) {
+        rewrite_expr(*length->value, unit, locals);
+        return;
+    }
+    if (auto* append = dynamic_cast<ast::AppendExpr*>(&expr)) {
+        rewrite_expr(*append->collection, unit, locals);
+        rewrite_expr(*append->value, unit, locals);
+        return;
+    }
+    if (auto* set = dynamic_cast<ast::SetIndexExpr*>(&expr)) {
+        rewrite_expr(*set->collection, unit, locals);
+        rewrite_expr(*set->index, unit, locals);
+        rewrite_expr(*set->value, unit, locals);
+        return;
+    }
+    throw std::runtime_error("module linker encountered unknown expression node");
+}
+
+class ModuleLinker {
+public:
+    ModuleLinker(std::filesystem::path root, CustomEmojiRegistry registry)
+        : root_(std::move(root)), registry_(std::move(registry)) {}
+
+    Chunk compile(const std::filesystem::path& entry) {
+        std::vector<std::string> stack;
+        const std::string entry_id = visit(entry, stack);
+        (void)entry_id;
+        build_import_bindings();
+
+        ast::Program linked;
+        for (const auto& identity : order_) {
+            auto& unit = units_.at(identity);
+            for (auto& stmt : unit.program.statements) {
+                if (dynamic_cast<ast::ModuleDecl*>(stmt.get()) ||
+                    dynamic_cast<ast::ImportStmt*>(stmt.get()) ||
+                    dynamic_cast<ast::ExportStmt*>(stmt.get())) continue;
+                rewrite_stmt(*stmt, unit, nullptr);
+                linked.statements.push_back(std::move(stmt));
+            }
+        }
+        Compiler compiler;
+        return compiler.compile(linked);
+    }
+
+private:
+    std::filesystem::path resolve_import(const ModuleUnit& importer, const ImportSpec& spec) const {
+        const std::filesystem::path requested(spec.requested);
+        if (requested.empty() || requested.is_absolute()) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) +
+                                     ": 🔗 import path must be non-empty and relative");
+        }
+        if (spec.requested.find('\\') != std::string::npos) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) +
+                                     ": 🔗 import paths must use portable forward slashes");
+        }
+        if (requested.extension() != ".emoji") {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) +
+                                     ": 🔗 import must target a .emoji source file");
+        }
+        const auto candidate = importer.path.parent_path() / requested;
+        if (!std::filesystem::exists(candidate)) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) + ": imported module '" +
+                                     spec.requested + "' does not exist");
+        }
+        if (!std::filesystem::is_regular_file(candidate)) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) + ": imported module '" +
+                                     spec.requested + "' is not a regular file");
+        }
+        const auto canonical = std::filesystem::canonical(candidate);
+        if (!within(root_, canonical)) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) +
+                                     ": 🔗 import escapes the module root");
+        }
+        return canonical;
+    }
+
+    std::string visit(const std::filesystem::path& path, std::vector<std::string>& stack) {
+        const auto canonical = std::filesystem::canonical(path);
+        if (!within(root_, canonical)) {
+            throw std::runtime_error("entry/import path escapes the module root");
+        }
+        const std::string identity = identity_for(root_, canonical);
+        if (auto state = states_.find(identity); state != states_.end()) {
+            if (state->second == VisitState::Done) return identity;
+            std::ostringstream cycle;
+            cycle << "cyclic module import: ";
+            auto first = std::find(stack.begin(), stack.end(), identity);
+            if (first == stack.end()) first = stack.begin();
+            bool sep = false;
+            for (auto it = first; it != stack.end(); ++it) {
+                if (sep) cycle << " -> ";
+                sep = true;
+                cycle << *it;
+            }
+            if (sep) cycle << " -> ";
+            cycle << identity;
+            throw std::runtime_error(cycle.str());
+        }
+
+        states_[identity] = VisitState::Visiting;
+        stack.push_back(identity);
+
+        ModuleUnit unit;
+        unit.path = canonical;
+        unit.identity = identity;
+        unit.program = parse_source(canonical, registry_, identity);
+        analyze_unit(unit);
+        if (auto existing = module_names_.find(unit.module_name); existing != module_names_.end()) {
+            throw std::runtime_error("duplicate 🧩 module name declared by '" + existing->second +
+                                     "' and '" + identity + "'");
+        }
+        module_names_[unit.module_name] = identity;
+        units_.emplace(identity, std::move(unit));
+
+        std::unordered_set<std::string> direct;
+        const std::size_t import_count = units_.at(identity).imports.size();
+        for (std::size_t index = 0; index < import_count; ++index) {
+            const ImportSpec spec = units_.at(identity).imports[index];
+            const auto dependency_path = resolve_import(units_.at(identity), spec);
+            const std::string dependency_id = identity_for(root_, dependency_path);
+            if (!direct.insert(dependency_id).second) {
+                throw std::runtime_error("module '" + identity + "' line " +
+                                         std::to_string(spec.line) +
+                                         ": duplicate 🔗 import of '" + dependency_id + "'");
+            }
+            const std::string resolved_id = visit(dependency_path, stack);
+            units_.at(identity).imports[index].identity = resolved_id;
+        }
+
+        stack.pop_back();
+        states_[identity] = VisitState::Done;
+        order_.push_back(identity);
+        return identity;
+    }
+
+    void build_import_bindings() {
+        for (const auto& identity : order_) {
+            auto& unit = units_.at(identity);
+            for (const auto& spec : unit.imports) {
+                const auto& dependency = units_.at(spec.identity);
+                for (const auto& exported : dependency.exports) {
+                    if (dependency.declared_globals.contains(exported)) {
+                        if (unit.declared_globals.contains(exported)) {
+                            throw std::runtime_error("module '" + unit.identity +
+                                                     "': imported variable collides with a module-local declaration");
+                        }
+                        const auto [_, inserted] = unit.imported_globals.emplace(
+                            exported, internal_name(dependency, exported));
+                        if (!inserted) {
+                            throw std::runtime_error("module '" + unit.identity +
+                                                     "': multiple imports export the same emoji variable");
+                        }
+                    }
+                    if (dependency.functions.contains(exported)) {
+                        if (unit.functions.contains(exported)) {
+                            throw std::runtime_error("module '" + unit.identity +
+                                                     "': imported function collides with a module-local declaration");
+                        }
+                        const auto [_, inserted] = unit.imported_functions.emplace(
+                            exported, internal_name(dependency, exported));
+                        if (!inserted) {
+                            throw std::runtime_error("module '" + unit.identity +
+                                                     "': multiple imports export the same emoji function");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    std::filesystem::path root_;
+    CustomEmojiRegistry registry_;
+    std::unordered_map<std::string, ModuleUnit> units_;
+    std::unordered_map<std::string, VisitState> states_;
+    std::unordered_map<std::string, std::string> module_names_;
+    std::vector<std::string> order_;
+};
+
+} // namespace
+
+Chunk compile_file(const std::filesystem::path& raw_entry,
+                   CustomEmojiRegistry registry,
+                   std::filesystem::path raw_root) {
+    if (!std::filesystem::exists(raw_entry)) {
+        throw std::runtime_error("entry source does not exist: " + raw_entry.string());
+    }
+    if (!std::filesystem::is_regular_file(raw_entry)) {
+        throw std::runtime_error("entry source is not a regular file: " + raw_entry.string());
+    }
+    const auto entry = std::filesystem::canonical(raw_entry);
+    auto root = raw_root.empty() ? discover_root(entry) : std::move(raw_root);
+    if (!std::filesystem::exists(root) || !std::filesystem::is_directory(root)) {
+        throw std::runtime_error("module root is not a directory: " + root.string());
+    }
+    root = std::filesystem::canonical(root);
+    if (!within(root, entry)) throw std::runtime_error("entry source escapes the module root");
+
+    const std::string identity = identity_for(root, entry);
+    ast::Program entry_program = parse_source(entry, registry, identity);
+    if (!has_module_syntax(entry_program)) {
+        Compiler compiler;
+        return compiler.compile(entry_program);
+    }
+
+    ModuleLinker linker(root, std::move(registry));
+    return linker.compile(entry);
+}
+
+} // namespace emojineer
