@@ -3,9 +3,9 @@
 Emojineer builds two command-line executables:
 
 - `emojineer` - source, bytecode, formatting, REPL, standard-library, package-aware linking, and execution tools;
-- `emji` - project, local dependency, lockfile, and package-graph workflow.
+- `emji` - project, local dependency, lockfile, package-graph, and package-artifact workflow.
 
-The current toolchain version is **0.12**.
+The current toolchain version is **0.13**.
 
 ## Build
 
@@ -21,156 +21,29 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-## Source commands
-
-### Run
+## `emojineer` source and bytecode commands
 
 ```text
 emojineer run program.emoji
-```
-
-Compiles the source and executes it on the Emojineer VM. If the entry contains module syntax, the module graph is resolved before compilation. When an enclosing `emojineer.toml` exists, the real package graph is also resolved so imports may use project-local `.emoji` paths, declared `pkg:<dependency>/<module>.emoji` coordinates, or built-in `std:<module>` specifiers.
-
-### Check
-
-```text
 emojineer check program.emoji
-```
-
-Parses, resolves package/module context when present, compiles, and verifies the generated chunk without executing it.
-
-### Explain
-
-```text
 emojineer explain program.emoji
-```
-
-Prints meaningful lexer tokens with semantic descriptions. Custom CER metadata, aliases, and semantic IDs are shown when applicable.
-
-`explain` is file-local. It does not traverse imports.
-
-### Format
-
-```text
-emojineer fmt program.emoji
-emojineer fmt program.emoji -o formatted.emoji
-```
-
-Produces canonical indentation and LF source form while preserving comments and whitespace that belongs to multiline string literals.
-
-### Lint
-
-```text
+emojineer fmt program.emoji [-o formatted.emoji]
 emojineer lint program.emoji
-```
-
-Diagnoses differences from canonical formatting, including noncanonical CR/CRLF source line endings and missing final newline.
-
-### Dump source bytecode
-
-```text
 emojineer dump program.emoji
-```
-
-Compiles source in memory, including local, package, and standard-module linking, and disassembles the resulting chunk.
-
-### Compile
-
-```text
-emojineer compile program.emoji
-emojineer compile program.emoji -o output.emjbc
-```
-
-Writes serialized sovereign `EMJBC` bytecode. Without `-o`, the source extension is replaced with `.emjbc`.
-
-Package-qualified module identity is deterministic and checkout-portable. Dependency modules are represented internally with identities such as `pkg:mathkit/src/main.emoji`, never absolute checkout paths.
-
-## Package-aware imports
-
-Given:
-
-```toml
-[dependencies]
-mathkit = "../mathkit"
-```
-
-source in the declaring package can import:
-
-```emoji
-🔗 📜pkg:mathkit/src/main.emoji📜
-```
-
-Only declared direct dependencies are visible through `pkg:`. Transitive packages do not become ambient imports. Relative source imports stay within the current package's owned source tree and cannot tunnel into a resolved dependency subtree. A `pkg:` coordinate likewise cannot tunnel through one dependency into a separately resolved nested package.
-
-## Standard library catalog
-
-```text
-emojineer stdlib
-```
-
-Prints the standard modules built into this Emojineer toolchain and a short description of each one. The current catalog contains:
-
-- `std:math`;
-- `std:arrays`;
-- `std:text`.
-
-Standard modules are implemented as Emojineer source and compiled through the normal language pipeline. See [STDLIB.md](STDLIB.md).
-
-`stdlib` takes no source input and does not accept `--cer` or `-o`.
-
-## Bytecode commands
-
-### Execute
-
-```text
+emojineer compile program.emoji [-o output.emjbc]
 emojineer exec program.emjbc
-```
-
-Reads and verifies bytecode, then executes it on the VM.
-
-### Disassemble
-
-```text
 emojineer disasm program.emjbc
+emojineer stdlib
+emojineer repl [--cer registry.json ...]
 ```
 
-Reads and verifies bytecode, then prints constants, function metadata, and instructions.
+File compilation resolves local modules, declared `pkg:<dependency>/<module>.emoji` imports, and built-in `std:<module>` imports through the same package-aware linker. Package-qualified module identities remain checkout-portable and never encode absolute package roots.
 
-## REPL
+`fmt` produces canonical source form. `lint` diagnoses departures from that form. `compile` writes sovereign `EMJBC`; `exec` and `disasm` read already-compiled bytecode. `stdlib` lists the built-in standard modules. The REPL remains single-source and shares its input stream with the VM for `📥`.
 
-```text
-emojineer repl
-emojineer repl --cer cer/example.json
-```
+Source-oriented commands may accept one or more `--cer` Custom Emoji Registry packs where documented. CER packs extend lexical spellings into existing core semantic token kinds; they do not execute host-language code or define another runtime.
 
-The REPL buffers source until `:run`.
-
-Commands:
-
-- `:run` - compile and execute the current buffer;
-- `:show` - print the current source buffer;
-- `:explain` - explain current tokens;
-- `:clear` - clear the buffer;
-- `:help` - show commands;
-- `:quit` - leave the REPL.
-
-The REPL and VM intentionally share the same input stream. After `:run`, `📥` consumes the following input line from that stream.
-
-The REPL is currently single-source. `🧩`, `🔗`, and `📤`, including `pkg:` and `std:` imports, require file-based compilation because imports need a concrete source/package graph.
-
-## Custom Emoji Registry options
-
-Source-oriented commands accept one or more CER packs:
-
-```text
-emojineer run program.emoji --cer cer/a.json --cer cer/b.json
-```
-
-CER packs extend lexical spellings by mapping registered emoji sequences into existing core token kinds. They do not execute host-language code or define a second runtime.
-
-`exec` and `disasm` operate on already-compiled bytecode and therefore do not accept source CER options.
-
-## `emji` project and dependency commands
+## `emji` project commands
 
 ### Initialize
 
@@ -181,34 +54,34 @@ emji init my-project --name signal_lab
 
 Creates a strict `emojineer.toml`, deterministic `emojineer.lock`, and `src/main.emoji` starter source.
 
-### Check project
+### Check
 
 ```text
 emji check
 emji check path/to/project
 ```
 
-Validates the root manifest and entry source, recursively resolves declared local/path package dependencies, validates root and dependency entry source graphs with package-aware linking, and compares an existing lockfile with the canonical dependency graph. Local, `pkg:`, and `std:` imports therefore pass through the same file linker used by ordinary source commands.
+Validates the root manifest/entry, recursively resolves local/path dependencies, validates package-aware source graphs, and checks an existing lockfile for drift.
 
-### Write lockfile
+### Lock
 
 ```text
 emji lock
 emji lock path/to/project
 ```
 
-Writes deterministic lockfile v2 metadata with no timestamp. Dependency records include package version, root-relative resolved path, direct dependency names, and a SHA-256 content identity computed from the package's canonical manifest plus package-owned `.emoji` sources.
+Writes deterministic lockfile v2 metadata. Dependency records include version, checkout-relative resolved path, direct dependency names, and package content SHA-256.
 
-### Show project metadata
+### Show
 
 ```text
 emji show
 emji show path/to/project
 ```
 
-Displays package name, version, entry path, canonical manifest hash, and direct dependency declarations.
+Displays root package name, version, entry, canonical manifest hash, and direct dependency declarations.
 
-### Inspect the resolved package graph
+### Tree
 
 ```text
 emji tree
@@ -217,45 +90,78 @@ emji tree path/to/project --hashes
 emji tree path/to/project --json
 ```
 
-`tree` resolves the same real `PackageGraph` used by locking and package-aware source linking. Human output includes package version, `root` / `direct` / `transitive` relation, checkout-relative package path, and entry source. A package reached more than once in a shared dependency DAG is displayed again with `(shared)` and is not recursively expanded a second time.
+Resolves the real `PackageGraph` used by locking/linking. Human output labels packages `root`, `direct`, or `transitive`, shows checkout-relative paths and entries, and marks repeated shared-DAG nodes with `(shared)`. `--hashes` adds package content SHA-256. `--json` emits deterministic `emojineer.package-graph.v1` records with full hashes and no absolute checkout roots.
 
-`--hashes` adds each package's full SHA-256 content identity to human output.
-
-`--json` emits deterministic machine-readable output using schema identifier `emojineer.package-graph.v1`. JSON package records contain:
-
-- package name and version;
-- relation to the root package (`root`, `direct`, or `transitive`);
-- checkout-portable path relative to the root package;
-- package entry source;
-- full SHA-256 content identity;
-- sorted direct dependency names.
-
-The JSON package list is sorted by package name and contains no timestamps or absolute checkout paths, so equivalent package graphs in different checkout locations produce identical output. `--hashes` only changes human output; JSON always includes full content hashes.
-
-Graph resolution failures from `tree` are reported with `emji: package graph: ...` context so package topology failures are distinguishable from ordinary CLI parsing errors.
-
-### Add a local dependency
+### Add/remove local dependencies
 
 ```text
 emji add mathkit ../mathkit
 emji add mathkit ../mathkit path/to/project
-```
-
-The package name must match the target dependency's manifest name. The dependency path must be relative. The candidate recursive graph is validated before the manifest is written, then the manifest and lockfile are canonicalized.
-
-### Remove a local dependency
-
-```text
 emji remove mathkit
 emji remove mathkit path/to/project
 ```
 
-Removes the named direct dependency, canonicalizes the manifest, and refreshes the lockfile.
+Local dependency paths remain relative and first-class. Candidate graphs are validated before manifest changes are committed, and successful changes refresh canonical lock metadata.
 
-## Exit behavior
+## Immutable package artifacts
 
-Successful commands return zero. Parse, compile, bytecode, project, dependency, I/O, or runtime failures report an `emojineer:` or `emji:` diagnostic and return nonzero. `lint` returns nonzero when style diagnostics are present.
+Train 13 adds a real distributable source-artifact substrate without pretending network transport exists.
+
+### Pack
+
+```text
+emji pack
+emji pack path/to/project
+emji pack path/to/project -o dist/project.emjpkg
+```
+
+Creates deterministic `EMJPKG1` bytes. Without `-o`, output is `<project-root>/<name>-<version>.emjpkg`.
+
+The package version must satisfy the registry artifact's strict SemVer 2.0 contract. The artifact includes canonical package metadata, the canonical manifest, and sorted package-owned `.emoji` source records. Resolved dependency-owned source trees are excluded using the same ownership model as `PackageGraph` content hashing.
+
+Artifact output must use the `.emjpkg` extension.
+
+### Inspect an artifact
+
+```text
+emji artifact package.emjpkg
+```
+
+Strictly parses/verifies the artifact, then prints:
+
+- package name;
+- version;
+- entry source;
+- source-file count;
+- package `content-sha256`;
+- whole `artifact-sha256`.
+
+### Verify an artifact
+
+```text
+emji verify-artifact package.emjpkg
+```
+
+Returns success only after format bounds, canonical manifest metadata, source paths/order, per-source SHA-256, entry presence, package content identity, and trailing-byte checks all pass.
+
+The verifier does not extract or execute source files.
+
+## Artifact identity and cache contract
+
+`content-sha256` is the existing package semantic/content identity over canonical manifest plus package-owned source.
+
+`artifact-sha256` is SHA-256 over the exact `.emjpkg` bytes. Future downloads/cache entries are keyed by this exact artifact identity:
+
+```text
+<cache>/<package>/<version>/<artifact-sha256>.emjpkg
+```
+
+See [REGISTRY.md](REGISTRY.md) for the binary framing, trust boundary, SemVer range rules, and future transport contract.
 
 ## Current boundaries
 
-The v0.12 toolchain has real local/path package dependency resolution, explicit cross-package module imports, and deterministic graph inspection for humans/tooling, but no remote registry, package publication command, remote version solver, or download cache. Package access remains explicit and direct-dependency scoped. The standard library remains pure and capability-free, and the toolchain has no arbitrary host FFI, network standard-library API, or filesystem standard-library API.
+The v0.13 toolchain has real local/path dependency resolution, package-qualified imports, deterministic graph inspection, and deterministic immutable package artifacts with checksum verification and SemVer selection primitives.
+
+It still has **no remote registry client**, network package retrieval, remote dependency manifest syntax, remote version locking, authenticated publication, `emji publish`, or remote `emji add`. Those belong to the next train and must use the v0.13 artifact/content identities rather than inventing a second distribution model.
+
+The language runtime itself still receives no ambient filesystem, network, process, clock, randomness, shell, or FFI authority.
