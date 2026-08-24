@@ -1,4 +1,5 @@
 #include "emojineer/package.hpp"
+#include "emojineer/package_artifact.hpp"
 #include "emojineer/package_report.hpp"
 #include "emojineer/project.hpp"
 
@@ -12,13 +13,16 @@ namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.12\n"
+        << "emji 0.13\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"
         << "  emji lock [directory]\n"
         << "  emji show [directory]\n"
         << "  emji tree [directory] [--hashes] [--json]\n"
+        << "  emji pack [directory] [-o package.emjpkg]\n"
+        << "  emji artifact <package.emjpkg>\n"
+        << "  emji verify-artifact <package.emjpkg>\n"
         << "  emji add <package_name> <relative_path> [directory]\n"
         << "  emji remove <package_name> [directory]\n";
 }
@@ -53,6 +57,32 @@ TreeOptions parse_tree_options(int argc, char** argv) {
         if (have_root) {
             throw std::runtime_error("tree accepts at most one project directory");
         }
+        options.root = std::filesystem::path(arg);
+        have_root = true;
+    }
+    return options;
+}
+
+struct PackOptions {
+    std::filesystem::path root = std::filesystem::current_path();
+    std::optional<std::filesystem::path> output;
+};
+
+PackOptions parse_pack_options(int argc, char** argv) {
+    PackOptions options;
+    bool have_root = false;
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "-o") {
+            if (options.output) throw std::runtime_error("pack accepts only one -o output");
+            if (++i >= argc) throw std::runtime_error("-o requires an artifact path");
+            options.output = std::filesystem::path(argv[i]);
+            continue;
+        }
+        if (!arg.empty() && arg.front() == '-') {
+            throw std::runtime_error("unknown pack option '" + arg + "'");
+        }
+        if (have_root) throw std::runtime_error("pack accepts at most one project directory");
         options.root = std::filesystem::path(arg);
         have_root = true;
     }
@@ -151,6 +181,35 @@ int main(int argc, char** argv) {
             } else {
                 std::cout << emojineer::render_package_tree(report, options.include_hashes);
             }
+            return 0;
+        }
+
+        if (command == "pack") {
+            const auto options = parse_pack_options(argc, argv);
+            const auto manifest = emojineer::load_project_manifest(options.root / "emojineer.toml");
+            const auto output = options.output.value_or(
+                options.root / emojineer::default_package_artifact_filename(manifest.name,
+                                                                            manifest.version));
+            emojineer::write_package_artifact(options.root, output);
+            const auto artifact = emojineer::load_package_artifact(output);
+            std::cout << "✅ wrote " << output.string() << '\n'
+                      << "artifact-sha256: " << artifact.artifact_sha256 << '\n';
+            return 0;
+        }
+
+        if (command == "artifact") {
+            if (argc != 3) throw std::runtime_error("artifact requires exactly one .emjpkg path");
+            const auto artifact = emojineer::load_package_artifact(argv[2]);
+            std::cout << emojineer::render_package_artifact_summary(artifact);
+            return 0;
+        }
+
+        if (command == "verify-artifact") {
+            if (argc != 3) throw std::runtime_error("verify-artifact requires exactly one .emjpkg path");
+            const auto artifact = emojineer::load_package_artifact(argv[2]);
+            std::cout << "✅ " << argv[2] << " is a valid Emojineer package artifact\n"
+                      << "content-sha256: " << artifact.content_sha256 << '\n'
+                      << "artifact-sha256: " << artifact.artifact_sha256 << '\n';
             return 0;
         }
 
