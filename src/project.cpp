@@ -1,12 +1,15 @@
 #include "emojineer/project.hpp"
 #include "emojineer/module.hpp"
+#include "emojineer/package.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -49,11 +52,11 @@ std::string parse_quoted(const std::string& value, std::size_t line) {
     return inner;
 }
 
-void validate_name(const std::string& name) {
-    if (name.empty()) throw std::runtime_error("project name cannot be empty");
+void validate_name(const std::string& name, const std::string& what = "project name") {
+    if (name.empty()) throw std::runtime_error(what + " cannot be empty");
     for (unsigned char c : name) {
         if (!(std::isalnum(c) || c == '-' || c == '_')) {
-            throw std::runtime_error("project name may contain only ASCII letters, digits, '-' and '_'");
+            throw std::runtime_error(what + " may contain only ASCII letters, digits, '-' and '_'");
         }
     }
 }
@@ -81,10 +84,32 @@ void validate_entry(const std::filesystem::path& entry) {
     }
 }
 
+void validate_dependency_path(const std::filesystem::path& path, const std::string& name) {
+    if (path.empty() || path.is_absolute()) {
+        throw std::runtime_error("dependency '" + name + "' path must be non-empty and relative");
+    }
+    const std::string generic = path.generic_string();
+    if (generic.find('"') != std::string::npos || generic.find('\\') != std::string::npos) {
+        throw std::runtime_error("dependency '" + name + "' path must use portable forward-slash syntax");
+    }
+}
+
 void validate_manifest(const ProjectManifest& manifest) {
     validate_name(manifest.name);
     validate_version(manifest.version);
     validate_entry(manifest.entry);
+
+    std::set<std::string> names;
+    for (const auto& dependency : manifest.dependencies) {
+        validate_name(dependency.name, "dependency name");
+        validate_dependency_path(dependency.path, dependency.name);
+        if (dependency.name == manifest.name) {
+            throw std::runtime_error("package may not declare itself as dependency '" + dependency.name + "'");
+        }
+        if (!names.insert(dependency.name).second) {
+            throw std::runtime_error("manifest contains duplicate dependency '" + dependency.name + "'");
+        }
+    }
 }
 
 std::uint64_t fnv1a64(std::string_view text) {
@@ -96,17 +121,36 @@ std::uint64_t fnv1a64(std::string_view text) {
     return hash;
 }
 
-std::string lock_hash_from_text(const std::string& text) {
-    std::istringstream input(text);
-    std::string line;
-    while (std::getline(input, line)) {
-        const auto equal = line.find('=');
-        if (equal == std::string::npos) continue;
-        if (trim(line.substr(0, equal)) == "manifest_hash") {
-            return parse_quoted(line.substr(equal + 1), 0);
-        }
+std::vector<ProjectDependency> sorted_dependencies(const ProjectManifest& manifest) {
+    auto dependencies = manifest.dependencies;
+    std::sort(dependencies.begin(), dependencies.end(),
+              [](const ProjectDependency& left, const ProjectDependency& right) {
+                  return left.name < right.name;
+              });
+    return dependencies;
+}
+
+void write_manifest(const std::filesystem::path& root, const ProjectManifest& manifest) {
+    write_text(root / "emojineer.toml", canonical_manifest_text(manifest));
+}
+
+std::string joined_dependencies(const std::vector<std::string>& dependencies) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < dependencies.size(); ++i) {
+        if (i != 0) out << ',';
+        out << dependencies[i];
     }
-    return {};
+    return out.str();
+}
+
+std::string relative_package_path(const std::filesystem::path& root,
+                                  const std::filesystem::path& package_root) {
+    std::error_code error;
+    auto relative = std::filesystem::relative(package_root, root, error);
+    if (error || relative.empty()) {
+        throw std::runtime_error("cannot express dependency package path relative to project root");
+    }
+    return relative.generic_string();
 }
 
 } // namespace
@@ -114,10 +158,12 @@ std::string lock_hash_from_text(const std::string& text) {
 ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path) {
     std::istringstream input(read_text(manifest_path));
     ProjectManifest manifest;
-    bool in_package = false;
+    enum class Section { None, Package, Dependencies };
+    Section section = Section::None;
     bool have_name = false;
     bool have_version = false;
     bool have_entry = false;
+    std::set<std::string> dependency_names;
     std::string line;
     std::size_t line_number = 0;
 
@@ -127,15 +173,15 @@ ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path
         if (text.empty() || text.front() == '#') continue;
         if (text.front() == '[') {
             if (text == "[package]") {
-                in_package = true;
+                section = Section::Package;
+                continue;
+            }
+            if (text == "[dependencies]") {
+                section = Section::Dependencies;
                 continue;
             }
             throw std::runtime_error("manifest line " + std::to_string(line_number) +
                                      ": unsupported section '" + text + "'");
-        }
-        if (!in_package) {
-            throw std::runtime_error("manifest line " + std::to_string(line_number) +
-                                     ": keys must appear inside [package]");
         }
         const auto equal = text.find('=');
         if (equal == std::string::npos) {
@@ -143,22 +189,37 @@ ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path
         }
         const std::string key = trim(text.substr(0, equal));
         const std::string value = parse_quoted(text.substr(equal + 1), line_number);
-        if (key == "name") {
-            if (have_name) throw std::runtime_error("manifest contains duplicate package.name");
-            manifest.name = value;
-            have_name = true;
-        } else if (key == "version") {
-            if (have_version) throw std::runtime_error("manifest contains duplicate package.version");
-            manifest.version = value;
-            have_version = true;
-        } else if (key == "entry") {
-            if (have_entry) throw std::runtime_error("manifest contains duplicate package.entry");
-            manifest.entry = std::filesystem::path(value);
-            have_entry = true;
-        } else {
-            throw std::runtime_error("manifest line " + std::to_string(line_number) +
-                                     ": unknown package key '" + key + "'");
+
+        if (section == Section::Package) {
+            if (key == "name") {
+                if (have_name) throw std::runtime_error("manifest contains duplicate package.name");
+                manifest.name = value;
+                have_name = true;
+            } else if (key == "version") {
+                if (have_version) throw std::runtime_error("manifest contains duplicate package.version");
+                manifest.version = value;
+                have_version = true;
+            } else if (key == "entry") {
+                if (have_entry) throw std::runtime_error("manifest contains duplicate package.entry");
+                manifest.entry = std::filesystem::path(value);
+                have_entry = true;
+            } else {
+                throw std::runtime_error("manifest line " + std::to_string(line_number) +
+                                         ": unknown package key '" + key + "'");
+            }
+            continue;
         }
+
+        if (section == Section::Dependencies) {
+            if (!dependency_names.insert(key).second) {
+                throw std::runtime_error("manifest contains duplicate dependency '" + key + "'");
+            }
+            manifest.dependencies.push_back({key, std::filesystem::path(value)});
+            continue;
+        }
+
+        throw std::runtime_error("manifest line " + std::to_string(line_number) +
+                                 ": keys must appear inside [package] or [dependencies]");
     }
 
     if (!have_name || !have_version || !have_entry) {
@@ -175,6 +236,14 @@ std::string canonical_manifest_text(const ProjectManifest& manifest) {
         << "name = \"" << manifest.name << "\"\n"
         << "version = \"" << manifest.version << "\"\n"
         << "entry = \"" << manifest.entry.generic_string() << "\"\n";
+
+    const auto dependencies = sorted_dependencies(manifest);
+    if (!dependencies.empty()) {
+        out << "\n[dependencies]\n";
+        for (const auto& dependency : dependencies) {
+            out << dependency.name << " = \"" << dependency.path.generic_string() << "\"\n";
+        }
+    }
     return out.str();
 }
 
@@ -186,7 +255,7 @@ std::string project_manifest_hash(const ProjectManifest& manifest) {
 }
 
 void initialize_project(const std::filesystem::path& root, const std::string& name) {
-    ProjectManifest manifest{name, "0.1.0", std::filesystem::path("src/main.emoji")};
+    ProjectManifest manifest{name, "0.1.0", std::filesystem::path("src/main.emoji"), {}};
     validate_manifest(manifest);
     const auto manifest_path = root / "emojineer.toml";
     if (std::filesystem::exists(manifest_path)) {
@@ -198,6 +267,37 @@ void initialize_project(const std::filesystem::path& root, const std::string& na
     if (!std::filesystem::exists(entry_path)) {
         write_text(entry_path, "📝 📜Hello from Emojineer 🚀📜\n");
     }
+}
+
+std::string canonical_project_lock(const std::filesystem::path& root,
+                                   const ProjectManifest& manifest) {
+    validate_manifest(manifest);
+    const auto canonical_root = std::filesystem::canonical(root);
+    const auto graph = resolve_package_graph(canonical_root, manifest);
+
+    std::ostringstream out;
+    out << "lock_version = 2\n"
+        << "manifest_hash = \"" << project_manifest_hash(manifest) << "\"\n"
+        << "package = \"" << manifest.name << "\"\n"
+        << "version = \"" << manifest.version << "\"\n"
+        << "entry = \"" << manifest.entry.generic_string() << "\"\n";
+
+    std::size_t dependency_count = 0;
+    for (const auto& package : graph.packages) {
+        if (package.name != graph.root_name) ++dependency_count;
+    }
+    out << "dependency_count = " << dependency_count << "\n";
+
+    for (const auto& package : graph.packages) {
+        if (package.name == graph.root_name) continue;
+        out << "\n[[dependency]]\n"
+            << "name = \"" << package.name << "\"\n"
+            << "version = \"" << package.version << "\"\n"
+            << "path = \"" << relative_package_path(canonical_root, package.root) << "\"\n"
+            << "content_sha256 = \"" << package.content_sha256 << "\"\n"
+            << "dependencies = \"" << joined_dependencies(package.dependencies) << "\"\n";
+    }
+    return out.str();
 }
 
 std::vector<ProjectDiagnostic> check_project(const std::filesystem::path& root) {
@@ -223,13 +323,32 @@ std::vector<ProjectDiagnostic> check_project(const std::filesystem::path& root) 
         }
     }
 
+    std::string expected_lock;
+    try {
+        const auto graph = resolve_package_graph(root, manifest);
+        for (const auto& package : graph.packages) {
+            if (package.name == graph.root_name) continue;
+            const auto dependency_entry = package.root / package.entry;
+            if (!std::filesystem::is_regular_file(dependency_entry)) {
+                diagnostics.push_back({"dependency '" + package.name + "' entry source does not exist: " +
+                                       package.entry.generic_string()});
+                continue;
+            }
+            try {
+                (void)compile_file(dependency_entry, {}, package.root);
+            } catch (const std::exception& error) {
+                diagnostics.push_back({"dependency '" + package.name + "' source graph: " + error.what()});
+            }
+        }
+        expected_lock = canonical_project_lock(root, manifest);
+    } catch (const std::exception& error) {
+        diagnostics.push_back({std::string("dependency graph: ") + error.what()});
+    }
+
     const auto lock_path = root / "emojineer.lock";
-    if (std::filesystem::exists(lock_path)) {
+    if (std::filesystem::exists(lock_path) && !expected_lock.empty()) {
         try {
-            const std::string locked_hash = lock_hash_from_text(read_text(lock_path));
-            if (locked_hash.empty()) {
-                diagnostics.push_back({"emojineer.lock is missing manifest_hash"});
-            } else if (locked_hash != project_manifest_hash(manifest)) {
+            if (read_text(lock_path) != expected_lock) {
                 diagnostics.push_back({"emojineer.lock is stale; run 'emji lock'"});
             }
         } catch (const std::exception& error) {
@@ -241,14 +360,50 @@ std::vector<ProjectDiagnostic> check_project(const std::filesystem::path& root) 
 }
 
 void write_project_lock(const std::filesystem::path& root, const ProjectManifest& manifest) {
+    write_text(root / "emojineer.lock", canonical_project_lock(root, manifest));
+}
+
+void add_project_dependency(const std::filesystem::path& root,
+                            const std::string& name,
+                            const std::filesystem::path& path) {
+    validate_name(name, "dependency name");
+    validate_dependency_path(path, name);
+
+    auto manifest = load_project_manifest(root / "emojineer.toml");
+    for (const auto& dependency : manifest.dependencies) {
+        if (dependency.name == name) {
+            throw std::runtime_error("dependency '" + name + "' already exists");
+        }
+    }
+
+    const auto dependency_root = root / path;
+    const auto dependency_manifest = load_project_manifest(dependency_root / "emojineer.toml");
+    if (dependency_manifest.name != name) {
+        throw std::runtime_error("dependency key '" + name + "' points to package '" +
+                                 dependency_manifest.name + "'");
+    }
+
+    manifest.dependencies.push_back({name, path.lexically_normal()});
     validate_manifest(manifest);
-    std::ostringstream out;
-    out << "lock_version = 1\n"
-        << "manifest_hash = \"" << project_manifest_hash(manifest) << "\"\n"
-        << "package = \"" << manifest.name << "\"\n"
-        << "version = \"" << manifest.version << "\"\n"
-        << "entry = \"" << manifest.entry.generic_string() << "\"\n";
-    write_text(root / "emojineer.lock", out.str());
+    (void)resolve_package_graph(root, manifest);
+    write_manifest(root, manifest);
+    write_project_lock(root, manifest);
+}
+
+void remove_project_dependency(const std::filesystem::path& root,
+                               const std::string& name) {
+    auto manifest = load_project_manifest(root / "emojineer.toml");
+    const auto before = manifest.dependencies.size();
+    std::erase_if(manifest.dependencies,
+                  [&](const ProjectDependency& dependency) { return dependency.name == name; });
+    if (manifest.dependencies.size() == before) {
+        throw std::runtime_error("dependency '" + name + "' is not declared");
+    }
+
+    validate_manifest(manifest);
+    (void)resolve_package_graph(root, manifest);
+    write_manifest(root, manifest);
+    write_project_lock(root, manifest);
 }
 
 } // namespace emojineer

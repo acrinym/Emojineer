@@ -3,7 +3,7 @@
 Emojineer builds two command-line executables:
 
 - `emojineer` — source, bytecode, formatting, REPL, standard-library, and execution tools;
-- `emji` — local project and lockfile workflow.
+- `emji` — project, local dependency, and lockfile workflow.
 
 ## Build
 
@@ -27,7 +27,7 @@ ctest --test-dir build --output-on-failure
 emojineer run program.emoji
 ```
 
-Compiles the source and executes it on the Emojineer VM. If the entry contains module syntax, the module graph is resolved before compilation. Module imports may be local `.emoji` paths or built-in `std:<module>` specifiers.
+Compiles the source and executes it on the Emojineer VM. If the entry contains module syntax, the module graph is resolved before compilation. Module imports may be project-local `.emoji` paths or built-in `std:<module>` specifiers.
 
 ### Check
 
@@ -87,7 +87,7 @@ Writes serialized sovereign `EMJBC` bytecode. Without `-o`, the source extension
 emojineer stdlib
 ```
 
-Prints the standard modules built into this Emojineer toolchain and a short description of each one. In v0.9 the catalog contains:
+Prints the standard modules built into this Emojineer toolchain and a short description of each one. The current catalog contains:
 
 - `std:math`;
 - `std:arrays`;
@@ -149,7 +149,7 @@ CER packs extend lexical spellings by mapping registered emoji sequences into ex
 
 `exec` and `disasm` operate on already-compiled bytecode and therefore do not accept source CER options.
 
-## `emji` project commands
+## `emji` project and dependency commands
 
 ### Initialize
 
@@ -167,7 +167,7 @@ emji check
 emji check path/to/project
 ```
 
-Validates the manifest, entry source, current lock metadata when present, and the entry's Emojineer module graph. Built-in `std:` imports are valid graph members and do not require files in the project.
+Validates the root manifest and entry source, recursively resolves declared local/path package dependencies, validates dependency entry source graphs, and compares an existing lockfile with the canonical dependency graph. Built-in `std:` imports remain valid source-graph members and do not require project files.
 
 ### Write lockfile
 
@@ -176,7 +176,7 @@ emji lock
 emji lock path/to/project
 ```
 
-Writes deterministic lock metadata with no timestamp.
+Writes deterministic lockfile v2 metadata with no timestamp. Dependency records include package version, root-relative resolved path, direct dependency names, and a SHA-256 content identity computed from the package's canonical manifest plus package-owned `.emoji` sources.
 
 ### Show project metadata
 
@@ -185,12 +185,30 @@ emji show
 emji show path/to/project
 ```
 
-Displays package name, version, entry path, and canonical manifest hash.
+Displays package name, version, entry path, canonical manifest hash, and direct dependency declarations.
+
+### Add a local dependency
+
+```text
+emji add mathkit ../mathkit
+emji add mathkit ../mathkit path/to/project
+```
+
+The package name must match the target dependency's manifest name. The dependency path must be relative. The candidate recursive graph is validated before the manifest is written, then the manifest and lockfile are canonicalized.
+
+### Remove a local dependency
+
+```text
+emji remove mathkit
+emji remove mathkit path/to/project
+```
+
+Removes the named direct dependency, canonicalizes the manifest, and refreshes the lockfile.
 
 ## Exit behavior
 
-Successful commands return zero. Parse, compile, bytecode, project, I/O, or runtime failures report an `emojineer:` or `emji:` diagnostic and return nonzero. `lint` returns nonzero when style diagnostics are present.
+Successful commands return zero. Parse, compile, bytecode, project, dependency, I/O, or runtime failures report an `emojineer:` or `emji:` diagnostic and return nonzero. `lint` returns nonzero when style diagnostics are present.
 
 ## Current boundaries
 
-The v0.9 standard library is intentionally pure and capability-free. The toolchain still has no remote package registry, package publication command, language server, debugger, arbitrary host FFI, network standard-library API, or filesystem standard-library API. Those are later product trains rather than undocumented hidden behavior.
+The v0.10 toolchain has real local/path package dependency resolution but no remote registry, package publication command, remote version solver, or download cache. Package metadata does not yet grant source modules cross-package visibility: explicit package-qualified module import syntax is the next linker train. The standard library remains pure and capability-free, and the toolchain has no arbitrary host FFI, network standard-library API, or filesystem standard-library API.

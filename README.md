@@ -8,11 +8,11 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.9**.
+Current language/toolchain version: **0.10**.
 
 ## What works now
 
-Product Trains 1 through 9 provide:
+Product Trains 1 through 10 provide:
 
 - Unicode/grapheme-aware emoji-native syntax and canonical token identity;
 - variables, optional runtime declaration types, arithmetic, comparisons, booleans, input/output;
@@ -23,9 +23,9 @@ Product Trains 1 through 9 provide:
 - sovereign `EMJBC` bytecode, verifier, VM execution fuel, dump/disassembly tooling;
 - buffered REPL;
 - canonical formatter and linter;
-- `emji` project manifests and deterministic lock metadata;
 - deterministic multi-file `🧩` modules with local `🔗` imports and explicit `📤` exports;
-- native standard modules imported as `std:math`, `std:arrays`, and `std:text`, implemented in Emojineer source and compiled by the normal toolchain.
+- native standard modules imported as `std:math`, `std:arrays`, and `std:text`, implemented in Emojineer source and compiled by the normal toolchain;
+- `emji` local/path dependency manifests, recursive package resolution, deterministic lockfile v2, and SHA-256 package content identity.
 
 ## A small program
 
@@ -93,14 +93,18 @@ ctest --test-dir build --output-on-failure
 ./build/emojineer repl
 ```
 
-Project workflow:
+Project and local dependency workflow:
 
 ```bash
 ./build/emji init my-project
 ./build/emji check my-project
 ./build/emji lock my-project
 ./build/emji show my-project
+./build/emji add mathkit ../mathkit my-project
+./build/emji remove mathkit my-project
 ```
+
+Local/path dependencies are real package metadata and lock graph entries in v0.10. Explicit source syntax for importing modules from those dependency packages is the next linker train; source imports cannot bypass a package root with filesystem escapes.
 
 ## Documentation
 
@@ -108,12 +112,12 @@ Start with **[`docs/README.md`](docs/README.md)**.
 
 Key references:
 
-- [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — current v0.9 language reference and grammar;
+- [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — current language reference and grammar;
 - [`docs/STDLIB.md`](docs/STDLIB.md) — native standard-library modules;
 - [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1/v2/v3 format and VM contract;
 - [`docs/CLI.md`](docs/CLI.md) — full command-line/toolchain guide;
 - [`docs/MODULES.md`](docs/MODULES.md) — module/import/export semantics;
-- [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects and lockfiles;
+- [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects, local dependencies, and lockfiles;
 - [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — next product trains.
 
@@ -123,4 +127,4 @@ Emoji are extended grapheme clusters, not reliably one Unicode code point. Emoji
 
 ## Project direction
 
-The next product frontier is real local dependency resolution in `emji`. After that foundation, the roadmap continues into a registry protocol, language-server/editor tooling, debugging, capability-gated host facilities, WASM/HIL interop, low-level ABI work, and later native compilation.
+The next product frontier is explicit cross-package module imports over the now-real local package graph. After that, the roadmap continues into a real registry protocol, language-server/editor tooling, debugging, capability-gated host facilities, WASM/HIL interop, low-level ABI work, and later native compilation.
