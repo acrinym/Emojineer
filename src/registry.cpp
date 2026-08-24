@@ -188,7 +188,7 @@ bool version_requirement_matches(const VersionRequirement& requirement,
     }
     const int lower = compare_semantic_versions(candidate, requirement.base);
     if (requirement.kind == VersionRequirementKind::Exact) {
-        return lower == 0;
+        return candidate.text == requirement.base.text;
     }
 
     if (!candidate.prerelease.empty()) {
