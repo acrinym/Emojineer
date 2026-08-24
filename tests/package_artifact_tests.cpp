@@ -157,10 +157,11 @@ void test_semver_large_numeric_core_identifiers() {
             "larger digit count should be greater");
 
     // Test that version selection works with large numbers
+    // SemVer: longer digit count = larger number (no leading zeros is validated elsewhere)
     const std::vector<std::string> versions{
         "1.0.0", "2.0.0", "18446744073709551616.0.0", "9999999999999999999.0.0"};
     const auto selected = emojineer::select_highest_matching_version(versions, "*");
-    require(selected && *selected == "9999999999999999999.0.0",
+    require(selected && *selected == "18446744073709551616.0.0",
             "wildcard should select largest version by digit count");
 }
 
@@ -187,8 +188,10 @@ void test_semver_large_prerelease_identifiers() {
     require(rejected_leading_zero, "prerelease with leading zero should be rejected");
 
     // Test very large prerelease identifier comparison
-    require(emojineer::compare_semantic_versions(v1, v2) < 0,
-            "larger prerelease numeric identifier should be greater");
+    // v2's prerelease "9999999999999999999" has 19 digits, v1's has 20 digits
+    // So v2 > v1 (shorter digit count = smaller number)
+    require(emojineer::compare_semantic_versions(v1, v2) > 0,
+            "shorter prerelease numeric identifier should be smaller");
 }
 
 void test_artifact_size_bound_enforced_before_read() {
