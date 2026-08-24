@@ -2,6 +2,7 @@
 #include "emojineer/package_artifact.hpp"
 #include "emojineer/package_report.hpp"
 #include "emojineer/project.hpp"
+#include "emojineer/registry_transport.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -13,7 +14,7 @@ namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.13\n"
+        << "emji 0.14\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"
@@ -23,6 +24,11 @@ void usage() {
         << "  emji pack [directory] [-o package.emjpkg]\n"
         << "  emji artifact <package.emjpkg>\n"
         << "  emji verify-artifact <package.emjpkg>\n"
+        << "  emji registry-init <directory> --id <registry_id>\n"
+        << "  emji registry-info --registry <endpoint>\n"
+        << "  emji versions <package_name> --registry <endpoint>\n"
+        << "  emji publish [directory] --registry <endpoint>\n"
+        << "  emji fetch <package_name> <requirement> --registry <endpoint> [--cache directory]\n"
         << "  emji add <package_name> <relative_path> [directory]\n"
         << "  emji remove <package_name> [directory]\n";
 }
@@ -87,6 +93,74 @@ PackOptions parse_pack_options(int argc, char** argv) {
         have_root = true;
     }
     return options;
+}
+
+struct PublishOptions {
+    std::filesystem::path root = std::filesystem::current_path();
+    std::optional<std::string> registry;
+};
+
+PublishOptions parse_publish_options(int argc, char** argv) {
+    PublishOptions options;
+    bool have_root = false;
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--registry") {
+            if (options.registry) throw std::runtime_error("publish accepts only one --registry endpoint");
+            if (++i >= argc) throw std::runtime_error("--registry requires an endpoint");
+            options.registry = argv[i];
+            continue;
+        }
+        if (!arg.empty() && arg.front() == '-') {
+            throw std::runtime_error("unknown publish option '" + arg + "'");
+        }
+        if (have_root) throw std::runtime_error("publish accepts at most one project directory");
+        options.root = std::filesystem::path(arg);
+        have_root = true;
+    }
+    if (!options.registry) throw std::runtime_error("publish requires --registry <endpoint>");
+    return options;
+}
+
+std::string registry_option(int argc, char** argv, int start, const std::string& command) {
+    std::optional<std::string> registry;
+    for (int i = start; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg != "--registry") throw std::runtime_error("unknown " + command + " option '" + arg + "'");
+        if (registry) throw std::runtime_error(command + " accepts only one --registry endpoint");
+        if (++i >= argc) throw std::runtime_error("--registry requires an endpoint");
+        registry = argv[i];
+    }
+    if (!registry) throw std::runtime_error(command + " requires --registry <endpoint>");
+    return *registry;
+}
+
+struct FetchOptions {
+    std::string registry;
+    std::filesystem::path cache;
+};
+
+FetchOptions parse_fetch_options(int argc, char** argv) {
+    std::optional<std::string> registry;
+    std::optional<std::filesystem::path> cache;
+    for (int i = 4; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--registry") {
+            if (registry) throw std::runtime_error("fetch accepts only one --registry endpoint");
+            if (++i >= argc) throw std::runtime_error("--registry requires an endpoint");
+            registry = argv[i];
+            continue;
+        }
+        if (arg == "--cache") {
+            if (cache) throw std::runtime_error("fetch accepts only one --cache directory");
+            if (++i >= argc) throw std::runtime_error("--cache requires a directory");
+            cache = std::filesystem::path(argv[i]);
+            continue;
+        }
+        throw std::runtime_error("unknown fetch option '" + arg + "'");
+    }
+    if (!registry) throw std::runtime_error("fetch requires --registry <endpoint>");
+    return {*registry, cache.value_or(std::filesystem::path{})};
 }
 
 emojineer::PackageGraphReport package_report(const std::filesystem::path& root) {
@@ -210,6 +284,80 @@ int main(int argc, char** argv) {
             std::cout << "✅ " << argv[2] << " is a valid Emojineer package artifact\n"
                       << "content-sha256: " << artifact.content_sha256 << '\n'
                       << "artifact-sha256: " << artifact.artifact_sha256 << '\n';
+            return 0;
+        }
+
+        if (command == "registry-init") {
+            if (argc < 5) throw std::runtime_error("registry-init requires <directory> --id <registry_id>");
+            const std::filesystem::path root = argv[2];
+            std::optional<std::string> id;
+            for (int i = 3; i < argc; ++i) {
+                const std::string arg = argv[i];
+                if (arg == "--id") {
+                    if (id) throw std::runtime_error("registry-init accepts only one --id");
+                    if (++i >= argc) throw std::runtime_error("--id requires a registry id");
+                    id = argv[i];
+                } else {
+                    throw std::runtime_error("unknown registry-init option '" + arg + "'");
+                }
+            }
+            if (!id) throw std::runtime_error("registry-init requires --id <registry_id>");
+            emojineer::initialize_file_registry(root, *id);
+            const auto endpoint = emojineer::parse_registry_endpoint(root.string());
+            std::cout << "✅ initialized registry " << *id << '\n'
+                      << "endpoint: " << endpoint.canonical << '\n';
+            return 0;
+        }
+
+        if (command == "registry-info") {
+            const auto registry = registry_option(argc, argv, 2, "registry-info");
+            const auto endpoint = emojineer::parse_registry_endpoint(registry);
+            std::cout << "id: " << emojineer::registry_identity(endpoint) << '\n'
+                      << "endpoint: " << endpoint.canonical << '\n'
+                      << "transport: "
+                      << (endpoint.kind == emojineer::RegistryTransportKind::Https ? "https" : "file") << '\n'
+                      << "https-support: "
+                      << (emojineer::https_registry_transport_available() ? "available" : "not-built") << '\n';
+            return 0;
+        }
+
+        if (command == "versions") {
+            if (argc < 5) throw std::runtime_error("versions requires <package_name> --registry <endpoint>");
+            const std::string package = argv[2];
+            const auto registry = registry_option(argc, argv, 3, "versions");
+            const auto endpoint = emojineer::parse_registry_endpoint(registry);
+            std::cout << emojineer::render_registry_versions(
+                emojineer::load_registry_package_index(endpoint, package));
+            return 0;
+        }
+
+        if (command == "publish") {
+            const auto options = parse_publish_options(argc, argv);
+            const auto endpoint = emojineer::parse_registry_endpoint(*options.registry);
+            const auto result = emojineer::publish_package_to_registry(options.root, endpoint);
+            std::cout << (result.already_present ? "✅ already published " : "✅ published ")
+                      << emojineer::load_project_manifest(options.root / "emojineer.toml").name
+                      << '@' << result.record.version << '\n'
+                      << "artifact-sha256: " << result.record.artifact_sha256 << '\n';
+            return 0;
+        }
+
+        if (command == "fetch") {
+            if (argc < 6) {
+                throw std::runtime_error("fetch requires <package_name> <requirement> --registry <endpoint>");
+            }
+            const std::string package = argv[2];
+            const std::string requirement = argv[3];
+            const auto options = parse_fetch_options(argc, argv);
+            const auto endpoint = emojineer::parse_registry_endpoint(options.registry);
+            const auto result = emojineer::fetch_registry_package(endpoint,
+                                                                   package,
+                                                                   requirement,
+                                                                   options.cache);
+            std::cout << "✅ fetched " << package << '@' << result.record.version << '\n'
+                      << "cache: " << result.cache_path.string() << '\n'
+                      << "cache-hit: " << (result.cache_hit ? "yes" : "no") << '\n'
+                      << "artifact-sha256: " << result.record.artifact_sha256 << '\n';
             return 0;
         }
 
