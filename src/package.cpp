@@ -160,9 +160,7 @@ private:
         stack.push_back(manifest.name);
 
         std::vector<std::string> dependency_names;
-        std::vector<std::filesystem::path> dependency_roots;
         dependency_names.reserve(manifest.dependencies.size());
-        dependency_roots.reserve(manifest.dependencies.size());
 
         for (const auto& dependency : manifest.dependencies) {
             const auto dep_root = dependency_root(root, dependency, manifest.name);
@@ -173,17 +171,27 @@ private:
                                          dep_manifest.name + "'");
             }
             dependency_names.push_back(dependency.name);
-            dependency_roots.push_back(dep_root);
             visit(dep_root, dep_manifest, stack);
         }
         std::sort(dependency_names.begin(), dependency_names.end());
+
+        // All descendants have been visited at this point. Exclude every resolved package
+        // root nested beneath this package, not merely its direct dependency directories.
+        // This keeps content hashes ownership-correct even when a transitive path dependency
+        // is a sibling of its parent but still physically inside an ancestor package root.
+        std::vector<std::filesystem::path> descendant_roots;
+        for (const auto& resolved : packages_) {
+            if (resolved.root != root && within(root, resolved.root)) {
+                descendant_roots.push_back(resolved.root);
+            }
+        }
 
         packages_.push_back({manifest.name,
                              manifest.version,
                              root,
                              manifest.entry,
                              dependency_names,
-                             package_hash(root, manifest, dependency_roots)});
+                             package_hash(root, manifest, descendant_roots)});
         stack.pop_back();
         states_[root_key] = VisitState::Done;
     }
