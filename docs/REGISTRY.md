@@ -1,10 +1,12 @@
-# Package Artifacts and Registry Foundation
+# Package Artifacts and Registry Transport
 
-Emojineer 0.13 defines the immutable package artifact and version-selection contracts that a future network registry must use. This train deliberately does **not** add fake network commands. `emji publish` and remote `emji add` remain absent until registry transport, authentication, indexes, retrieval, and remote dependency locking are implemented against this substrate.
+Emojineer 0.14 turns the immutable `.emjpkg` substrate from Train 13 into a real package-exchange workflow. The transport layer now has registry identity/discovery, immutable package-version indexes, local-registry publication, SemVer selection, verified fetching, registry-scoped content-addressed caching, and optional HTTPS read transport.
+
+This is still deliberately separate from project dependency manifests. A fetched artifact does not silently become a dependency. Remote dependency declarations and deterministic remote lock provenance need to land together in the next train.
 
 ## `.emjpkg` artifacts
 
-`emji pack` creates a deterministic binary `.emjpkg` artifact with format marker `EMJPKG1`.
+`emji pack` creates deterministic binary `.emjpkg` artifacts with format marker `EMJPKG1`.
 
 ```text
 emji pack
@@ -12,121 +14,158 @@ emji pack path/to/package
 emji pack path/to/package -o dist/package.emjpkg
 ```
 
-Without `-o`, the artifact is written inside the package root as:
+Artifacts contain package identity, canonical manifest text, package-owned `.emoji` source records, per-source SHA-256 values, package `content-sha256`, and a separate whole-artifact `artifact-sha256`.
+
+The parser remains non-extracting and bounded. It rejects oversized artifacts, malformed framing, noncanonical manifest metadata, invalid source paths/order, checksum mismatches, missing entry source, content-identity mismatches, and trailing bytes.
+
+## Registry endpoint contract
+
+Supported endpoint kinds are:
 
 ```text
-<name>-<version>.emjpkg
+/path/to/registry
+file:///absolute/path/to/registry
+https://registry.example/api
 ```
 
-A package version used for distribution must be a valid SemVer 2.0 version.
+Plain `http://` network endpoints are rejected. HTTPS endpoint host names are canonicalized to lowercase and trailing endpoint slashes are removed. Query strings, fragments, user-info syntax, backslashes, whitespace, and `.` / `..` path segments are rejected.
 
-The artifact contains:
+Local paths are normalized to absolute `file://` identities internally.
 
-- package name;
-- semantic version;
-- entry source path;
-- the canonical `emojineer.toml` text;
-- package content SHA-256;
-- sorted package-owned `.emoji` source records;
-- each source path, source SHA-256, and exact source bytes.
+HTTPS read transport is compiled when CMake finds libcurl. A build without libcurl keeps complete local-registry behavior and reports that HTTPS transport is unavailable if an HTTPS endpoint is used.
 
-All variable-length fields are length-framed rather than delimiter-parsed. The reader bounds the total artifact to 128 MiB, individual fields to bounded sizes, and the source record count to a finite maximum.
+## Registry identity and discovery
 
-## Source ownership
+Initialize a local registry with:
 
-Artifact source ownership is the same ownership used by the real `PackageGraph` content hash.
+```text
+emji registry-init ./registry --id local.dev
+```
 
-If package `app` contains a resolved dependency at `deps/lib`, `.emoji` files owned by `lib` are not copied into `app`'s artifact and do not affect `app`'s package content identity. Independently resolved nested package roots are excluded the same way.
+The registry stores a bounded discovery descriptor at:
 
-Source paths inside an artifact are portable relative paths using `/`. Absolute paths, `..` escapes, backslashes, non-`.emoji` source records, duplicate paths, and non-canonical path ordering are rejected.
+```text
+v1/registry.txt
+```
 
-Equivalent package checkouts at different absolute filesystem roots therefore produce identical artifact bytes when their package-owned manifest and source bytes are identical.
+with format marker:
+
+```text
+EMJREGISTRY1
+id=local.dev
+```
+
+The registry ID is immutable for an initialized registry. Package indexes carry the same ID and are rejected if they claim a different registry identity.
+
+Inspect an endpoint with:
+
+```text
+emji registry-info --registry ./registry
+emji registry-info --registry https://registry.example/api
+```
+
+## Package-version indexes
+
+Each package has one canonical index:
+
+```text
+v1/packages/<package>.index
+```
+
+using the `EMJREGPKG1` format. Every immutable version record binds:
+
+- exact SemVer text;
+- package `content-sha256`;
+- exact `.emjpkg` `artifact-sha256`.
+
+Records are rendered in deterministic textual version order and duplicate version identities are rejected.
+
+Browse versions with:
+
+```text
+emji versions my_package --registry ./registry
+```
+
+The existing Train 13 SemVer engine chooses the highest matching version for `*`, exact, caret, and tilde requirements. Wildcard and ordinary ranges exclude prereleases by default; explicit prerelease requirements retain the existing SemVer rules.
+
+## Immutable publication
+
+Publish a package to a writable local registry with:
+
+```text
+emji publish path/to/package --registry ./registry
+```
+
+Publication:
+
+1. builds the deterministic `EMJPKG1` artifact;
+2. verifies it through the ordinary artifact parser;
+3. stores the artifact by exact artifact SHA-256 at `v1/artifacts/sha256/<hash>.emjpkg`;
+4. adds the package/version record to the canonical package index.
+
+Re-publishing exactly the same package/version/artifact is idempotent. Publishing different content under an already-published package/version is rejected as an immutable version conflict.
+
+HTTPS publication is intentionally not implemented yet. Uploading needs an authenticated immutable-write protocol, authorization model, and server-side conflict semantics rather than a generic HTTP PUT hidden behind the CLI.
+
+## Verified fetch and cache admission
+
+Fetch a package artifact by SemVer requirement with:
+
+```text
+emji fetch my_package '^1.2.0' --registry ./registry
+emji fetch my_package '~1.4.0' --registry https://registry.example/api
+```
+
+An explicit cache root can be supplied:
+
+```text
+emji fetch my_package '^1.2.0' --registry ./registry --cache ./cache
+```
+
+Without `--cache`, the platform cache root is used:
+
+- Windows: `%LOCALAPPDATA%/Emojineer/cache` when available;
+- Unix-like systems: `$XDG_CACHE_HOME/emojineer` or `$HOME/.cache/emojineer`;
+- otherwise a temporary-directory fallback.
+
+Fetch performs these checks before cache admission:
+
+1. load and verify the registry descriptor;
+2. load the package index and require matching registry/package identity;
+3. select the highest matching version deterministically;
+4. retrieve the exact artifact named by the index artifact SHA-256;
+5. parse/verify the complete `.emjpkg` artifact;
+6. require package name, exact version, content SHA-256, and artifact SHA-256 to match the selected index record;
+7. only then write the artifact to the content-addressed cache.
+
+The cache is scoped by a digest of canonical endpoint identity plus registry ID, then by package/version/artifact hash. A cache hit is re-verified before reuse. If a cached artifact is malformed or does not match the selected index record, it is discarded and fetched again.
+
+## HTTPS trust boundary
+
+When libcurl is available, HTTPS registry reads use TLS certificate and host verification, disallow redirects, use bounded response buffers, and apply connection/overall request timeouts. Only `https://` is allowed through the network transport.
+
+HTTPS authenticates the registry server through TLS. It does **not** provide package-author signatures, transparency logs, or authenticated client publication. Those are distinct trust mechanisms and are not implied by TLS.
 
 ## Two SHA-256 identities
 
-Emojineer intentionally carries two different SHA-256 identities.
+`content-sha256` identifies package-owned semantic/source content using the existing `PackageGraph` content identity.
 
-### Package content SHA-256
+`artifact-sha256` identifies the exact serialized `.emjpkg` bytes.
 
-`content-sha256` identifies the canonical package meaning already used by the local package resolver:
+A registry index binds both. Fetch is successful only if both identities agree with the retrieved artifact.
 
-```text
-SHA256(
-  framed "EMOJINEER-PACKAGE-v1"
-  + framed canonical manifest
-  + framed sorted package-owned source path/source pairs
-)
-```
+## Current boundary and next train
 
-The artifact builder independently computes this value and requires it to equal the root package identity produced by `PackageGraph`. A disagreement is an internal contract failure and packing stops.
+Emojineer 0.14 can exchange immutable package artifacts through a real registry protocol, but `emojineer.toml` still contains local/path dependencies only. This is intentional.
 
-### Artifact SHA-256
+The next package train should add remote dependency integration as one coherent system:
 
-`artifact-sha256` is SHA-256 over the complete serialized `.emjpkg` bytes.
+- manifest source syntax carrying registry endpoint/identity plus version requirement;
+- recursive registry dependency resolution;
+- deterministic materialization into a verified package store;
+- lockfile records carrying registry identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency edges;
+- package-aware linking against the verified materialized graph;
+- real remote `emji add` only after the manifest/lock/resolver path is complete;
+- authenticated HTTPS publication only after an explicit upload/authorization contract is defined.
 
-This is the transport/cache identity. The planned cache layout is content-addressed by exact artifact bytes:
-
-```text
-<cache>/<package>/<version>/<artifact-sha256>.emjpkg
-```
-
-A registry index must eventually bind a package version to both the expected package content SHA-256 and exact artifact SHA-256. Retrieval is not successful until both identities verify.
-
-## Inspect and verify
-
-```text
-emji artifact package.emjpkg
-emji verify-artifact package.emjpkg
-```
-
-`artifact` parses and verifies the artifact, then prints its package metadata and both hashes.
-
-`verify-artifact` performs the same strict parse/checksum validation and reports success only after:
-
-- format framing is valid;
-- package/version/entry metadata is valid;
-- metadata agrees with the embedded canonical manifest prefix;
-- source paths are canonical and sorted;
-- every source SHA-256 matches its source bytes;
-- the recomputed package content identity matches `content-sha256`;
-- no trailing bytes remain.
-
-The reader does not extract files into the host filesystem. Parsing an artifact therefore does not grant filesystem execution or overwrite authority.
-
-## Semantic version requirements
-
-The registry foundation implements deterministic SemVer parsing, precedence, requirement matching, and highest-compatible selection.
-
-Supported requirement forms are:
-
-```text
-*        any stable release
-1.2.3    exact version identity
-^1.2.3   compatible caret range
-~1.2.3   compatible patch line
-```
-
-Caret upper bounds follow the first non-zero component:
-
-- `^1.2.3` allows `1.x` at or above `1.2.3`, but not `2.0.0`;
-- `^0.2.3` allows `0.2.x` at or above `0.2.3`, but not `0.3.0`;
-- `^0.0.3` allows only the `0.0.3` precedence line.
-
-`~1.2.3` stays within `1.2.x` at or above `1.2.3`.
-
-Wildcard and ordinary stable ranges do not select prereleases by default. A prerelease range may match prereleases on the same major/minor/patch core and the corresponding release. Build metadata does not affect SemVer precedence, but when two available versions have equal precedence the full version text is used as a deterministic tie-break. Exact requirements preserve the exact version text, including build metadata.
-
-## Registry transport boundary
-
-A future network registry must build on these contracts rather than redefine them. The next train needs to add, together:
-
-- canonical HTTPS registry identity/discovery;
-- package-version indexes that advertise immutable artifact identities;
-- authenticated and bounded retrieval;
-- verified content-addressed caching;
-- manifest syntax for registry version requirements while preserving local/path dependencies;
-- deterministic lock records containing registry identity, selected version, content SHA-256, and artifact SHA-256;
-- real remote `emji add` behavior only after those pieces exist;
-- publication only with an explicit authenticated immutable-upload contract.
-
-Until that transport exists, Emojineer 0.13 has no `publish`, remote `add`, download, or network-registry command.
+The language runtime itself receives no ambient network or filesystem authority from registry support. Registry networking belongs to the `emji` package-management toolchain.
