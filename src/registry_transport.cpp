@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -330,6 +331,9 @@ RegistryEndpoint parse_registry_endpoint(std::string_view raw) {
         }
         return {RegistryTransportKind::Https, "https://" + authority + path, {}};
     }
+    if (text.find("://") != std::string::npos && !text.starts_with("file://")) {
+        throw std::runtime_error("unsupported registry endpoint scheme");
+    }
 
     std::string path_text = text;
     if (text.starts_with("file://")) path_text = text.substr(7);
@@ -443,11 +447,9 @@ RegistryPublishResult publish_package_to_registry(const std::filesystem::path& p
     validate_record(record);
 
     const auto artifact_path = endpoint.file_root / relative_resource_path(artifact_resource(record.artifact_sha256));
-    bool artifact_already_present = false;
     if (std::filesystem::exists(artifact_path)) {
         const auto existing = load_package_artifact(artifact_path);
         validate_artifact_against_record(existing, artifact.name, record);
-        artifact_already_present = true;
     } else {
         write_atomic_file(artifact_path, bytes);
     }
@@ -474,7 +476,7 @@ RegistryPublishResult publish_package_to_registry(const std::filesystem::path& p
 
     index.versions.push_back(record);
     write_atomic_file(index_path, render_registry_package_index(index));
-    return {record, artifact_path, artifact_already_present};
+    return {record, artifact_path, false};
 }
 
 RegistryFetchResult fetch_registry_package(const RegistryEndpoint& endpoint,
