@@ -1,6 +1,6 @@
 # `emji` Projects and Local Dependencies
 
-`emji` is Emojineer's project/package workflow. In v0.12 it manages deterministic local/path dependency graphs, connects them to the source linker, and exposes the resolved graph for humans and tooling without pretending a remote registry exists.
+`emji` is Emojineer's project/package workflow. In v0.13 it manages deterministic local/path dependency graphs, connects them to the source linker, exposes the resolved graph for humans/tooling, and can package one package's owned source into a deterministic immutable `.emjpkg` artifact without pretending a remote registry exists.
 
 ## Project layout
 
@@ -39,52 +39,37 @@ textkit = "vendor/textkit"
 Required package fields remain:
 
 - `name` — non-empty ASCII letters/digits plus `-` and `_`;
-- `version` — semantic-version-shaped text such as `0.1.0`;
+- `version` — semantic-version-shaped text for ordinary local project use;
 - `entry` — relative portable path to a `.emoji` source file.
+
+Distribution artifacts use the stricter SemVer 2.0 parser defined in [REGISTRY.md](REGISTRY.md), so `emji pack` rejects a package version that cannot be represented by the registry/version-selection contract.
 
 Dependency keys use the same portable package-name rules. Dependency values are relative filesystem paths. `..` is allowed for dependencies so sibling packages are possible; absolute paths and backslash syntax are rejected so manifests remain checkout-portable.
 
 A dependency key must match the target package's `[package].name`. Duplicate dependency names, missing manifests, cycles, and one package name resolving to multiple local roots are rejected.
 
-Unknown keys and unsupported manifest sections are rejected rather than silently ignored.
-
 ## Add and remove dependencies
-
-From a project directory:
 
 ```text
 emji add mathkit ../mathkit
 emji remove mathkit
-```
-
-You may supply the project directory explicitly as the final argument:
-
-```text
 emji add mathkit ../mathkit path/to/app
 emji remove mathkit path/to/app
 ```
 
 `add` validates the candidate graph before writing the manifest, then rewrites the manifest canonically and refreshes the lockfile. `remove` does the same after deleting the named dependency. A failed add does not leave the candidate dependency declaration behind.
 
-This workflow supports local/path packages only. There is no fake network registry, no `publish`, and no remote version solver.
+This dependency workflow still supports local/path packages only. There is no fake network registry, no `publish`, and no remote version solver.
 
 ## Recursive package graph
 
-Dependency resolution is recursive. Each package resolves dependency paths relative to its own package root, so a package may itself have local dependencies.
+Dependency resolution is recursive. Each package resolves dependency paths relative to its own package root.
 
-Resolution enforces:
+Resolution enforces deterministic package-name ordering, one resolved root per package name, dependency key/target name agreement, cycle diagnostics, and required dependency manifests.
 
-- deterministic package-name ordering;
-- one resolved root per package name;
-- dependency key/target package-name agreement;
-- cycle detection with the package chain in the diagnostic;
-- required `emojineer.toml` files at dependency roots.
-
-Package content identity uses SHA-256 over a framed representation of the package's canonical manifest plus its owned `.emoji` source files. Dependency-owned source trees are excluded, including transitive dependency roots nested elsewhere beneath an ancestor package directory. This keeps one package's content hash from silently absorbing another package's source.
+Package content identity uses SHA-256 over a framed representation of the package's canonical manifest plus its owned `.emoji` source files. Dependency-owned source trees are excluded, including transitive/nested resolved roots. That ownership contract is reused by `.emjpkg` packaging.
 
 ## Inspect the resolved graph
-
-Train 12 exposes the already-resolved package graph instead of inventing a second metadata model:
 
 ```text
 emji tree
@@ -93,52 +78,45 @@ emji tree path/to/project --hashes
 emji tree path/to/project --json
 ```
 
-Human output reports every reached package with:
+Human output reports package name/version, `root` / `direct` / `transitive` relation, checkout-relative path, entry source, and optionally content SHA-256. Shared DAG nodes are shown again with `(shared)` but are not recursively expanded twice.
 
-- package name and version;
-- relation to the root: `root`, `direct`, or `transitive`;
-- checkout-relative package path;
-- declared entry source;
-- optional full SHA-256 content identity with `--hashes`.
-
-The tree follows real dependency edges. If a package is reached through more than one parent in a shared DAG, its later occurrence is marked `(shared)` and not recursively expanded again. This keeps the view finite without hiding the second edge.
-
-`--json` emits schema `emojineer.package-graph.v1`. Package records are sorted by package name and include relation, path, entry, full `content_sha256`, and sorted direct dependency names. Equivalent graphs in different checkout roots produce identical JSON because absolute checkout paths and timestamps are excluded.
-
-A sibling dependency such as `../mathkit` remains `../mathkit` in graph output. If a resolved package cannot be represented relative to the root package, graph rendering fails instead of leaking an absolute host path.
-
-`tree` resolution failures are prefixed with `package graph:` at the CLI boundary so topology/resolution errors stay distinguishable from command-line parsing errors.
+`--json` emits deterministic `emojineer.package-graph.v1` data with no timestamps or absolute checkout roots.
 
 ## Importing package source
 
-A declared dependency can be used by the source linker with an explicit package coordinate:
+A declared direct dependency can be imported with:
 
 ```emoji
 🧩 🚀
 🔗 📜pkg:mathkit/src/main.emoji📜
 ```
 
-The form is:
+Transitive dependencies do not become ambient imports. Relative imports stay inside the importing package's owned root, and `pkg:` paths cannot tunnel through one resolved package into another nested package.
+
+## Immutable package artifacts
+
+Train 13 packages a single resolved package's owned source without absorbing dependency-owned source:
 
 ```text
-pkg:<dependency>/<module-path>.emoji
+emji pack
+emji pack path/to/project
+emji pack path/to/project -o dist/project.emjpkg
 ```
 
-The dependency must be declared directly by the package containing the importing source module. A transitive dependency is not automatically visible.
+The artifact contains the canonical manifest, declared package identity, entry, sorted package-owned `.emoji` records, per-source SHA-256 values, and the package `content-sha256` already defined by `PackageGraph`.
 
-For example, if `app` declares `b`, and `b` declares `c`, source in `app` may import `pkg:b/...` but cannot import `pkg:c/...` unless `app` also declares `c` itself.
+The complete serialized bytes have a separate `artifact-sha256`. This is the future transport/cache identity. Equivalent checkouts with identical package-owned inputs produce byte-identical artifacts.
 
-Normal relative source imports remain confined to their owning package root. They may not cross into a dependency-owned subtree, even when that dependency physically lives below the project directory. Likewise, `pkg:b/...` may not tunnel into a separately resolved package nested beneath `b`; that nested package must be imported through its own declared coordinate.
-
-Package-qualified module identities are deterministic, for example:
+Inspect or verify one with:
 
 ```text
-pkg:mathkit/src/main.emoji
+emji artifact package.emjpkg
+emji verify-artifact package.emjpkg
 ```
 
-Absolute checkout paths are never encoded into linked bytecode identities.
+Verification is strict and non-extracting: malformed framing, noncanonical manifest metadata, unsafe/noncanonical source paths, missing entry source, source checksum mismatch, package content-identity mismatch, or trailing bytes are rejected.
 
-See [MODULES.md](MODULES.md) for the complete source-linking rules.
+See [REGISTRY.md](REGISTRY.md) for the complete `EMJPKG1` and SemVer contracts.
 
 ## Project validation
 
@@ -147,28 +125,18 @@ emji check
 emji check path/to/project
 ```
 
-Validation includes:
+Validation includes strict manifest parsing, root entry-file existence/package-aware compilation, recursive local dependency resolution, dependency source-graph validation, and deterministic lockfile freshness when a lock exists.
 
-1. strict manifest parsing;
-2. root entry-file existence and package-aware compilation;
-3. recursive local dependency resolution;
-4. dependency entry-file existence and package-aware source-graph compilation;
-5. deterministic lockfile freshness when a lockfile is present.
-
-The file compiler and `emji check` share the same package-aware module linker behavior. `pkg:` coordinates are therefore not a separate project-only validation path.
-
-Package graph failures use package diagnostics such as `cyclic package dependency`; source-module cycles use `cyclic module import`. These are deliberately separate layers.
+Package graph failures and source-module cycle failures remain distinct layers.
 
 ## Deterministic lockfile v2
-
-Write or refresh the lockfile with:
 
 ```text
 emji lock
 emji lock path/to/project
 ```
 
-v0.12 continues to write lock format 2:
+v0.13 continues to write local/path lock format 2:
 
 ```text
 lock_version = 2
@@ -186,31 +154,17 @@ content_sha256 = "..."
 dependencies = ""
 ```
 
-The dependency records are sorted by package name and include transitive packages. Paths are rendered relative to the root project, so absolute checkout locations are not locked into the file. The lock contains no timestamps.
+Records are deterministic, sorted, checkout-relative, and timestamp-free. `manifest_hash` remains FNV-1a-64 as a drift marker; dependency content is pinned by SHA-256.
 
-`manifest_hash` remains FNV-1a-64 over the canonical root manifest and is an identity/drift marker, not a security primitive. Dependency package content is pinned with SHA-256.
+Remote registry locking is **not** encoded into this format yet. The next train must add registry identity, requirement, selected version, content SHA-256, and artifact SHA-256 together rather than overloading local-path records ambiguously.
 
-`emji check` recomputes the canonical lock text. Changes to dependency source, versions, manifests, graph topology, or paths make the lock stale until `emji lock` refreshes it.
-
-## Inspect metadata
-
-```text
-emji show
-emji show path/to/project
-```
-
-This displays the root package name, version, entry path, manifest hash, and declared direct dependencies. Use `emji tree` when you need the resolved recursive graph or package content identities.
-
-## Relationship to modules
-
-The project/package layer and source-module layer remain distinct but are now connected explicitly:
+## Relationship to modules and artifacts
 
 - `emojineer.toml` defines package metadata and local dependency edges;
-- `emji tree` inspects the resolved package graph derived from those edges;
-- `🧩` identifies an Emojineer source module;
-- `🔗 📜relative/path.emoji📜` imports a source module inside the current package root;
-- `🔗 📜pkg:mathkit/src/main.emoji📜` imports a source module from a declared direct dependency;
-- `🔗 📜std:math📜` imports a built-in standard module;
-- `📤` declares public module symbols.
+- `emji tree` inspects the resolved `PackageGraph`;
+- `🧩`, `🔗`, and `📤` define source-module relationships;
+- `.emjpkg` serializes one package's canonical manifest and package-owned source;
+- `content-sha256` identifies package meaning;
+- `artifact-sha256` identifies exact serialized artifact bytes.
 
-The package graph authorizes which dependency roots exist. The source linker decides which specific modules are imported. The report layer only describes that resolved graph. None of these layers silently grants ambient access to every transitive package or every file beneath the checkout root.
+None of these layers grants ambient access to transitive packages, arbitrary checkout files, or host network/filesystem capabilities.
