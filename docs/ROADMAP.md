@@ -26,7 +26,7 @@ Buffered REPL, interactive commands, CER support, bytecode dump/disassembly, and
 
 ### Train 6 — Canonical source formatting and diagnostics
 
-`fmt`, `lint`, canonical indentation/LF form, comment preservation, multiline-string protection, CER-aware structural formatting, and CR/CRLF diagnostics.
+`fmt`, `lint`, canonical indentation/LF form, comment preservation, multiline-string protection, CER-aware structural formatting, CR/CRLF diagnostics.
 
 ### Train 7 — `emji` project workflow
 
@@ -81,21 +81,36 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - graph-report logic is a presentation layer over the existing resolver rather than a second package model;
 - no fake registry and no audit/report subsystem.
 
+### Train 13 — Immutable package artifacts and registry substrate
+
+- deterministic binary `.emjpkg` format with `EMJPKG1` framing;
+- canonical package metadata plus sorted package-owned `.emoji` source records;
+- per-source SHA-256 verification;
+- package `content-sha256` tied directly to the existing `PackageGraph` package-content identity;
+- separate whole-artifact `artifact-sha256` for immutable transport/cache identity;
+- checkout-portable artifact bytes with dependency-owned source excluded from parent artifacts;
+- bounded parser with format, path, ordering, checksum, content-identity, and trailing-byte validation;
+- `emji pack`, `emji artifact`, and `emji verify-artifact`;
+- content-addressed cache path contract `<cache>/<package>/<version>/<artifact-sha256>.emjpkg`;
+- SemVer 2.0 parsing and deterministic `*`, exact, caret, and tilde requirement selection primitives;
+- explicit prerelease/default-stable behavior and deterministic build-metadata tie breaking;
+- no network retrieval, remote manifest dependency syntax, `publish`, or fake remote `add` behavior yet.
+
 ## Next product train
 
-### Train 13 — Registry protocol and package distribution
+### Train 14 — Registry transport and remote resolution
 
-Define a real remote package system only after specifying the protocol coherently:
+Build the real network layer on top of Train 13 rather than redefining package identity:
 
-- registry identity and endpoint contract;
-- immutable package artifact format and canonical package metadata;
-- cryptographic artifact/content checksums;
-- semantic version selection and deterministic dependency resolution;
-- retrieval and local cache model with reproducibility guarantees;
-- source/artifact trust boundaries and failure diagnostics;
-- then real remote `emji add` / `emji publish` behavior;
-- preserve local/path dependency support as a first-class source type;
-- no placeholder network commands before the protocol exists.
+- canonical HTTPS registry identity/discovery contract;
+- package-version indexes carrying selected version, package content SHA-256, and artifact SHA-256;
+- bounded authenticated retrieval with exact artifact checksum verification before cache admission;
+- verified content-addressed local cache reuse;
+- manifest syntax for registry version requirements while preserving local/path dependencies as a first-class source type;
+- deterministic lock records for registry identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency graph;
+- real remote `emji add` only after resolution/locking is reproducible;
+- publication only after an authenticated immutable-upload contract exists;
+- no ambient network authority in the language runtime.
 
 ## Later product trains
 
