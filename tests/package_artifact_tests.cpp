@@ -144,12 +144,12 @@ void test_invalid_semver_is_rejected() {
 void test_semver_large_numeric_core_identifiers() {
     // Test that SemVer numeric core identifiers beyond uint64_t work correctly
     // using overflow-free string representation
-    const auto v1 = emojineer::parse_semantic_version("18446744073709551616"); // uint64_t max + 1
+    const auto v1 = emojineer::parse_semantic_version("18446744073709551616.0.0"); // uint64_t max + 1
     require(v1.major == "18446744073709551616", "major should be large number string");
     require(v1.minor == "0", "minor should be zero");
     require(v1.patch == "0", "patch should be zero");
 
-    const auto v2 = emojineer::parse_semantic_version("9999999999999999999999999999");
+    const auto v2 = emojineer::parse_semantic_version("9999999999999999999999999999.0.0");
     require(v2.major == "9999999999999999999999999999", "major should be very large");
 
     // Test comparison of large versions
@@ -172,15 +172,19 @@ void test_semver_large_prerelease_identifiers() {
     const auto v2 = emojineer::parse_semantic_version("1.0.0-9999999999999999999");
     const auto v3 = emojineer::parse_semantic_version("1.0.0-2");
 
-    // Test ordering: numeric prerelease identifiers compared as numbers
-    // "2" > "18446744073709551616" because shorter is larger for numeric identifiers
-    require(emojineer::compare_semantic_versions(v3, v1) > 0,
-            "shorter numeric prerelease should be greater");
+    // Test ordering: numeric prerelease identifiers compared as integer values
+    // "2" < "18446744073709551616" because 2 is numerically smaller
+    require(emojineer::compare_semantic_versions(v3, v1) < 0,
+            "numeric prerelease 2 should be less than 18446744073709551616");
 
-    // Test leading zero preservation in ordering
-    const auto v4 = emojineer::parse_semantic_version("1.0.0-01");
-    const auto v5 = emojineer::parse_semantic_version("1.0.0-1");
-    // "01" is invalid as a numeric prerelease (leading zero), but text comparison works for non-numeric
+    // Test that leading zeros in prerelease numeric identifiers are rejected
+    bool rejected_leading_zero = false;
+    try {
+        (void)emojineer::parse_semantic_version("1.0.0-01");
+    } catch (const std::runtime_error&) {
+        rejected_leading_zero = true;
+    }
+    require(rejected_leading_zero, "prerelease with leading zero should be rejected");
 
     // Test very large prerelease identifier comparison
     require(emojineer::compare_semantic_versions(v1, v2) < 0,
@@ -197,17 +201,20 @@ void test_artifact_size_bound_enforced_before_read() {
     auto bytes = emojineer::build_package_artifact_bytes(root.path / "pkg");
     const auto artifact_path = root.path / "large.emjpkg";
 
-    // Create a file that exceeds the 128 MiB limit
-    // We use a smaller test size to avoid actually creating a 128MB file
+    // Create a file that exceeds the 128 MiB limit using sparse file / seek to avoid
+    // unnecessary giant in-memory allocation
     std::ofstream fake(artifact_path, std::ios::binary | std::ios::trunc);
     require(fake, "should be able to create test file");
-    // Write magic and enough data to exceed limit
+    // Write magic
     fake << "EMJPKG1\n";
-    // Write 1 byte more than the limit to trigger rejection
-    for (std::size_t i = 0; i < (128ull * 1024ull * 1024ull); ++i) {
-        fake.put('x');
-    }
     fake.close();
+
+    // Use seek to create a sparse file larger than 128 MiB without allocating blocks
+    std::fstream sparse(artifact_path, std::ios::binary | std::ios::in | std::ios::out);
+    require(sparse, "should be able to open test file for sparse write");
+    sparse.seekp(128ull * 1024ull * 1024ull, std::ios::beg);
+    sparse.put('x');
+    sparse.close();
 
     bool rejected = false;
     try {
@@ -222,6 +229,41 @@ void test_artifact_size_bound_enforced_before_read() {
     require(rejected, "oversized artifact should be rejected before full read");
 }
 
+void test_write_and_reload_artifact_preserves_identity() {
+    // Test that write_package_artifact() rejects non-.emjpkg output
+    TempRoot root("write-reload");
+    emojineer::initialize_project(root.path / "pkg", "pkg");
+
+    // First, verify that write_package_artifact rejects non-.emjpkg extension
+    bool rejected_wrong_ext = false;
+    try {
+        emojineer::write_package_artifact(root.path / "pkg", root.path / "wrong.txt");
+    } catch (const std::runtime_error&) {
+        rejected_wrong_ext = true;
+    }
+    require(rejected_wrong_ext, "write_package_artifact should reject non-.emjpkg output");
+
+    // Now test successful write and reload preserving artifact identity
+    const auto artifact_path = root.path / "pkg.emjpkg";
+    emojineer::write_package_artifact(root.path / "pkg", artifact_path);
+
+    // Reload and verify identity preserved
+    const auto loaded = emojineer::load_package_artifact(artifact_path);
+    require(loaded.name == "pkg" && loaded.version == "0.1.0",
+            "reloaded artifact should preserve package identity");
+    require(loaded.entry == "src/main.emoji", "reloaded artifact should preserve entry");
+    require(loaded.content_sha256.size() == 64 && loaded.artifact_sha256.size() == 64,
+            "reloaded artifact should preserve SHA-256 identities");
+
+    // Build fresh artifact and verify the content SHA-256 matches
+    const auto fresh_bytes = emojineer::build_package_artifact_bytes(root.path / "pkg");
+    const auto fresh_artifact = emojineer::parse_package_artifact(fresh_bytes);
+    require(fresh_artifact.content_sha256 == loaded.content_sha256,
+            "reloaded artifact should preserve content SHA-256 identity");
+    require(fresh_artifact.artifact_sha256 == loaded.artifact_sha256,
+            "reloaded artifact should preserve whole-artifact SHA-256 identity");
+}
+
 } // namespace
 
 int main() {
@@ -233,6 +275,7 @@ int main() {
         test_semver_large_numeric_core_identifiers();
         test_semver_large_prerelease_identifiers();
         test_artifact_size_bound_enforced_before_read();
+        test_write_and_reload_artifact_preserves_identity();
         std::cout << "✅ package artifact and registry contract tests passed\n";
         return 0;
     } catch (const std::exception& error) {
