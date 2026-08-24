@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 
@@ -76,6 +77,14 @@ void test_endpoint_contract_and_registry_identity() {
     }
     require(rejected_http, "network registry endpoints should require HTTPS");
 
+    bool rejected_scheme = false;
+    try {
+        (void)emojineer::parse_registry_endpoint("ftp://example.test/packages");
+    } catch (const std::runtime_error&) {
+        rejected_scheme = true;
+    }
+    require(rejected_scheme, "unsupported URL schemes must not become file paths");
+
     const auto https = emojineer::parse_registry_endpoint("https://EXAMPLE.TEST/api/");
     require(https.kind == emojineer::RegistryTransportKind::Https,
             "HTTPS endpoint should select HTTPS transport");
@@ -93,7 +102,7 @@ void test_publish_is_immutable_and_idempotent() {
 
     const auto endpoint = emojineer::parse_registry_endpoint(registry_root.string());
     const auto first = emojineer::publish_package_to_registry(package_root, endpoint);
-    require(!first.already_present, "first publication should create immutable artifact");
+    require(!first.already_present, "first publication should create immutable version record");
     require(std::filesystem::is_regular_file(first.artifact_path),
             "publication should store artifact by SHA-256");
 
