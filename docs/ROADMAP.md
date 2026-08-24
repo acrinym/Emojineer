@@ -54,28 +54,38 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - checkout-portable relative lock paths;
 - no remote registry fiction.
 
-## Next product train
-
 ### Train 11 — Cross-package module imports
 
-Connect the now-real package graph to the source linker with explicit package coordinates rather than filesystem root escapes:
+- explicit `pkg:<dependency>/<module>.emoji` source imports;
+- project/package context supplied to the module linker through the real `PackageGraph`;
+- declared-direct-dependency enforcement so transitive packages do not become ambient imports;
+- root-relative imports remain confined to the importing package's owned source tree;
+- deepest-root ownership checks prevent local or `pkg:` paths from tunneling through one package into a separately resolved nested package;
+- deterministic `pkg:<package>/<path>` linked module identities that do not encode checkout roots;
+- ordinary `📤` export/collision behavior across project, package, and standard modules;
+- distinct package-cycle and source-module-cycle diagnostics;
+- file CLI commands and `emji check` use the same package-aware linker path;
+- package-qualified import regression coverage for direct, transitive, nested, missing, duplicate-name, cycle, and checkout-portability behavior;
+- no remote registry and no VM opcode/EMJBC format bump.
 
-- sovereign import syntax for a module inside a declared dependency package;
-- package graph supplied to module resolution by project-aware compilation;
-- dependency package modules remain confined to their own package root;
-- explicit exports continue to control cross-package visibility;
-- deterministic package-qualified module identities in linked bytecode;
-- duplicate/collision/cycle diagnostics across package and source-module graphs;
-- file CLI and `emji check` exercise the same package-aware linker path;
-- stdlib imports remain separate `std:` identities.
+## Next product train
 
-Do not encode package access as `../` source imports that bypass Train 8's package-root boundary.
+### Train 12 — Package workflow maturation
+
+Make the now-connected package/source graph easier to inspect and diagnose without introducing audit machinery:
+
+- richer dependency graph commands such as `emji tree`;
+- direct/transitive dependency presentation;
+- package source identity and content-hash UX;
+- clearer package/import diagnostic context;
+- checkout-portable graph output suitable for humans and tooling;
+- no fake registry, no audit/report subsystem.
 
 ## Later product trains
 
 ### Registry protocol and package distribution
 
-Define a real remote registry API/protocol, version selection, package retrieval/cache, reproducible resolution, artifact verification, and only then `emji publish` and remote `emji add` behavior.
+Define a real remote registry API/protocol, package/artifact identity, cryptographic checksums, version selection, package retrieval/cache, reproducible resolution, and only then `emji publish` and remote `emji add` behavior.
 
 ### Language server and editor integration
 

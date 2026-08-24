@@ -2,8 +2,10 @@
 
 Emojineer builds two command-line executables:
 
-- `emojineer` — source, bytecode, formatting, REPL, standard-library, and execution tools;
-- `emji` — project, local dependency, and lockfile workflow.
+- `emojineer` - source, bytecode, formatting, REPL, standard-library, package-aware linking, and execution tools;
+- `emji` - project, local dependency, and lockfile workflow.
+
+The current toolchain version is **0.11**.
 
 ## Build
 
@@ -27,7 +29,7 @@ ctest --test-dir build --output-on-failure
 emojineer run program.emoji
 ```
 
-Compiles the source and executes it on the Emojineer VM. If the entry contains module syntax, the module graph is resolved before compilation. Module imports may be project-local `.emoji` paths or built-in `std:<module>` specifiers.
+Compiles the source and executes it on the Emojineer VM. If the entry contains module syntax, the module graph is resolved before compilation. When an enclosing `emojineer.toml` exists, the real package graph is also resolved so imports may use project-local `.emoji` paths, declared `pkg:<dependency>/<module>.emoji` coordinates, or built-in `std:<module>` specifiers.
 
 ### Check
 
@@ -35,7 +37,7 @@ Compiles the source and executes it on the Emojineer VM. If the entry contains m
 emojineer check program.emoji
 ```
 
-Parses, resolves modules when present, compiles, and verifies the generated chunk without executing it.
+Parses, resolves package/module context when present, compiles, and verifies the generated chunk without executing it.
 
 ### Explain
 
@@ -70,7 +72,7 @@ Diagnoses differences from canonical formatting, including noncanonical CR/CRLF 
 emojineer dump program.emoji
 ```
 
-Compiles source in memory, including local and standard-module linking, and disassembles the resulting chunk.
+Compiles source in memory, including local, package, and standard-module linking, and disassembles the resulting chunk.
 
 ### Compile
 
@@ -80,6 +82,25 @@ emojineer compile program.emoji -o output.emjbc
 ```
 
 Writes serialized sovereign `EMJBC` bytecode. Without `-o`, the source extension is replaced with `.emjbc`.
+
+Package-qualified module identity is deterministic and checkout-portable. Dependency modules are represented internally with identities such as `pkg:mathkit/src/main.emoji`, never absolute checkout paths.
+
+## Package-aware imports
+
+Given:
+
+```toml
+[dependencies]
+mathkit = "../mathkit"
+```
+
+source in the declaring package can import:
+
+```emoji
+🔗 📜pkg:mathkit/src/main.emoji📜
+```
+
+Only declared direct dependencies are visible through `pkg:`. Transitive packages do not become ambient imports. Relative source imports stay within the current package's owned source tree and cannot tunnel into a resolved dependency subtree. A `pkg:` coordinate likewise cannot tunnel through one dependency into a separately resolved nested package.
 
 ## Standard library catalog
 
@@ -126,16 +147,16 @@ The REPL buffers source until `:run`.
 
 Commands:
 
-- `:run` — compile and execute the current buffer;
-- `:show` — print the current source buffer;
-- `:explain` — explain current tokens;
-- `:clear` — clear the buffer;
-- `:help` — show commands;
-- `:quit` — leave the REPL.
+- `:run` - compile and execute the current buffer;
+- `:show` - print the current source buffer;
+- `:explain` - explain current tokens;
+- `:clear` - clear the buffer;
+- `:help` - show commands;
+- `:quit` - leave the REPL.
 
 The REPL and VM intentionally share the same input stream. After `:run`, `📥` consumes the following input line from that stream.
 
-The REPL is currently single-source. `🧩`, `🔗`, and `📤`, including `std:` imports, require file-based compilation because imports need the module linker.
+The REPL is currently single-source. `🧩`, `🔗`, and `📤`, including `pkg:` and `std:` imports, require file-based compilation because imports need a concrete source/package graph.
 
 ## Custom Emoji Registry options
 
@@ -167,7 +188,7 @@ emji check
 emji check path/to/project
 ```
 
-Validates the root manifest and entry source, recursively resolves declared local/path package dependencies, validates dependency entry source graphs, and compares an existing lockfile with the canonical dependency graph. Built-in `std:` imports remain valid source-graph members and do not require project files.
+Validates the root manifest and entry source, recursively resolves declared local/path package dependencies, validates root and dependency entry source graphs with package-aware linking, and compares an existing lockfile with the canonical dependency graph. Local, `pkg:`, and `std:` imports therefore pass through the same file linker used by ordinary source commands.
 
 ### Write lockfile
 
@@ -211,4 +232,4 @@ Successful commands return zero. Parse, compile, bytecode, project, dependency, 
 
 ## Current boundaries
 
-The v0.10 toolchain has real local/path package dependency resolution but no remote registry, package publication command, remote version solver, or download cache. Package metadata does not yet grant source modules cross-package visibility: explicit package-qualified module import syntax is the next linker train. The standard library remains pure and capability-free, and the toolchain has no arbitrary host FFI, network standard-library API, or filesystem standard-library API.
+The v0.11 toolchain has real local/path package dependency resolution and explicit cross-package module imports, but no remote registry, package publication command, remote version solver, or download cache. Package access remains explicit and direct-dependency scoped. The standard library remains pure and capability-free, and the toolchain has no arbitrary host FFI, network standard-library API, or filesystem standard-library API.

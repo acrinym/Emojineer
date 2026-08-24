@@ -14,11 +14,18 @@ A multi-source unit starts with one module declaration:
 
 The declaration must be the first statement. The module name is an emoji identifier and must be unique across the loaded graph.
 
-Import another project-local source unit with a text path:
+Import another source unit inside the current package with a relative text path:
 
 ```emoji
 🔗 📜math.emoji📜
 🔗 📜lib/text.emoji📜
+```
+
+Import a module from a declared direct package dependency with a package-qualified specifier:
+
+```emoji
+🔗 📜pkg:mathkit/src/main.emoji📜
+🔗 📜pkg:textkit/lib/text.emoji📜
 ```
 
 Import a built-in standard module with a deterministic `std:` specifier:
@@ -52,23 +59,26 @@ A module-local declaration that collides with an imported symbol of the same kin
 
 Exported globals are live bindings. Assignment through an imported exported global updates that same linked global value.
 
-Standard modules obey these exact visibility and collision rules; they are not privileged namespaces that bypass the language model.
+Package modules and standard modules obey these exact visibility and collision rules. Neither package coordinates nor `std:` are privileged namespaces that bypass ordinary `📤` export semantics.
 
-## Project-local module identity
+## Module identity
 
-Runtime/link identity is not derived from an absolute checkout path.
+Runtime/link identity is never derived from an absolute checkout path.
 
-Each project-local source unit receives a canonical identity from its normalized path relative to the module root, for example:
+A root-package source unit keeps its normalized package-relative identity, for example:
 
 ```text
 lib/math.emoji
 ```
 
-That identity is stable when the same project is checked out in a different absolute directory. Equivalent module graphs from different roots are required to serialize identically.
+A dependency-package module receives a deterministic package-qualified identity:
 
-## Standard module identity
+```text
+pkg:mathkit/src/main.emoji
+pkg:textkit/lib/text.emoji
+```
 
-Built-in standard modules have deterministic virtual identities equal to their specifiers:
+Built-in standard modules use their virtual specifiers directly:
 
 ```text
 std:math
@@ -76,15 +86,13 @@ std:arrays
 std:text
 ```
 
-They are not materialized into the user's project and do not depend on an installation path. Their source is owned by the Emojineer toolchain and passes through the normal lexer/parser/linker/compiler pipeline.
+These identities remain stable when the same package graph is checked out in a different absolute directory. Equivalent source/package graphs from different checkout roots are required to serialize identically.
 
-The source-facing `🧩` module name remains subject to the same uniqueness rule across the loaded graph.
+The source-facing `🧩` module name remains subject to the same uniqueness rule across the entire loaded graph, including project-local modules, dependency-package modules, and standard modules.
 
-See [STDLIB.md](STDLIB.md).
+## Package roots and local paths
 
-## Module root and local paths
-
-Ordinary file imports are confined to the current project/module root.
+Ordinary file imports are confined to the source module's owning package root.
 
 Rules:
 
@@ -92,31 +100,65 @@ Rules:
 - file import paths must use portable forward slashes;
 - file imports must target `.emoji` files;
 - missing/non-file targets are errors;
-- canonical path resolution may not escape the module root, including through `..` or symlinks.
+- canonical path resolution may not escape the current package root through `..` or symlinks;
+- a relative import may not enter a different resolved package root nested under the current package.
 
-When the `emojineer` CLI compiles a source file, it searches upward for the nearest `emojineer.toml`. If found, that project directory becomes the module root. Otherwise the entry file's directory is the root.
+When the `emojineer` CLI compiles a source file, it searches upward for the nearest `emojineer.toml`. If found, that package directory becomes the module root and its real `PackageGraph` is supplied to the linker whenever module syntax is present. Otherwise the entry file's directory is the ordinary non-package module root.
 
-This allows a normal project entry such as `src/main.emoji` to import `../lib/math.emoji` while still preventing imports from escaping the project.
+A normal project entry such as `src/main.emoji` can still import another root-package file such as `../lib/math.emoji`, provided that canonical target remains owned by the root package.
 
-A `std:` import is not a filesystem path, so it is resolved against the built-in standard-module catalog instead.
+A relative filesystem path is never the mechanism for importing dependency-owned source.
+
+## `pkg:` package coordinates
+
+The package import form is:
+
+```text
+pkg:<dependency>/<module-path>.emoji
+```
+
+The dependency name must be present in the importing package's own declared `[dependencies]` set. The linker resolves that name through the already-resolved `PackageGraph`, then resolves the module path relative to that dependency package's canonical root.
+
+Package coordinates enforce several boundaries:
+
+- only declared **direct** dependencies are ambient to a package's source;
+- transitive dependencies do not become automatically importable;
+- `pkg:` module paths must remain inside the named dependency's root;
+- a `pkg:` path may not tunnel through one package into another package physically nested beneath it;
+- if a nested package is separately declared, it must be imported through its own `pkg:<name>/...` coordinate;
+- package/module resolution uses canonical filesystem paths, so symlink escapes are rejected.
+
+This means a root package depending on `b`, where `b` depends on `c`, may import `pkg:b/...` but may not import `pkg:c/...` unless the root package itself explicitly declares `c`.
+
+## Standard module identity
+
+A `std:` import is not a filesystem or package path. It is resolved against the built-in standard-module catalog.
+
+Standard modules are not materialized into the user's project and do not depend on an installation path. Their source is owned by the Emojineer toolchain and passes through the normal lexer/parser/linker/compiler pipeline.
+
+See [STDLIB.md](STDLIB.md).
 
 ## Loading and initialization
 
-The linker performs deterministic depth-first dependency resolution in source import order.
+The linker performs deterministic depth-first source-module resolution in source import order after the package graph has been resolved.
 
-Dependencies initialize before their importers. A module is loaded and initialized once per program even in a diamond dependency graph.
+Dependencies initialize before their importers. A module is loaded and initialized once per program even in a diamond source dependency graph.
 
-The same once-only rule applies when several project files import the same standard module.
+The same once-only rule applies when several project or package files import the same standard module or the same package-qualified module identity.
 
 ## Cycles
 
-Cyclic imports are rejected before bytecode compilation. Diagnostics include the cycle chain.
+Package dependency cycles and source-module import cycles are distinct errors.
 
-Standard modules participate in the same cycle machinery. In v0.9 they may import only other `std:` modules, which prevents a built-in standard module from acquiring ambient access to project files.
+Package cycles are rejected by the package resolver with a `cyclic package dependency` chain before package-aware linking begins.
+
+Source-module cycles are rejected by the module linker with a `cyclic module import` chain. Package-owned source modules appear in that chain with deterministic `pkg:<package>/...` identities.
+
+Standard modules participate in the source-module cycle machinery. They may import only other `std:` modules, preventing a built-in standard module from acquiring ambient access to project or package files.
 
 ## Bytecode compatibility
 
-Modules and the v0.9 standard library do not require a new bytecode version or new VM opcodes.
+Cross-package modules do not require a new bytecode version or new VM opcodes.
 
 The linker rewrites module-local names into deterministic internal identities before invoking the existing compiler. The resulting program still uses the existing global/function bytecode machinery, so the current `EMJBC` v3 writer remains unchanged and v1/v2/v3 reader compatibility is preserved.
 
@@ -124,6 +166,7 @@ Bytecode tooling may display internal names such as:
 
 ```text
 @module/lib/math.emoji::🧠
+@module/pkg:mathkit/src/main.emoji::🧠
 @module/std:math::🧭
 ```
 
@@ -131,27 +174,27 @@ Those names are linker metadata, not source syntax.
 
 ## CLI behavior
 
-The file-based commands are module aware:
+The file-based commands are package/module aware:
 
 ```text
-emojineer check main.emoji
-emojineer run main.emoji
-emojineer dump main.emoji
-emojineer compile main.emoji
+emojineer check src/main.emoji
+emojineer run src/main.emoji
+emojineer dump src/main.emoji
+emojineer compile src/main.emoji
 ```
+
+When the source belongs to an `emojineer.toml` package and uses module syntax, these commands resolve the same package graph and package-qualified imports used by `emji check`.
 
 `emojineer stdlib` lists the built-in `std:` modules.
 
-`emji check` compiles/validates the project entry's complete module graph, including standard modules.
+`emji check` compiles/validates the root package entry and each dependency package entry using the same package-aware file linker path.
 
 `fmt`, `lint`, and `explain` continue to operate on the individual source file they are given.
 
-The REPL remains a buffered single-source session. Module syntax requires file-based compilation because linking requires a concrete program graph. The REPL's existing shared input-stream contract for `📥` is unchanged.
+The REPL remains a buffered single-source session. Module syntax requires file-based compilation because linking requires a concrete source/package graph. The REPL's existing shared input-stream contract for `📥` is unchanged.
 
-## Dependency frontier
+## Boundaries
 
-Project-local paths and built-in `std:` modules are distinct from package dependencies.
+v0.11 supports project-local imports, declared local/path package imports, and built-in standard modules as three explicit source namespaces.
 
-Train 10 will add manifest-authorized local packages with explicit `pkg:` coordinates. Normal relative imports will remain confined to their own package root, so package support will not weaken the existing local path boundary.
-
-Remote registry coordinates, network resolution, implicit re-exports, wildcard namespaces, and host-language module wrappers remain outside the current model.
+It does not implement a remote registry, network resolution, implicit re-exports, wildcard namespaces, host-language module wrappers, or arbitrary filesystem imports outside package ownership boundaries.
