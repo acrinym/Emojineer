@@ -95,6 +95,27 @@ public:
         const auto root = std::filesystem::canonical(raw_root);
         std::vector<std::string> stack;
         visit(root, root_manifest, stack);
+
+        // Hashing is deliberately a second phase. DFS discovery order cannot define source
+        // ownership: a package may be physically nested under another resolved package even
+        // when the container does not declare it as a dependency. Every hash therefore sees
+        // the complete discovered package-root set.
+        for (auto& package : packages_) {
+            std::vector<std::filesystem::path> nested_package_roots;
+            for (const auto& candidate : packages_) {
+                if (candidate.root != package.root && within(package.root, candidate.root)) {
+                    nested_package_roots.push_back(candidate.root);
+                }
+            }
+            const auto manifest = manifests_.find(package.root.generic_string());
+            if (manifest == manifests_.end()) {
+                throw std::runtime_error("internal error: missing resolved package manifest");
+            }
+            package.content_sha256 = package_hash(package.root,
+                                                  manifest->second,
+                                                  nested_package_roots);
+        }
+
         std::sort(packages_.begin(), packages_.end(),
                   [](const ResolvedPackage& left, const ResolvedPackage& right) {
                       return left.name < right.name;
@@ -156,6 +177,7 @@ private:
                                      "' resolves to multiple local roots");
         }
         name_roots_[manifest.name] = root_key;
+        manifests_[root_key] = manifest;
         states_[root_key] = VisitState::Visiting;
         stack.push_back(manifest.name);
 
@@ -175,29 +197,19 @@ private:
         }
         std::sort(dependency_names.begin(), dependency_names.end());
 
-        // All descendants have been visited at this point. Exclude every resolved package
-        // root nested beneath this package, not merely its direct dependency directories.
-        // This keeps content hashes ownership-correct even when a transitive path dependency
-        // is a sibling of its parent but still physically inside an ancestor package root.
-        std::vector<std::filesystem::path> descendant_roots;
-        for (const auto& resolved : packages_) {
-            if (resolved.root != root && within(root, resolved.root)) {
-                descendant_roots.push_back(resolved.root);
-            }
-        }
-
         packages_.push_back({manifest.name,
                              manifest.version,
                              root,
                              manifest.entry,
                              dependency_names,
-                             package_hash(root, manifest, descendant_roots)});
+                             {}});
         stack.pop_back();
         states_[root_key] = VisitState::Done;
     }
 
     std::unordered_map<std::string, VisitState> states_;
     std::unordered_map<std::string, std::string> name_roots_;
+    std::unordered_map<std::string, ProjectManifest> manifests_;
     std::vector<ResolvedPackage> packages_;
 };
 
