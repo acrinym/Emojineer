@@ -6,10 +6,10 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 - [Language reference](LANGUAGE.md) — source model, tokens, grammar, values, functions, collections, control flow, modules, and standard-module imports.
 - [Standard library](STDLIB.md) — built-in `std:math`, `std:arrays`, and `std:text` APIs and architecture.
-- [CLI and toolchain](CLI.md) — build, run, check, format, lint, explain, REPL, compile, execute, dump, disassemble, standard-library listing, and `emji` project commands.
+- [CLI and toolchain](CLI.md) — build, run, check, format, lint, explain, REPL, compile, execute, dump, disassemble, standard-library listing, and `emji` project/dependency commands.
 - [EMJBC bytecode](BYTECODE.md) — file format, compatibility versions, constants, function metadata, instructions, verifier limits, and VM execution model.
 - [Modules and imports](MODULES.md) — multi-file source units, visibility, deterministic identity, loading order, cycles, project roots, and standard-module integration.
-- [`emji` projects](PROJECTS.md) — manifest, lockfile, initialization, project validation, and the current local package foundation.
+- [`emji` projects](PROJECTS.md) — manifest, local/path dependency graph, deterministic lockfile, SHA-256 package identity, initialization, and project validation.
 
 ## Focused references
 
@@ -21,9 +21,9 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 - [Design provenance](PROVENANCE.md)
 - [Product roadmap](ROADMAP.md)
 
-## Current implemented language level
+## Current implemented product level
 
-The compiler executable reports Emojineer **0.9**. Product Trains 1 through 9 are implemented on this train:
+The compiler executable reports Emojineer **0.10**. Product Trains 1 through 10 are implemented on this train:
 
 1. sovereign language core;
 2. functions, recursion, and call frames;
@@ -33,15 +33,18 @@ The compiler executable reports Emojineer **0.9**. Product Trains 1 through 9 ar
 6. canonical source formatting and diagnostics;
 7. `emji` project workflow;
 8. modules and imports;
-9. native standard-library foundation.
+9. native standard-library foundation;
+10. real local/path dependency management with recursive locking and package content identity.
 
 The documentation describes implemented behavior unless a section is explicitly labeled as future work.
 
-## File and module forms
+## File, module, and package forms
 
 - `.emoji` — Emojineer UTF-8 source.
 - `.emjbc` — serialized Emojineer bytecode.
-- `emojineer.toml` — strict project manifest.
-- `emojineer.lock` — deterministic project lock metadata.
+- `emojineer.toml` — strict project/package manifest, including optional local `[dependencies]`.
+- `emojineer.lock` — deterministic project/package graph lock metadata.
 - CER `.json` files — optional custom emoji token packs that lower into existing Emojineer semantic token kinds.
 - `std:<name>` — deterministic built-in standard module specifier resolved by the module linker.
+
+Local dependency packages are resolvable and lockable in v0.10. Explicit package-qualified source-module imports are the next linker capability, so ordinary relative `🔗` imports still remain confined to one package root.
