@@ -1,3 +1,5 @@
+#include "emojineer/package.hpp"
+#include "emojineer/package_report.hpp"
 #include "emojineer/project.hpp"
 
 #include <filesystem>
@@ -10,12 +12,13 @@ namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.11\n"
+        << "emji 0.12\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"
         << "  emji lock [directory]\n"
         << "  emji show [directory]\n"
+        << "  emji tree [directory] [--hashes] [--json]\n"
         << "  emji add <package_name> <relative_path> [directory]\n"
         << "  emji remove <package_name> [directory]\n";
 }
@@ -23,6 +26,45 @@ void usage() {
 std::filesystem::path optional_root(int argc, char** argv) {
     if (argc >= 3) return std::filesystem::path(argv[2]);
     return std::filesystem::current_path();
+}
+
+struct TreeOptions {
+    std::filesystem::path root = std::filesystem::current_path();
+    bool include_hashes = false;
+    bool json = false;
+};
+
+TreeOptions parse_tree_options(int argc, char** argv) {
+    TreeOptions options;
+    bool have_root = false;
+    for (int i = 2; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--hashes") {
+            options.include_hashes = true;
+            continue;
+        }
+        if (arg == "--json") {
+            options.json = true;
+            continue;
+        }
+        if (arg.rfind("--", 0) == 0) {
+            throw std::runtime_error("unknown tree option '" + arg + "'");
+        }
+        if (have_root) {
+            throw std::runtime_error("tree accepts at most one project directory");
+        }
+        options.root = std::filesystem::path(arg);
+        have_root = true;
+    }
+    return options;
+}
+
+emojineer::PackageGraphReport package_report(const std::filesystem::path& root) {
+    try {
+        return emojineer::build_package_graph_report(emojineer::resolve_package_graph(root));
+    } catch (const std::exception& error) {
+        throw std::runtime_error(std::string("package graph: ") + error.what());
+    }
 }
 
 } // namespace
@@ -97,6 +139,17 @@ int main(int argc, char** argv) {
                     std::cout << "  " << dependency.name << " -> "
                               << dependency.path.generic_string() << '\n';
                 }
+            }
+            return 0;
+        }
+
+        if (command == "tree") {
+            const auto options = parse_tree_options(argc, argv);
+            const auto report = package_report(options.root);
+            if (options.json) {
+                std::cout << emojineer::render_package_graph_json(report);
+            } else {
+                std::cout << emojineer::render_package_tree(report, options.include_hashes);
             }
             return 0;
         }
