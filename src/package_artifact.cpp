@@ -31,6 +31,14 @@ std::string read_file(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
+std::string read_file_bounded(const std::filesystem::path& path, std::uint64_t max_size) {
+    const auto file_size = std::filesystem::file_size(path);
+    if (file_size > max_size) {
+        throw std::runtime_error("package artifact exceeds " + std::to_string(max_size / (1024 * 1024)) + " MiB format limit");
+    }
+    return read_file(path);
+}
+
 void write_file(const std::filesystem::path& path, std::string_view data) {
     if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
@@ -332,7 +340,8 @@ PackageArtifact parse_package_artifact(std::string_view bytes) {
 }
 
 PackageArtifact load_package_artifact(const std::filesystem::path& artifact_path) {
-    return parse_package_artifact(read_file(artifact_path));
+    // Check file size BEFORE reading to enforce the 128 MiB bound
+    return parse_package_artifact(read_file_bounded(artifact_path, max_artifact_bytes));
 }
 
 void write_package_artifact(const std::filesystem::path& package_root,

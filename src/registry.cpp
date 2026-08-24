@@ -1,7 +1,6 @@
 #include "emojineer/registry.hpp"
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
 #include <stdexcept>
 #include <string>
@@ -11,16 +10,13 @@
 namespace emojineer {
 namespace {
 
-std::uint64_t parse_number(std::string_view text, const char* label) {
+void validate_numeric_identifier(std::string_view text, const char* label) {
     if (text.empty()) throw std::runtime_error(std::string("semantic version ") + label + " is empty");
-    std::uint64_t value = 0;
-    const auto* begin = text.data();
-    const auto* end = text.data() + text.size();
-    const auto result = std::from_chars(begin, end, value);
-    if (result.ec != std::errc{} || result.ptr != end) {
-        throw std::runtime_error(std::string("semantic version ") + label + " must be decimal digits");
+    for (unsigned char c : text) {
+        if (!std::isdigit(c)) {
+            throw std::runtime_error(std::string("semantic version ") + label + " must be decimal digits");
+        }
     }
-    return value;
 }
 
 bool valid_identifier_list(std::string_view text) {
@@ -42,6 +38,28 @@ bool all_digits(std::string_view text) {
     return !text.empty() && std::all_of(text.begin(), text.end(), [](unsigned char c) {
         return std::isdigit(c) != 0;
     });
+}
+
+// Compare two numeric identifier strings as numbers without overflow.
+// According to SemVer: "When compared, numeric identifiers always have lower precedence
+// than non-numeric identifiers. Numeric identifiers always compare as integers with
+// infinite precision."
+//
+// This implements numeric comparison: longer length means larger value (ignoring leading zeros).
+// If equal length, use lexicographic comparison.
+// Examples:
+//   "2" < "10" because 2 < 10 numerically (1 digit < 2 digits)
+//   "10" < "100" because 10 < 100 numerically (2 digits < 3 digits)
+//   "2" == "2" (same value)
+//   "2" > "02" (if "02" were allowed - it's not in valid SemVer)
+int compare_numeric_identifiers(std::string_view left, std::string_view right) {
+    if (left.size() != right.size()) {
+        // Longer string = larger number (assuming no leading zeros, which is validated elsewhere)
+        return left.size() < right.size() ? -1 : 1;
+    }
+    if (left == right) return 0;
+    // Same length: lexicographic compare gives numeric compare
+    return left < right ? -1 : 1;
 }
 
 std::vector<std::string_view> split_identifiers(std::string_view text) {
@@ -71,10 +89,9 @@ int compare_prerelease(std::string_view left, std::string_view right) {
         const bool ln = all_digits(lparts[i]);
         const bool rn = all_digits(rparts[i]);
         if (ln && rn) {
-            const auto lv = parse_number(lparts[i], "prerelease identifier");
-            const auto rv = parse_number(rparts[i], "prerelease identifier");
-            if (lv < rv) return -1;
-            if (lv > rv) return 1;
+            // Use overflow-free string-based numeric comparison
+            const int cmp = compare_numeric_identifiers(lparts[i], rparts[i]);
+            if (cmp != 0) return cmp;
             continue;
         }
         if (ln != rn) return ln ? -1 : 1;
@@ -91,12 +108,25 @@ bool same_core(const SemanticVersion& left, const SemanticVersion& right) {
 }
 
 bool below_caret_upper(const SemanticVersion& base, const SemanticVersion& candidate) {
-    if (base.major > 0) return candidate.major == base.major;
-    if (base.minor > 0) return candidate.major == 0 && candidate.minor == base.minor;
-    return candidate.major == 0 && candidate.minor == 0 && candidate.patch == base.patch;
+    // For caret ranges: ^1.2.3 allows 1.x.x but not 2.0.0
+    // Special handling for base major = 0 (^0.x.y has different semantics)
+    const int major_cmp = compare_numeric_identifiers(base.major, "0");
+    if (major_cmp > 0) {
+        // base.major > 0: allow anything with same major
+        return candidate.major == base.major;
+    }
+    // base.major == 0
+    const int minor_cmp = compare_numeric_identifiers(base.minor, "0");
+    if (minor_cmp > 0) {
+        // base.major == 0, base.minor > 0: allow 0.x.y where x matches
+        return candidate.major == "0" && candidate.minor == base.minor;
+    }
+    // base.major == 0, base.minor == 0: allow 0.0.x where patch matches
+    return candidate.major == "0" && candidate.minor == "0" && candidate.patch == base.patch;
 }
 
 bool below_tilde_upper(const SemanticVersion& base, const SemanticVersion& candidate) {
+    // For tilde ranges: ~1.2.3 allows 1.2.x but not 1.3.0
     return candidate.major == base.major && candidate.minor == base.minor;
 }
 
@@ -145,16 +175,22 @@ SemanticVersion parse_semantic_version(std::string_view text) {
             throw std::runtime_error("semantic version numeric components may not have leading zeroes");
         }
     }
-    version.major = parse_number(major_text, "major");
-    version.minor = parse_number(minor_text, "minor");
-    version.patch = parse_number(patch_text, "patch");
+    validate_numeric_identifier(major_text, "major");
+    validate_numeric_identifier(minor_text, "minor");
+    validate_numeric_identifier(patch_text, "patch");
+    version.major = std::string(major_text);
+    version.minor = std::string(minor_text);
+    version.patch = std::string(patch_text);
     return version;
 }
 
 int compare_semantic_versions(const SemanticVersion& left, const SemanticVersion& right) {
-    if (left.major != right.major) return left.major < right.major ? -1 : 1;
-    if (left.minor != right.minor) return left.minor < right.minor ? -1 : 1;
-    if (left.patch != right.patch) return left.patch < right.patch ? -1 : 1;
+    const int major_cmp = compare_numeric_identifiers(left.major, right.major);
+    if (major_cmp != 0) return major_cmp;
+    const int minor_cmp = compare_numeric_identifiers(left.minor, right.minor);
+    if (minor_cmp != 0) return minor_cmp;
+    const int patch_cmp = compare_numeric_identifiers(left.patch, right.patch);
+    if (patch_cmp != 0) return patch_cmp;
     return compare_prerelease(left.prerelease, right.prerelease);
 }
 

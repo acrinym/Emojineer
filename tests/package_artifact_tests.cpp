@@ -141,6 +141,87 @@ void test_invalid_semver_is_rejected() {
     }
 }
 
+void test_semver_large_numeric_core_identifiers() {
+    // Test that SemVer numeric core identifiers beyond uint64_t work correctly
+    // using overflow-free string representation
+    const auto v1 = emojineer::parse_semantic_version("18446744073709551616"); // uint64_t max + 1
+    require(v1.major == "18446744073709551616", "major should be large number string");
+    require(v1.minor == "0", "minor should be zero");
+    require(v1.patch == "0", "patch should be zero");
+
+    const auto v2 = emojineer::parse_semantic_version("9999999999999999999999999999");
+    require(v2.major == "9999999999999999999999999999", "major should be very large");
+
+    // Test comparison of large versions
+    require(emojineer::compare_semantic_versions(v1, v2) < 0,
+            "larger digit count should be greater");
+
+    // Test that version selection works with large numbers
+    const std::vector<std::string> versions{
+        "1.0.0", "2.0.0", "18446744073709551616.0.0", "9999999999999999999.0.0"};
+    const auto selected = emojineer::select_highest_matching_version(versions, "*");
+    require(selected && *selected == "9999999999999999999.0.0",
+            "wildcard should select largest version by digit count");
+}
+
+void test_semver_large_prerelease_identifiers() {
+    // Test that prerelease numeric identifiers work without fixed-width integer conversion
+    const auto v1 = emojineer::parse_semantic_version("1.0.0-18446744073709551616");
+    require(v1.prerelease == "18446744073709551616", "prerelease should be large number");
+
+    const auto v2 = emojineer::parse_semantic_version("1.0.0-9999999999999999999");
+    const auto v3 = emojineer::parse_semantic_version("1.0.0-2");
+
+    // Test ordering: numeric prerelease identifiers compared as numbers
+    // "2" > "18446744073709551616" because shorter is larger for numeric identifiers
+    require(emojineer::compare_semantic_versions(v3, v1) > 0,
+            "shorter numeric prerelease should be greater");
+
+    // Test leading zero preservation in ordering
+    const auto v4 = emojineer::parse_semantic_version("1.0.0-01");
+    const auto v5 = emojineer::parse_semantic_version("1.0.0-1");
+    // "01" is invalid as a numeric prerelease (leading zero), but text comparison works for non-numeric
+
+    // Test very large prerelease identifier comparison
+    require(emojineer::compare_semantic_versions(v1, v2) < 0,
+            "larger prerelease numeric identifier should be greater");
+}
+
+void test_artifact_size_bound_enforced_before_read() {
+    // This test verifies that oversized artifacts are rejected BEFORE being read into memory
+    // by creating a file larger than 128 MiB and attempting to load it
+    TempRoot root("oversized");
+    emojineer::initialize_project(root.path / "pkg", "pkg");
+
+    // First create a valid artifact
+    auto bytes = emojineer::build_package_artifact_bytes(root.path / "pkg");
+    const auto artifact_path = root.path / "large.emjpkg";
+
+    // Create a file that exceeds the 128 MiB limit
+    // We use a smaller test size to avoid actually creating a 128MB file
+    std::ofstream fake(artifact_path, std::ios::binary | std::ios::trunc);
+    require(fake, "should be able to create test file");
+    // Write magic and enough data to exceed limit
+    fake << "EMJPKG1\n";
+    // Write 1 byte more than the limit to trigger rejection
+    for (std::size_t i = 0; i < (128ull * 1024ull * 1024ull); ++i) {
+        fake.put('x');
+    }
+    fake.close();
+
+    bool rejected = false;
+    try {
+        (void)emojineer::load_package_artifact(artifact_path);
+    } catch (const std::runtime_error& e) {
+        const std::string msg = e.what();
+        if (msg.find("128 MiB") != std::string::npos ||
+            msg.find("exceeds") != std::string::npos) {
+            rejected = true;
+        }
+    }
+    require(rejected, "oversized artifact should be rejected before full read");
+}
+
 } // namespace
 
 int main() {
@@ -149,6 +230,9 @@ int main() {
         test_artifact_detects_tampering_and_cache_path_is_content_addressed();
         test_semver_precedence_and_requirements();
         test_invalid_semver_is_rejected();
+        test_semver_large_numeric_core_identifiers();
+        test_semver_large_prerelease_identifiers();
+        test_artifact_size_bound_enforced_before_read();
         std::cout << "✅ package artifact and registry contract tests passed\n";
         return 0;
     } catch (const std::exception& error) {

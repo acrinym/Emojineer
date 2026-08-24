@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -9,9 +8,9 @@
 namespace emojineer {
 
 struct SemanticVersion {
-    std::uint64_t major = 0;
-    std::uint64_t minor = 0;
-    std::uint64_t patch = 0;
+    std::string major;
+    std::string minor;
+    std::string patch;
     std::string prerelease;
     std::string build;
     std::string text;
