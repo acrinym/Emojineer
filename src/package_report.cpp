@@ -1,11 +1,10 @@
 #include "emojineer/package_report.hpp"
 
 #include <algorithm>
-#include <iomanip>
-#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 namespace emojineer {
 namespace {
@@ -67,7 +66,7 @@ void append_tree_node(std::ostringstream& out,
     if (include_hashes) out << " sha256=" << row.content_sha256;
 
     const bool already_expanded = !expanded.insert(row.name).second;
-    if (already_expanded && !row.dependencies.empty()) {
+    if (already_expanded) {
         out << " (shared)\n";
         return;
     }
