@@ -74,6 +74,42 @@ void test_recursive_graph_and_content_ownership() {
     std::filesystem::remove_all(root);
 }
 
+void test_independent_nested_package_is_excluded_from_container_hash() {
+    const auto root = temp_root("nested-independent");
+    const auto b = root / "deps/b";
+    const auto c = b / "vendor/c";
+    std::filesystem::remove_all(root);
+
+    emojineer::initialize_project(root, "app");
+    emojineer::initialize_project(b, "b");
+    emojineer::initialize_project(c, "c");
+
+    auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    manifest.dependencies = {{"b", std::filesystem::path("deps/b")},
+                             {"c", std::filesystem::path("deps/b/vendor/c")}};
+
+    const auto first = emojineer::resolve_package_graph(root, manifest);
+    require(first.find("b") != nullptr && first.find("c") != nullptr,
+            "root should resolve both independently declared packages");
+    require(first.find("b")->dependencies.empty(),
+            "container package b must not implicitly own or depend on nested c");
+
+    const std::string app_hash = first.find("app")->content_sha256;
+    const std::string b_hash = first.find("b")->content_sha256;
+    const std::string c_hash = first.find("c")->content_sha256;
+
+    write_source(c / "src/main.emoji", "📝 📜independent nested package changed📜\n");
+    const auto second = emojineer::resolve_package_graph(root, manifest);
+    require(second.find("c")->content_sha256 != c_hash,
+            "nested c source change should change c content hash");
+    require(second.find("b")->content_sha256 == b_hash,
+            "physically nested c source must not pollute container b hash when b does not depend on c");
+    require(second.find("app")->content_sha256 == app_hash,
+            "nested dependency source must remain excluded from root app hash");
+
+    std::filesystem::remove_all(root);
+}
+
 void test_dependency_cycle_rejected_before_manifest_write() {
     const auto root = temp_root("cycle");
     const auto b = root / "deps/b";
@@ -123,6 +159,7 @@ int main() {
     try {
         test_sha256_vectors();
         test_recursive_graph_and_content_ownership();
+        test_independent_nested_package_is_excluded_from_container_hash();
         test_dependency_cycle_rejected_before_manifest_write();
         test_dependency_name_must_match_target_package();
         std::cout << "✅ package dependency tests passed\n";
