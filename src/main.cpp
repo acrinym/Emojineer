@@ -42,7 +42,7 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.10\n"
+        << "Emojineer 0.11\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...]\n"
         << "  emojineer stdlib\n"
