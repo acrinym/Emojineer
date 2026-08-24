@@ -10,10 +10,11 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
-#include <limits>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace emojineer {
@@ -96,20 +97,79 @@ void validate_name(std::string_view name) {
 
 void validate_portable_source_path(std::string_view text, const char* label) {
     if (text.empty()) throw std::runtime_error(std::string("package artifact ") + label + " cannot be empty");
-    if (text.find('\\') != std::string_view::npos) {
-        throw std::runtime_error(std::string("package artifact ") + label + " must use forward slashes");
+    if (text.front() == '/' || text.find('\\') != std::string_view::npos ||
+        text.find(':') != std::string_view::npos) {
+        throw std::runtime_error(std::string("package artifact ") + label + " is not a portable relative path");
     }
     const std::filesystem::path path{std::string(text)};
-    if (path.is_absolute()) {
-        throw std::runtime_error(std::string("package artifact ") + label + " must be relative");
+    if (path.is_absolute() || path.generic_string() != text) {
+        throw std::runtime_error(std::string("package artifact ") + label + " is not canonical");
     }
     for (const auto& component : path) {
-        if (component == "..") {
-            throw std::runtime_error(std::string("package artifact ") + label + " may not escape its root");
+        if (component == ".." || component == ".") {
+            throw std::runtime_error(std::string("package artifact ") + label + " may not contain traversal components");
         }
     }
     if (path.extension() != ".emoji") {
         throw std::runtime_error(std::string("package artifact ") + label + " must be a .emoji path");
+    }
+}
+
+void validate_dependency_path(std::string_view text, const std::string& name) {
+    if (text.empty() || text.front() == '/' || text.find('\\') != std::string_view::npos ||
+        text.find(':') != std::string_view::npos || text.find('"') != std::string_view::npos) {
+        throw std::runtime_error("package artifact dependency '" + name + "' has a non-portable path");
+    }
+    const std::filesystem::path path{std::string(text)};
+    if (path.is_absolute() || path.generic_string() != text) {
+        throw std::runtime_error("package artifact dependency '" + name + "' path is not canonical");
+    }
+}
+
+std::string metadata_prefix(const std::string& name,
+                            const std::string& version,
+                            const std::string& entry) {
+    return "[package]\nname = \"" + name + "\"\nversion = \"" + version +
+           "\"\nentry = \"" + entry + "\"\n";
+}
+
+void validate_canonical_manifest(const PackageArtifact& artifact) {
+    const auto prefix = metadata_prefix(artifact.name, artifact.version, artifact.entry);
+    if (!artifact.manifest.starts_with(prefix)) {
+        throw std::runtime_error("package artifact metadata does not match its canonical manifest");
+    }
+    std::string_view rest{artifact.manifest};
+    rest.remove_prefix(prefix.size());
+    if (rest.empty()) return;
+    constexpr std::string_view dependency_header = "\n[dependencies]\n";
+    if (!rest.starts_with(dependency_header)) {
+        throw std::runtime_error("package artifact manifest is not canonical");
+    }
+    rest.remove_prefix(dependency_header.size());
+    if (rest.empty()) throw std::runtime_error("package artifact manifest has an empty dependencies section");
+
+    std::string previous_name;
+    std::set<std::string> names;
+    while (!rest.empty()) {
+        const auto newline = rest.find('\n');
+        if (newline == std::string_view::npos) {
+            throw std::runtime_error("package artifact manifest must end with a newline");
+        }
+        const auto line = rest.substr(0, newline);
+        rest.remove_prefix(newline + 1);
+        const auto separator = line.find(" = \"");
+        if (separator == std::string_view::npos || line.size() < separator + 5 || line.back() != '"') {
+            throw std::runtime_error("package artifact dependency manifest line is not canonical");
+        }
+        const std::string name(line.substr(0, separator));
+        const std::string path(line.substr(separator + 4, line.size() - separator - 5));
+        validate_name(name);
+        validate_dependency_path(path, name);
+        if (name == artifact.name) throw std::runtime_error("package artifact may not depend on itself");
+        if (!names.insert(name).second || (!previous_name.empty() && name <= previous_name)) {
+            throw std::runtime_error("package artifact dependency manifest is not canonically ordered");
+        }
+        previous_name = name;
     }
 }
 
@@ -149,13 +209,6 @@ std::vector<PackageArtifactFile> collect_owned_sources(const std::filesystem::pa
     return files;
 }
 
-std::string metadata_prefix(const std::string& name,
-                            const std::string& version,
-                            const std::string& entry) {
-    return "[package]\nname = \"" + name + "\"\nversion = \"" + version +
-           "\"\nentry = \"" + entry + "\"\n";
-}
-
 class Reader {
 public:
     explicit Reader(std::string_view bytes) : bytes_(bytes) {}
@@ -180,7 +233,6 @@ public:
     }
 
     std::size_t remaining() const { return bytes_.size() - offset_; }
-    std::size_t offset() const { return offset_; }
 
 private:
     std::string_view bytes_;
@@ -198,6 +250,10 @@ std::string build_package_artifact_bytes(const std::filesystem::path& raw_root) 
     if (!resolved) throw std::runtime_error("package graph is missing artifact root package");
 
     auto files = collect_owned_sources(root, graph);
+    const auto entry = manifest.entry.generic_string();
+    if (std::none_of(files.begin(), files.end(), [&](const auto& file) { return file.path == entry; })) {
+        throw std::runtime_error("package artifact entry source is not package-owned or does not exist: " + entry);
+    }
     const auto canonical_manifest = canonical_manifest_text(manifest);
     const auto computed_content = content_identity(canonical_manifest, files);
     if (computed_content != resolved->content_sha256) {
@@ -207,7 +263,7 @@ std::string build_package_artifact_bytes(const std::filesystem::path& raw_root) 
     std::string bytes(artifact_magic);
     append_field(bytes, manifest.name);
     append_field(bytes, manifest.version);
-    append_field(bytes, manifest.entry.generic_string());
+    append_field(bytes, entry);
     append_field(bytes, computed_content);
     append_field(bytes, canonical_manifest);
     append_u64(bytes, static_cast<std::uint64_t>(files.size()));
@@ -244,12 +300,11 @@ PackageArtifact parse_package_artifact(std::string_view bytes) {
     if (!valid_hex_sha256(artifact.content_sha256)) {
         throw std::runtime_error("package artifact content SHA-256 is malformed");
     }
-    if (!artifact.manifest.starts_with(metadata_prefix(artifact.name, artifact.version, artifact.entry))) {
-        throw std::runtime_error("package artifact metadata does not match its canonical manifest");
-    }
+    validate_canonical_manifest(artifact);
 
     artifact.files.reserve(static_cast<std::size_t>(file_count));
     std::string previous_path;
+    bool have_entry = false;
     for (std::uint64_t i = 0; i < file_count; ++i) {
         PackageArtifactFile file;
         file.path = reader.field("source path", 64 * 1024);
@@ -263,8 +318,10 @@ PackageArtifact parse_package_artifact(std::string_view bytes) {
         if (!valid_hex_sha256(file.sha256) || sha256_hex(file.source) != file.sha256) {
             throw std::runtime_error("package artifact source checksum mismatch for '" + file.path + "'");
         }
+        if (file.path == artifact.entry) have_entry = true;
         artifact.files.push_back(std::move(file));
     }
+    if (!have_entry) throw std::runtime_error("package artifact does not contain its declared entry source");
     if (reader.remaining() != 0) throw std::runtime_error("package artifact contains trailing bytes");
 
     if (content_identity(artifact.manifest, artifact.files) != artifact.content_sha256) {
@@ -280,6 +337,9 @@ PackageArtifact load_package_artifact(const std::filesystem::path& artifact_path
 
 void write_package_artifact(const std::filesystem::path& package_root,
                             const std::filesystem::path& artifact_path) {
+    if (artifact_path.extension() != ".emjpkg") {
+        throw std::runtime_error("package artifact output must use the .emjpkg extension");
+    }
     const auto bytes = build_package_artifact_bytes(package_root);
     (void)parse_package_artifact(bytes);
     write_file(artifact_path, bytes);
