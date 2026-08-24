@@ -1,6 +1,6 @@
 # `emji` Projects and Local Dependencies
 
-`emji` is Emojineer's project/package workflow. In v0.11 it manages deterministic local/path dependency graphs and connects them to the source linker without pretending a remote registry exists.
+`emji` is Emojineer's project/package workflow. In v0.12 it manages deterministic local/path dependency graphs, connects them to the source linker, and exposes the resolved graph for humans and tooling without pretending a remote registry exists.
 
 ## Project layout
 
@@ -82,9 +82,36 @@ Resolution enforces:
 
 Package content identity uses SHA-256 over a framed representation of the package's canonical manifest plus its owned `.emoji` source files. Dependency-owned source trees are excluded, including transitive dependency roots nested elsewhere beneath an ancestor package directory. This keeps one package's content hash from silently absorbing another package's source.
 
+## Inspect the resolved graph
+
+Train 12 exposes the already-resolved package graph instead of inventing a second metadata model:
+
+```text
+emji tree
+emji tree path/to/project
+emji tree path/to/project --hashes
+emji tree path/to/project --json
+```
+
+Human output reports every reached package with:
+
+- package name and version;
+- relation to the root: `root`, `direct`, or `transitive`;
+- checkout-relative package path;
+- declared entry source;
+- optional full SHA-256 content identity with `--hashes`.
+
+The tree follows real dependency edges. If a package is reached through more than one parent in a shared DAG, its later occurrence is marked `(shared)` and not recursively expanded again. This keeps the view finite without hiding the second edge.
+
+`--json` emits schema `emojineer.package-graph.v1`. Package records are sorted by package name and include relation, path, entry, full `content_sha256`, and sorted direct dependency names. Equivalent graphs in different checkout roots produce identical JSON because absolute checkout paths and timestamps are excluded.
+
+A sibling dependency such as `../mathkit` remains `../mathkit` in graph output. If a resolved package cannot be represented relative to the root package, graph rendering fails instead of leaking an absolute host path.
+
+`tree` resolution failures are prefixed with `package graph:` at the CLI boundary so topology/resolution errors stay distinguishable from command-line parsing errors.
+
 ## Importing package source
 
-A declared dependency can now be used by the source linker with an explicit package coordinate:
+A declared dependency can be used by the source linker with an explicit package coordinate:
 
 ```emoji
 🧩 🚀
@@ -141,7 +168,7 @@ emji lock
 emji lock path/to/project
 ```
 
-v0.11 continues to write lock format 2:
+v0.12 continues to write lock format 2:
 
 ```text
 lock_version = 2
@@ -172,17 +199,18 @@ emji show
 emji show path/to/project
 ```
 
-This displays the root package name, version, entry path, manifest hash, and declared direct dependencies.
+This displays the root package name, version, entry path, manifest hash, and declared direct dependencies. Use `emji tree` when you need the resolved recursive graph or package content identities.
 
 ## Relationship to modules
 
 The project/package layer and source-module layer remain distinct but are now connected explicitly:
 
 - `emojineer.toml` defines package metadata and local dependency edges;
+- `emji tree` inspects the resolved package graph derived from those edges;
 - `🧩` identifies an Emojineer source module;
 - `🔗 📜relative/path.emoji📜` imports a source module inside the current package root;
 - `🔗 📜pkg:mathkit/src/main.emoji📜` imports a source module from a declared direct dependency;
 - `🔗 📜std:math📜` imports a built-in standard module;
 - `📤` declares public module symbols.
 
-The package graph authorizes which dependency roots exist. The source linker decides which specific modules are imported. Neither layer silently grants ambient access to every transitive package or every file beneath the checkout root.
+The package graph authorizes which dependency roots exist. The source linker decides which specific modules are imported. The report layer only describes that resolved graph. None of these layers silently grants ambient access to every transitive package or every file beneath the checkout root.
