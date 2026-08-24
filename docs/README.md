@@ -6,10 +6,11 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 - [Language reference](LANGUAGE.md) - source model, tokens, grammar, values, functions, collections, control flow, and all module import forms.
 - [Standard library](STDLIB.md) - built-in `std:math`, `std:arrays`, and `std:text` APIs and architecture.
-- [CLI and toolchain](CLI.md) - build, run, check, format, lint, explain, REPL, compile, execute, dump, disassemble, standard-library listing, and `emji` project/dependency/graph commands.
+- [CLI and toolchain](CLI.md) - build, run, check, format, lint, explain, REPL, compile, execute, package graph, and package artifact commands.
 - [EMJBC bytecode](BYTECODE.md) - file format, compatibility versions, constants, function metadata, instructions, verifier limits, and VM execution model.
 - [Modules and imports](MODULES.md) - project-local, `pkg:`, and `std:` imports, visibility, deterministic identity, package ownership, loading order, and cycles.
 - [`emji` projects](PROJECTS.md) - manifest, local/path dependency graph, deterministic lockfile, SHA-256 package identity, package-qualified imports, graph inspection, initialization, and project validation.
+- [Package artifacts and registry foundation](REGISTRY.md) - immutable `.emjpkg` format, content/artifact SHA-256 identities, content-addressed cache contract, SemVer requirements, and the future network boundary.
 
 ## Focused references
 
@@ -23,7 +24,7 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 ## Current implemented product level
 
-The compiler executable reports Emojineer **0.12**. Product Trains 1 through 12 are implemented on this train:
+The compiler executable reports Emojineer **0.13**. Product Trains 1 through 13 are implemented on this train:
 
 1. sovereign language core;
 2. functions, recursion, and call frames;
@@ -36,7 +37,8 @@ The compiler executable reports Emojineer **0.12**. Product Trains 1 through 12 
 9. native standard-library foundation;
 10. real local/path dependency management with recursive locking and package content identity;
 11. explicit cross-package module imports through the resolved package graph;
-12. deterministic package graph inspection for humans and tooling, including relation labels, package content identities, shared-DAG presentation, and checkout-portable JSON.
+12. deterministic package graph inspection for humans and tooling;
+13. deterministic immutable `.emjpkg` package artifacts, strict verification, content-addressed cache identity, and SemVer requirement/selection primitives for the future registry transport.
 
 The documentation describes implemented behavior unless a section is explicitly labeled as future work.
 
@@ -44,6 +46,7 @@ The documentation describes implemented behavior unless a section is explicitly 
 
 - `.emoji` - Emojineer UTF-8 source.
 - `.emjbc` - serialized Emojineer bytecode.
+- `.emjpkg` - deterministic immutable package source artifact.
 - `emojineer.toml` - strict project/package manifest, including optional local `[dependencies]`.
 - `emojineer.lock` - deterministic project/package graph lock metadata.
 - CER `.json` files - optional custom emoji token packs that lower into existing Emojineer semantic token kinds.
@@ -52,4 +55,4 @@ The documentation describes implemented behavior unless a section is explicitly 
 - `std:<name>` - deterministic built-in standard module specifier resolved by the module linker.
 - `emojineer.package-graph.v1` - deterministic JSON graph-inspection schema emitted by `emji tree --json`.
 
-Local dependency packages are resolvable, lockable, explicitly importable, and inspectable in v0.12. Package-qualified imports do not make transitive dependencies ambient, ordinary relative `🔗` imports cannot cross package ownership boundaries, and graph-report paths never encode absolute checkout locations.
+Local dependency packages are resolvable, lockable, explicitly importable, inspectable, packable, and verifiable in v0.13. Network registry retrieval/publication is still intentionally absent until transport and remote dependency locking are implemented against the artifact contract.
