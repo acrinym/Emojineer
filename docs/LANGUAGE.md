@@ -1,19 +1,19 @@
-# Emojineer Language Reference — v0.9
+# Emojineer Language Reference - v0.11
 
-Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The compiler owns its lexer, AST, linker, bytecode, VM, standard library, package workflow, and semantic evolution.
+Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The toolchain owns its lexer, AST, package-aware module linker, bytecode, VM, standard library, package workflow, and semantic evolution.
 
 ```text
 UTF-8 .emoji
   -> grapheme-aware lexer
   -> parser
   -> Emojineer AST
-  -> module linker when needed
+  -> package-aware module linker when needed
   -> Emojineer compiler
   -> EMJBC bytecode
   -> Emojineer VM
 ```
 
-This page describes implemented behavior through Product Train 9.
+This page describes implemented behavior through Product Train 11.
 
 ## 1. Source files and Unicode
 
@@ -152,6 +152,8 @@ primary       := NUMBER
 ```
 
 Argument and array-element lists currently use token/expression boundaries rather than comma punctuation.
+
+The parser treats every `🔗` operand as a text specifier. Local, package, and standard import semantics are selected by the linker, not by separate parser syntax.
 
 ## 5. Values and types
 
@@ -294,10 +296,16 @@ A multi-file source unit begins with a module declaration:
 🧩 🚀
 ```
 
-Import another project-local source file:
+Import another source file in the current package:
 
 ```emoji
 🔗 📜lib/math.emoji📜
+```
+
+Import a source module from a declared direct dependency package:
+
+```emoji
+🔗 📜pkg:mathkit/src/main.emoji📜
 ```
 
 Import a built-in standard module:
@@ -316,37 +324,108 @@ Expose a module-owned function or declared global:
 Current module rules:
 
 - `🧩` must be the first statement in a multi-file source unit;
-- one module declaration per unit;
-- ordinary `🔗` imports are relative `.emoji` paths confined to the module root;
-- `std:<name>` imports resolve deterministic built-in standard modules;
+- one module declaration is allowed per source unit;
 - imports appear before executable/declaration statements;
 - imported modules expose only explicit `📤` symbols;
 - imports do not automatically re-export their imports;
-- dependency initialization is depth-first, dependency-first, and once per program;
-- cycles are rejected;
-- local imports cannot escape the module root, including through canonical path resolution;
-- local module symbols are rewritten to deterministic root-relative internal names;
-- standard module symbols use deterministic `std:<name>` virtual identities.
+- dependency initialization is depth-first, dependency-first, and once per linked module identity;
+- source-module cycles are rejected with a `cyclic module import` chain;
+- module names declared with `🧩` must be unique across the complete loaded graph;
+- all linked names are rewritten to deterministic internal identities before ordinary bytecode compilation.
 
-Modules and the standard-library foundation do not add VM opcodes and do not require a new EMJBC version.
+### 12.1 Project-local imports
 
-See [MODULES.md](MODULES.md) and [STDLIB.md](STDLIB.md).
+Ordinary relative `🔗` imports target `.emoji` files owned by the current package. Paths must be relative and use portable forward slashes. Canonical resolution cannot escape the package root or cross into another resolved package root nested beneath it.
+
+Root-package module identities remain package-relative, for example:
+
+```text
+lib/math.emoji
+```
+
+### 12.2 Package-qualified imports
+
+Package coordinates use:
+
+```text
+pkg:<dependency>/<module-path>.emoji
+```
+
+The importing package must declare `<dependency>` directly in its own `[dependencies]` manifest section. Transitive dependencies do not become ambient source imports.
+
+The package graph resolves the dependency name to a canonical package root. The module path is then resolved inside that package root. Canonical/symlink escapes are rejected.
+
+If another resolved package is physically nested beneath the named dependency root, a `pkg:` coordinate through the outer dependency cannot tunnel into that nested package. The nested package must be imported through its own coordinate and must itself be declared directly by the importer.
+
+Dependency module identities are deterministic and checkout-portable:
+
+```text
+pkg:mathkit/src/main.emoji
+```
+
+### 12.3 Standard imports
+
+`std:<name>` resolves source from the built-in standard-module catalog rather than the filesystem or package graph.
+
+Standard identities are the specifiers themselves:
+
+```text
+std:math
+std:arrays
+std:text
+```
+
+Standard modules may import only other `std:` modules and do not gain ambient project/package access.
+
+### 12.4 Package cycles versus source cycles
+
+Package dependency cycles are rejected by the package resolver as `cyclic package dependency` before package-aware linking begins.
+
+Source-module cycles are a distinct linker error, `cyclic module import`. Source identities inside dependency packages appear in those diagnostics with their `pkg:<package>/...` coordinates.
+
+Modules, package-qualified imports, and the standard-library foundation do not add VM opcodes and do not require a new EMJBC version.
+
+See [MODULES.md](MODULES.md), [PROJECTS.md](PROJECTS.md), and [STDLIB.md](STDLIB.md).
 
 ## 13. Native standard library
 
-Emojineer v0.9 includes three built-in standard modules:
+The built-in catalog contains three standard modules:
 
-- `std:math` — `🧭` absolute value, `🤏` min, `👐` max, `🎚️` clamp;
-- `std:arrays` — `🧲` membership, `🧮` numeric sum, `🔃` reverse;
-- `std:text` — `🈳` empty test, `🪢` concatenate, `🔂` repeat.
+- `std:math` - `🧭` absolute value, `🤏` min, `👐` max, `🎚️` clamp;
+- `std:arrays` - `🧲` membership, `🧮` numeric sum, `🔃` reverse;
+- `std:text` - `🈳` empty test, `🪢` concatenate, `🔂` repeat.
 
 These modules are authored as Emojineer source strings and pass through the same lexer, parser, linker, compiler, EMJBC writer, and VM as user code. They are not C++/Python/JavaScript callbacks disguised as library functions.
 
-The v0.9 stdlib intentionally has no ambient filesystem, network, process, clock, randomness, shell, or FFI authority.
+The stdlib intentionally has no ambient filesystem, network, process, clock, randomness, shell, or FFI authority.
 
 See [STDLIB.md](STDLIB.md).
 
-## 14. Comments and formatting
+## 14. Projects and local package dependencies
+
+`emojineer.toml` defines a strict root package with name, version, entry source, and optional local/path dependencies.
+
+```toml
+[package]
+name = "signal_lab"
+version = "0.1.0"
+entry = "src/main.emoji"
+
+[dependencies]
+mathkit = "../mathkit"
+```
+
+The package resolver recursively validates dependency manifests, dependency-key/target-name agreement, package-name/root uniqueness, and package cycles.
+
+`emojineer.lock` format 2 records deterministic transitive package metadata. Package content identity is SHA-256 over the canonical manifest plus package-owned `.emoji` source. Source owned by resolved nested packages is excluded from ancestor hashes, including independently declared nested-package layouts.
+
+`emji add` and `emji remove` modify direct local dependencies after validating the candidate package graph. `emji lock` writes deterministic lock metadata. `emji check` validates manifests, package graphs, package-aware source graphs, dependency entries, and lock drift.
+
+No remote registry, publication protocol, download cache, or remote version solver exists in v0.11.
+
+See [PROJECTS.md](PROJECTS.md).
+
+## 15. Comments and formatting
 
 A comment begins with `💭` and runs to the newline outside a string.
 
@@ -356,7 +435,7 @@ Canonical files use LF line endings and should end with a newline.
 
 See [SOURCE_TOOLING.md](SOURCE_TOOLING.md).
 
-## 15. Custom Emoji Registry
+## 16. Custom Emoji Registry
 
 CER packs can add custom emoji sequences that map to an existing semantic token kind. Longest-match lexing lets multi-grapheme sequences act as one token.
 
@@ -364,32 +443,34 @@ CER provides aliases, descriptions, deterministic semantic IDs, and canonical-co
 
 See [CER.md](CER.md).
 
-## 16. Errors and current runtime boundaries
+## 17. Errors and runtime boundaries
 
-Current compile/runtime diagnostics cover malformed source, undefined symbols, arity mismatch, invalid module graphs, unknown standard modules, bytecode corruption, division/modulo by zero, invalid collection operations, input failure, stack/call-frame errors, fuel exhaustion, and type assertions.
+Current compile/runtime diagnostics cover malformed source, undefined symbols, arity mismatch, invalid module graphs, invalid package graphs, package-boundary violations, unknown standard modules, bytecode corruption, division/modulo by zero, invalid collection operations, input failure, stack/call-frame errors, fuel exhaustion, and type assertions.
 
 The language does not currently expose implicit filesystem, network, process, shell, host FFI, or remote package-registry capabilities.
 
-## 17. Bytecode and VM
+## 18. Bytecode and VM
 
 The current compiler writes `EMJBC` version 3. The reader supports v1, v2, and v3. Bytecode is verified before execution and bounded against oversized constants, strings, function tables, and instruction streams.
 
-Standard modules are linked before bytecode generation, so Train 9 does not require an EMJBC v4.
+Modules, stdlib source, and package-qualified imports are linked before bytecode generation, so Product Trains 8, 9, and 11 do not require an EMJBC format bump.
 
 See [BYTECODE.md](BYTECODE.md) for the serialized format and VM contract.
 
-## 18. Toolchain
+## 19. Toolchain
 
-The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm plus `stdlib` for listing built-in standard modules. `emji` provides init/check/lock/show for local projects.
+The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm plus `stdlib` for listing built-in standard modules. File-based compile/check/run/dump commands are package aware when their discovered module root contains `emojineer.toml`.
+
+`emji` provides init/check/lock/show/add/remove for local packages and dependencies.
 
 See [CLI.md](CLI.md) and [PROJECTS.md](PROJECTS.md).
 
-## 19. Deliberate future work
+## 20. Deliberate future work
 
-Not yet implemented as of v0.9:
+Not yet implemented as of v0.11:
 
-- local dependency declarations and dependency graph lock data;
-- remote registry/publication/cache protocol;
+- real remote registry/publication/cache/version-resolution protocol;
+- richer package graph inspection such as `emji tree`;
 - records/user-defined structures and interfaces;
 - richer error values and pattern matching;
 - language server and editor integration;
@@ -397,6 +478,7 @@ Not yet implemented as of v0.9:
 - capability-gated filesystem/network/process standard-library APIs;
 - C/WASM/host interop boundary;
 - low-level EASM/ABI work;
+- semantic-compression/macros with inspectable expansion;
 - native/LLVM backend.
 
 These are product extensions to the sovereign compiler/runtime rather than replacements for it.
