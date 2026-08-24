@@ -1,6 +1,6 @@
 # `emji` Projects and Local Dependencies
 
-`emji` is Emojineer's project/package workflow. In v0.10 it manages deterministic local/path dependency graphs without pretending a remote registry exists.
+`emji` is Emojineer's project/package workflow. In v0.11 it manages deterministic local/path dependency graphs and connects them to the source linker without pretending a remote registry exists.
 
 ## Project layout
 
@@ -66,7 +66,7 @@ emji remove mathkit path/to/app
 
 `add` validates the candidate graph before writing the manifest, then rewrites the manifest canonically and refreshes the lockfile. `remove` does the same after deleting the named dependency. A failed add does not leave the candidate dependency declaration behind.
 
-This train supports local/path packages only. There is no fake network registry, no `publish`, and no remote version solver.
+This workflow supports local/path packages only. There is no fake network registry, no `publish`, and no remote version solver.
 
 ## Recursive package graph
 
@@ -82,6 +82,37 @@ Resolution enforces:
 
 Package content identity uses SHA-256 over a framed representation of the package's canonical manifest plus its owned `.emoji` source files. Dependency-owned source trees are excluded, including transitive dependency roots nested elsewhere beneath an ancestor package directory. This keeps one package's content hash from silently absorbing another package's source.
 
+## Importing package source
+
+A declared dependency can now be used by the source linker with an explicit package coordinate:
+
+```emoji
+🧩 🚀
+🔗 📜pkg:mathkit/src/main.emoji📜
+```
+
+The form is:
+
+```text
+pkg:<dependency>/<module-path>.emoji
+```
+
+The dependency must be declared directly by the package containing the importing source module. A transitive dependency is not automatically visible.
+
+For example, if `app` declares `b`, and `b` declares `c`, source in `app` may import `pkg:b/...` but cannot import `pkg:c/...` unless `app` also declares `c` itself.
+
+Normal relative source imports remain confined to their owning package root. They may not cross into a dependency-owned subtree, even when that dependency physically lives below the project directory. Likewise, `pkg:b/...` may not tunnel into a separately resolved package nested beneath `b`; that nested package must be imported through its own declared coordinate.
+
+Package-qualified module identities are deterministic, for example:
+
+```text
+pkg:mathkit/src/main.emoji
+```
+
+Absolute checkout paths are never encoded into linked bytecode identities.
+
+See [MODULES.md](MODULES.md) for the complete source-linking rules.
+
 ## Project validation
 
 ```text
@@ -92,12 +123,14 @@ emji check path/to/project
 Validation includes:
 
 1. strict manifest parsing;
-2. root entry-file existence and compilation;
+2. root entry-file existence and package-aware compilation;
 3. recursive local dependency resolution;
-4. dependency entry-file existence and source-graph compilation;
+4. dependency entry-file existence and package-aware source-graph compilation;
 5. deterministic lockfile freshness when a lockfile is present.
 
-Train 8's source-module linker still defines the module root for each package. Cross-package import coordinates are a separate language-linker surface and are intentionally not smuggled into Train 10's package metadata implementation.
+The file compiler and `emji check` share the same package-aware module linker behavior. `pkg:` coordinates are therefore not a separate project-only validation path.
+
+Package graph failures use package diagnostics such as `cyclic package dependency`; source-module cycles use `cyclic module import`. These are deliberately separate layers.
 
 ## Deterministic lockfile v2
 
@@ -108,7 +141,7 @@ emji lock
 emji lock path/to/project
 ```
 
-v0.10 writes lock format 2:
+v0.11 continues to write lock format 2:
 
 ```text
 lock_version = 2
@@ -143,14 +176,13 @@ This displays the root package name, version, entry path, manifest hash, and dec
 
 ## Relationship to modules
 
-The project/package layer and source-module layer are distinct:
+The project/package layer and source-module layer remain distinct but are now connected explicitly:
 
 - `emojineer.toml` defines package metadata and local dependency edges;
 - `🧩` identifies an Emojineer source module;
 - `🔗 📜relative/path.emoji📜` imports a source module inside the current package root;
+- `🔗 📜pkg:mathkit/src/main.emoji📜` imports a source module from a declared direct dependency;
 - `🔗 📜std:math📜` imports a built-in standard module;
 - `📤` declares public module symbols.
 
-Local dependency packages are now resolved and locked as real packages. Explicit source syntax for importing modules from those packages is the next linker train, rather than an implicit path escape that would weaken Train 8's project-root boundary.
-
-See [MODULES.md](MODULES.md).
+The package graph authorizes which dependency roots exist. The source linker decides which specific modules are imported. Neither layer silently grants ambient access to every transitive package or every file beneath the checkout root.
