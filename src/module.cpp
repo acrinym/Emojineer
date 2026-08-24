@@ -3,6 +3,7 @@
 #include "emojineer/ast.hpp"
 #include "emojineer/compiler.hpp"
 #include "emojineer/lexer.hpp"
+#include "emojineer/package.hpp"
 #include "emojineer/parser.hpp"
 #include "emojineer/stdlib.hpp"
 
@@ -29,6 +30,8 @@ struct ImportSpec {
 
 struct ModuleUnit {
     std::filesystem::path path;
+    std::filesystem::path package_root;
+    std::string package_name;
     std::string identity;
     std::string module_name;
     ast::Program program;
@@ -39,6 +42,12 @@ struct ModuleUnit {
     std::unordered_set<std::string> functions;
     std::unordered_map<std::string, std::string> imported_globals;
     std::unordered_map<std::string, std::string> imported_functions;
+};
+
+struct ResolvedSourceImport {
+    std::filesystem::path path;
+    std::string package_name;
+    std::string identity;
 };
 
 enum class VisitState { Visiting, Done };
@@ -107,6 +116,10 @@ bool within(const std::filesystem::path& root, const std::filesystem::path& path
         if (p == path.end() || *r != *p) return false;
     }
     return true;
+}
+
+std::size_t path_depth(const std::filesystem::path& path) {
+    return static_cast<std::size_t>(std::distance(path.begin(), path.end()));
 }
 
 std::string identity_for(const std::filesystem::path& root,
@@ -370,12 +383,17 @@ void rewrite_expr(ast::Expr& expr, ModuleUnit& unit,
 
 class ModuleLinker {
 public:
-    ModuleLinker(std::filesystem::path root, CustomEmojiRegistry registry)
-        : root_(std::move(root)), registry_(std::move(registry)) {}
+    ModuleLinker(std::filesystem::path root,
+                 CustomEmojiRegistry registry,
+                 std::optional<PackageGraph> package_graph)
+        : root_(std::move(root)),
+          registry_(std::move(registry)),
+          package_graph_(std::move(package_graph)) {}
 
     Chunk compile(const std::filesystem::path& entry) {
         std::vector<std::string> stack;
-        const std::string entry_id = visit(entry, stack);
+        const std::string package_name = package_graph_ ? package_graph_->root_name : std::string{};
+        const std::string entry_id = visit(entry, package_name, stack);
         (void)entry_id;
         build_import_bindings();
 
@@ -422,7 +440,62 @@ private:
         units_.emplace(identity, std::move(unit));
     }
 
-    std::filesystem::path resolve_import(const ModuleUnit& importer, const ImportSpec& spec) const {
+    const ResolvedPackage* package(const std::string& name) const {
+        if (!package_graph_) return nullptr;
+        return package_graph_->find(name);
+    }
+
+    const ResolvedPackage* owner_for_path(const std::filesystem::path& path) const {
+        if (!package_graph_) return nullptr;
+        const ResolvedPackage* owner = nullptr;
+        std::size_t owner_depth = 0;
+        for (const auto& candidate : package_graph_->packages) {
+            if (!within(candidate.root, path)) continue;
+            const auto depth = path_depth(candidate.root);
+            if (!owner || depth > owner_depth) {
+                owner = &candidate;
+                owner_depth = depth;
+            }
+        }
+        return owner;
+    }
+
+    const std::filesystem::path& package_root(const std::string& package_name) const {
+        if (!package_graph_) return root_;
+        const auto* resolved = package(package_name);
+        if (!resolved) {
+            throw std::runtime_error("internal error: module references unknown package '" +
+                                     package_name + "'");
+        }
+        return resolved->root;
+    }
+
+    std::string module_identity(const std::string& package_name,
+                                const std::filesystem::path& path) const {
+        const auto& package_path = package_root(package_name);
+        const auto relative = identity_for(package_path, path);
+        if (!package_graph_ || package_name == package_graph_->root_name) return relative;
+        return "pkg:" + package_name + "/" + relative;
+    }
+
+    void require_owned_path(const std::string& package_name,
+                            const std::filesystem::path& path,
+                            const std::string& context) const {
+        const auto& expected_root = package_root(package_name);
+        if (!within(expected_root, path)) {
+            throw std::runtime_error(context + " escapes the " +
+                                     (package_graph_ ? std::string("package root")
+                                                     : std::string("module root")));
+        }
+        if (!package_graph_) return;
+        const auto* owner = owner_for_path(path);
+        if (!owner || owner->name != package_name) {
+            throw std::runtime_error(context + " crosses a package boundary");
+        }
+    }
+
+    std::filesystem::path resolve_local_import(const ModuleUnit& importer,
+                                               const ImportSpec& spec) const {
         const std::filesystem::path requested(spec.requested);
         if (requested.empty() || requested.is_absolute()) {
             throw std::runtime_error("module '" + importer.identity + "' line " +
@@ -437,7 +510,7 @@ private:
         if (requested.extension() != ".emoji") {
             throw std::runtime_error("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
-                                     ": 🔗 import must target a .emoji source file or std:<module>");
+                                     ": 🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>");
         }
         const auto candidate = importer.path.parent_path() / requested;
         if (!std::filesystem::exists(candidate)) {
@@ -451,12 +524,84 @@ private:
                                      spec.requested + "' is not a regular file");
         }
         const auto canonical = std::filesystem::canonical(candidate);
-        if (!within(root_, canonical)) {
+        const std::string context = "module '" + importer.identity + "' line " +
+                                    std::to_string(spec.line) + ": 🔗 import";
+        require_owned_path(importer.package_name, canonical, context);
+        return canonical;
+    }
+
+    ResolvedSourceImport resolve_package_import(const ModuleUnit& importer,
+                                                const ImportSpec& spec) const {
+        if (!package_graph_) {
             throw std::runtime_error("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
-                                     ": 🔗 import escapes the module root");
+                                     ": pkg: imports require an enclosing emojineer.toml package graph");
         }
-        return canonical;
+        if (spec.requested.find('\\') != std::string::npos) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) +
+                                     ": pkg: import paths must use portable forward slashes");
+        }
+
+        const std::string coordinate = spec.requested.substr(4);
+        const auto slash = coordinate.find('/');
+        if (slash == std::string::npos || slash == 0 || slash + 1 >= coordinate.size()) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) +
+                                     ": pkg: import must use pkg:<dependency>/<module>.emoji");
+        }
+        const std::string dependency_name = coordinate.substr(0, slash);
+        const std::string module_path_text = coordinate.substr(slash + 1);
+        const std::filesystem::path module_path(module_path_text);
+        if (module_path.empty() || module_path.is_absolute() || module_path.extension() != ".emoji") {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) +
+                                     ": pkg: import must target a relative .emoji source file");
+        }
+
+        const auto* importer_package = package(importer.package_name);
+        if (!importer_package) {
+            throw std::runtime_error("internal error: importer package is not in the resolved graph");
+        }
+        if (std::find(importer_package->dependencies.begin(), importer_package->dependencies.end(),
+                      dependency_name) == importer_package->dependencies.end()) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) + ": package '" +
+                                     importer.package_name + "' does not declare direct dependency '" +
+                                     dependency_name + "'");
+        }
+
+        const auto* dependency = package(dependency_name);
+        if (!dependency) {
+            throw std::runtime_error("internal error: declared dependency '" + dependency_name +
+                                     "' is absent from the resolved package graph");
+        }
+        const auto candidate = dependency->root / module_path;
+        if (!std::filesystem::exists(candidate)) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) + ": package module '" +
+                                     spec.requested + "' does not exist");
+        }
+        if (!std::filesystem::is_regular_file(candidate)) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) + ": package module '" +
+                                     spec.requested + "' is not a regular file");
+        }
+        const auto canonical = std::filesystem::canonical(candidate);
+        if (!within(dependency->root, canonical)) {
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) + ": pkg: import escapes dependency '" +
+                                     dependency_name + "' root");
+        }
+        const auto* owner = owner_for_path(canonical);
+        if (!owner || owner->name != dependency_name) {
+            const std::string nested = owner ? owner->name : std::string("unknown");
+            throw std::runtime_error("module '" + importer.identity + "' line " +
+                                     std::to_string(spec.line) + ": pkg: import through '" +
+                                     dependency_name + "' targets nested package '" + nested +
+                                     "'; import that package through its own declared coordinate");
+        }
+        return {canonical, dependency_name, module_identity(dependency_name, canonical)};
     }
 
     std::string visit_standard(const std::string& specifier,
@@ -501,12 +646,12 @@ private:
         return identity;
     }
 
-    std::string visit(const std::filesystem::path& path, std::vector<std::string>& stack) {
+    std::string visit(const std::filesystem::path& path,
+                      const std::string& package_name,
+                      std::vector<std::string>& stack) {
         const auto canonical = std::filesystem::canonical(path);
-        if (!within(root_, canonical)) {
-            throw std::runtime_error("entry/import path escapes the module root");
-        }
-        const std::string identity = identity_for(root_, canonical);
+        require_owned_path(package_name, canonical, "entry/import path");
+        const std::string identity = module_identity(package_name, canonical);
         if (auto state = states_.find(identity); state != states_.end()) {
             if (state->second == VisitState::Done) return identity;
             cycle_error(identity, stack);
@@ -517,6 +662,8 @@ private:
 
         ModuleUnit unit;
         unit.path = canonical;
+        unit.package_root = package_root(package_name);
+        unit.package_name = package_name;
         unit.identity = identity;
         unit.program = parse_source(canonical, registry_, identity);
         analyze_unit(unit);
@@ -536,15 +683,22 @@ private:
                 continue;
             }
 
-            const auto dependency_path = resolve_import(units_.at(identity), spec);
-            const std::string dependency_id = identity_for(root_, dependency_path);
-            if (!direct.insert(dependency_id).second) {
+            ResolvedSourceImport resolved;
+            if (spec.requested.rfind("pkg:", 0) == 0) {
+                resolved = resolve_package_import(units_.at(identity), spec);
+            } else {
+                const auto dependency_path = resolve_local_import(units_.at(identity), spec);
+                resolved = {dependency_path, package_name,
+                            module_identity(package_name, dependency_path)};
+            }
+
+            if (!direct.insert(resolved.identity).second) {
                 throw std::runtime_error("module '" + identity + "' line " +
                                          std::to_string(spec.line) +
-                                         ": duplicate 🔗 import of '" + dependency_id + "'");
+                                         ": duplicate 🔗 import of '" + resolved.identity + "'");
             }
-            const std::string resolved_id = visit(dependency_path, stack);
-            units_.at(identity).imports[index].identity = resolved_id;
+            units_.at(identity).imports[index].identity =
+                visit(resolved.path, resolved.package_name, stack);
         }
 
         stack.pop_back();
@@ -590,6 +744,7 @@ private:
 
     std::filesystem::path root_;
     CustomEmojiRegistry registry_;
+    std::optional<PackageGraph> package_graph_;
     std::unordered_map<std::string, ModuleUnit> units_;
     std::unordered_map<std::string, VisitState> states_;
     std::unordered_map<std::string, std::string> module_names_;
@@ -622,7 +777,12 @@ Chunk compile_file(const std::filesystem::path& raw_entry,
         return compiler.compile(entry_program);
     }
 
-    ModuleLinker linker(root, std::move(registry));
+    std::optional<PackageGraph> package_graph;
+    if (std::filesystem::is_regular_file(root / "emojineer.toml")) {
+        package_graph = resolve_package_graph(root);
+    }
+
+    ModuleLinker linker(root, std::move(registry), std::move(package_graph));
     return linker.compile(entry);
 }
 
