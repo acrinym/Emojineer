@@ -3,9 +3,9 @@
 Emojineer builds two command-line executables:
 
 - `emojineer` - source, bytecode, formatting, REPL, standard-library, package-aware linking, and execution tools;
-- `emji` - project, local dependency, and lockfile workflow.
+- `emji` - project, local dependency, lockfile, and package-graph workflow.
 
-The current toolchain version is **0.11**.
+The current toolchain version is **0.12**.
 
 ## Build
 
@@ -208,6 +208,32 @@ emji show path/to/project
 
 Displays package name, version, entry path, canonical manifest hash, and direct dependency declarations.
 
+### Inspect the resolved package graph
+
+```text
+emji tree
+emji tree path/to/project
+emji tree path/to/project --hashes
+emji tree path/to/project --json
+```
+
+`tree` resolves the same real `PackageGraph` used by locking and package-aware source linking. Human output includes package version, `root` / `direct` / `transitive` relation, checkout-relative package path, and entry source. A package reached more than once in a shared dependency DAG is displayed again with `(shared)` and is not recursively expanded a second time.
+
+`--hashes` adds each package's full SHA-256 content identity to human output.
+
+`--json` emits deterministic machine-readable output using schema identifier `emojineer.package-graph.v1`. JSON package records contain:
+
+- package name and version;
+- relation to the root package (`root`, `direct`, or `transitive`);
+- checkout-portable path relative to the root package;
+- package entry source;
+- full SHA-256 content identity;
+- sorted direct dependency names.
+
+The JSON package list is sorted by package name and contains no timestamps or absolute checkout paths, so equivalent package graphs in different checkout locations produce identical output. `--hashes` only changes human output; JSON always includes full content hashes.
+
+Graph resolution failures from `tree` are reported with `emji: package graph: ...` context so package topology failures are distinguishable from ordinary CLI parsing errors.
+
 ### Add a local dependency
 
 ```text
@@ -232,4 +258,4 @@ Successful commands return zero. Parse, compile, bytecode, project, dependency, 
 
 ## Current boundaries
 
-The v0.11 toolchain has real local/path package dependency resolution and explicit cross-package module imports, but no remote registry, package publication command, remote version solver, or download cache. Package access remains explicit and direct-dependency scoped. The standard library remains pure and capability-free, and the toolchain has no arbitrary host FFI, network standard-library API, or filesystem standard-library API.
+The v0.12 toolchain has real local/path package dependency resolution, explicit cross-package module imports, and deterministic graph inspection for humans/tooling, but no remote registry, package publication command, remote version solver, or download cache. Package access remains explicit and direct-dependency scoped. The standard library remains pure and capability-free, and the toolchain has no arbitrary host FFI, network standard-library API, or filesystem standard-library API.
