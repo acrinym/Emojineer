@@ -61,8 +61,17 @@ void append_tree_node(std::ostringstream& out,
                       std::set<std::string>& expanded) {
     out << prefix << connector << row.name << '@' << row.version
         << " [" << package_relation_name(row.relation) << ']'
-        << " path=" << row.path
-        << " entry=" << row.entry;
+        << " [" << dependency_kind_name(row.source_kind) << ']';
+    
+    // Show source-specific info
+    if (row.source_kind == DependencyKind::Registry) {
+        if (row.registry_alias) {
+            out << " registry=" << *row.registry_alias;
+        }
+    } else {
+        out << " path=" << row.path;
+    }
+    out << " entry=" << row.entry;
     if (include_hashes) out << " sha256=" << row.content_sha256;
 
     const bool already_expanded = !expanded.insert(row.name).second;
@@ -110,6 +119,14 @@ std::string package_relation_name(PackageRelation relation) {
     throw std::runtime_error("unknown package relation");
 }
 
+std::string dependency_kind_name(DependencyKind kind) {
+    switch (kind) {
+    case DependencyKind::Path: return "path";
+    case DependencyKind::Registry: return "registry";
+    }
+    throw std::runtime_error("unknown dependency kind");
+}
+
 PackageGraphReport build_package_graph_report(const PackageGraph& graph) {
     const auto* root = graph.find(graph.root_name);
     if (!root) throw std::runtime_error("package graph is missing its root package");
@@ -127,13 +144,25 @@ PackageGraphReport build_package_graph_report(const PackageGraph& graph) {
             relation = PackageRelation::Direct;
         }
 
-        report.packages.push_back({package.name,
-                                   package.version,
-                                   relation,
-                                   portable_relative_path(root->root, package.root, package.name),
-                                   package.entry.generic_string(),
-                                   package.dependencies,
-                                   package.content_sha256});
+        PackageReportRow row;
+        row.name = package.name;
+        row.version = package.version;
+        row.relation = relation;
+        row.source_kind = package.source_kind;
+        row.path = portable_relative_path(root->root, package.root, package.name);
+        row.entry = package.entry.generic_string();
+        row.dependencies = package.dependencies;
+        row.content_sha256 = package.content_sha256;
+        
+        // Copy registry-specific fields if present
+        if (package.registry_alias) {
+            row.registry_alias = package.registry_alias;
+        }
+        if (package.registry_endpoint) {
+            row.registry_endpoint = package.registry_endpoint;
+        }
+        
+        report.packages.push_back(std::move(row));
     }
 
     std::sort(report.packages.begin(), report.packages.end(),

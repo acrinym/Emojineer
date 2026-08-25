@@ -84,6 +84,15 @@ void validate_entry(const std::filesystem::path& entry) {
     }
 }
 
+void validate_registry_alias(const std::string& alias, const std::string& what = "registry alias") {
+    if (alias.empty()) throw std::runtime_error(what + " cannot be empty");
+    for (unsigned char c : alias) {
+        if (!(std::isalnum(c) || c == '-' || c == '_')) {
+            throw std::runtime_error(what + " may contain only ASCII letters, digits, '-' and '_'");
+        }
+    }
+}
+
 void validate_dependency_path(const std::filesystem::path& path, const std::string& name) {
     if (path.empty() || path.is_absolute()) {
         throw std::runtime_error("dependency '" + name + "' path must be non-empty and relative");
@@ -99,10 +108,38 @@ void validate_manifest(const ProjectManifest& manifest) {
     validate_version(manifest.version);
     validate_entry(manifest.entry);
 
+    // Validate registries
+    std::set<std::string> registry_aliases;
+    for (const auto& registry : manifest.registries) {
+        validate_registry_alias(registry.alias, "registry alias");
+        if (registry.endpoint.empty()) {
+            throw std::runtime_error("registry '" + registry.alias + "' endpoint cannot be empty");
+        }
+        if (!registry_aliases.insert(registry.alias).second) {
+            throw std::runtime_error("manifest contains duplicate registry '" + registry.alias + "'");
+        }
+    }
+
+    // Validate dependencies
     std::set<std::string> names;
     for (const auto& dependency : manifest.dependencies) {
         validate_name(dependency.name, "dependency name");
-        validate_dependency_path(dependency.path, dependency.name);
+        
+        if (dependency.kind == DependencyKind::Path) {
+            validate_dependency_path(dependency.path, dependency.name);
+        } else if (dependency.kind == DependencyKind::Registry) {
+            if (dependency.registry_alias.empty()) {
+                throw std::runtime_error("dependency '" + dependency.name + "' registry alias cannot be empty");
+            }
+            if (dependency.requirement.empty()) {
+                throw std::runtime_error("dependency '" + dependency.name + "' requirement cannot be empty");
+            }
+            if (!registry_aliases.contains(dependency.registry_alias)) {
+                throw std::runtime_error("dependency '" + dependency.name + "' references unknown registry '" +
+                                         dependency.registry_alias + "'");
+            }
+        }
+        
         if (dependency.name == manifest.name) {
             throw std::runtime_error("package may not declare itself as dependency '" + dependency.name + "'");
         }
@@ -158,11 +195,12 @@ std::string relative_package_path(const std::filesystem::path& root,
 ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path) {
     std::istringstream input(read_text(manifest_path));
     ProjectManifest manifest;
-    enum class Section { None, Package, Dependencies };
+    enum class Section { None, Package, Registries, Dependencies };
     Section section = Section::None;
     bool have_name = false;
     bool have_version = false;
     bool have_entry = false;
+    std::set<std::string> registry_aliases;
     std::set<std::string> dependency_names;
     std::string line;
     std::size_t line_number = 0;
@@ -174,6 +212,10 @@ ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path
         if (text.front() == '[') {
             if (text == "[package]") {
                 section = Section::Package;
+                continue;
+            }
+            if (text == "[registries]") {
+                section = Section::Registries;
                 continue;
             }
             if (text == "[dependencies]") {
@@ -210,16 +252,39 @@ ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path
             continue;
         }
 
+        if (section == Section::Registries) {
+            if (!registry_aliases.insert(key).second) {
+                throw std::runtime_error("manifest contains duplicate registry '" + key + "'");
+            }
+            manifest.registries.push_back({key, value});
+            continue;
+        }
+
         if (section == Section::Dependencies) {
             if (!dependency_names.insert(key).second) {
                 throw std::runtime_error("manifest contains duplicate dependency '" + key + "'");
             }
-            manifest.dependencies.push_back({key, std::filesystem::path(value)});
+            // Check if this is a registry dependency (starts with "registry:")
+            if (value.substr(0, 9) == "registry:") {
+                // Parse registry:<alias>:<requirement>
+                std::string registry_spec = value.substr(9);  // Remove "registry:" prefix
+                const auto colon_pos = registry_spec.find(':');
+                if (colon_pos == std::string::npos) {
+                    throw std::runtime_error("manifest line " + std::to_string(line_number) +
+                                             ": registry dependency must have format registry:<alias>:<requirement>");
+                }
+                std::string reg_alias = registry_spec.substr(0, colon_pos);
+                std::string requirement = registry_spec.substr(colon_pos + 1);
+                manifest.dependencies.push_back({key, DependencyKind::Registry, {}, reg_alias, requirement});
+            } else {
+                // Path dependency (backward compatible)
+                manifest.dependencies.push_back({key, DependencyKind::Path, std::filesystem::path(value), {}, {}});
+            }
             continue;
         }
 
         throw std::runtime_error("manifest line " + std::to_string(line_number) +
-                                 ": keys must appear inside [package] or [dependencies]");
+                                 ": keys must appear inside [package], [registries], or [dependencies]");
     }
 
     if (!have_name || !have_version || !have_entry) {
@@ -227,6 +292,15 @@ ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path
     }
     validate_manifest(manifest);
     return manifest;
+}
+
+std::vector<ProjectRegistry> sorted_registries(const ProjectManifest& manifest) {
+    auto registries = manifest.registries;
+    std::sort(registries.begin(), registries.end(),
+              [](const ProjectRegistry& left, const ProjectRegistry& right) {
+                  return left.alias < right.alias;
+              });
+    return registries;
 }
 
 std::string canonical_manifest_text(const ProjectManifest& manifest) {
@@ -237,11 +311,26 @@ std::string canonical_manifest_text(const ProjectManifest& manifest) {
         << "version = \"" << manifest.version << "\"\n"
         << "entry = \"" << manifest.entry.generic_string() << "\"\n";
 
+    // Output registries section
+    const auto registries = sorted_registries(manifest);
+    if (!registries.empty()) {
+        out << "\n[registries]\n";
+        for (const auto& registry : registries) {
+            out << registry.alias << " = \"" << registry.endpoint << "\"\n";
+        }
+    }
+
+    // Output dependencies section
     const auto dependencies = sorted_dependencies(manifest);
     if (!dependencies.empty()) {
         out << "\n[dependencies]\n";
         for (const auto& dependency : dependencies) {
-            out << dependency.name << " = \"" << dependency.path.generic_string() << "\"\n";
+            if (dependency.kind == DependencyKind::Registry) {
+                out << dependency.name << " = \"registry:" << dependency.registry_alias << ":"
+                    << dependency.requirement << "\"\n";
+            } else {
+                out << dependency.name << " = \"" << dependency.path.generic_string() << "\"\n";
+            }
         }
     }
     return out.str();
@@ -255,7 +344,7 @@ std::string project_manifest_hash(const ProjectManifest& manifest) {
 }
 
 void initialize_project(const std::filesystem::path& root, const std::string& name) {
-    ProjectManifest manifest{name, "0.1.0", std::filesystem::path("src/main.emoji"), {}};
+    ProjectManifest manifest{name, "0.1.0", std::filesystem::path("src/main.emoji"), {}, {}};
     validate_manifest(manifest);
     const auto manifest_path = root / "emojineer.toml";
     if (std::filesystem::exists(manifest_path)) {
@@ -383,7 +472,7 @@ void add_project_dependency(const std::filesystem::path& root,
                                  dependency_manifest.name + "'");
     }
 
-    manifest.dependencies.push_back({name, path.lexically_normal()});
+    manifest.dependencies.push_back({name, DependencyKind::Path, path.lexically_normal(), {}, {}});
     validate_manifest(manifest);
     (void)resolve_package_graph(root, manifest);
     write_manifest(root, manifest);
@@ -403,6 +492,85 @@ void remove_project_dependency(const std::filesystem::path& root,
     validate_manifest(manifest);
     (void)resolve_package_graph(root, manifest);
     write_manifest(root, manifest);
+    write_project_lock(root, manifest);
+}
+
+std::string get_registry_alias_for_dependency(const ProjectManifest& manifest,
+                                              const std::string& dependency_name) {
+    for (const auto& dependency : manifest.dependencies) {
+        if (dependency.name == dependency_name && dependency.kind == DependencyKind::Registry) {
+            return dependency.registry_alias;
+        }
+    }
+    throw std::runtime_error("dependency '" + dependency_name + "' not found or is not a registry dependency");
+}
+
+std::string get_registry_endpoint_for_alias(const ProjectManifest& manifest,
+                                             const std::string& alias) {
+    for (const auto& registry : manifest.registries) {
+        if (registry.alias == alias) {
+            return registry.endpoint;
+        }
+    }
+    throw std::runtime_error("registry '" + alias + "' not found in manifest");
+}
+
+void add_project_registry_dependency(const std::filesystem::path& root,
+                                     const std::string& name,
+                                     const std::string& requirement,
+                                     const std::string& registry_endpoint,
+                                     const std::string& registry_alias) {
+    auto manifest = load_project_manifest(root / "emojineer.toml");
+    
+    // Check if dependency already exists
+    for (const auto& dependency : manifest.dependencies) {
+        if (dependency.name == name) {
+            throw std::runtime_error("dependency '" + name + "' already exists");
+        }
+    }
+    
+    // Find or add the registry
+    std::string alias = registry_alias;
+    if (alias.empty()) {
+        alias = "origin";  // Default registry alias
+    }
+    
+    // Check if registry already exists
+    bool registry_found = false;
+    for (const auto& registry : manifest.registries) {
+        if (registry.alias == alias) {
+            if (registry.endpoint != registry_endpoint) {
+                throw std::runtime_error("registry '" + alias + "' already exists with different endpoint");
+            }
+            registry_found = true;
+            break;
+        }
+    }
+    
+    // Add new registry if not found
+    if (!registry_found) {
+        manifest.registries.push_back({alias, registry_endpoint});
+    }
+    
+    // Add the registry dependency
+    manifest.dependencies.push_back({name, DependencyKind::Registry, {}, alias, requirement});
+    
+    validate_manifest(manifest);
+    write_manifest(root, manifest);
+    write_project_lock(root, manifest);
+}
+
+void sync_project(const std::filesystem::path& root, bool offline) {
+    sync_project(root, {}, offline);
+}
+
+void sync_project(const std::filesystem::path& root,
+                 const std::filesystem::path& cache_root,
+                 bool offline) {
+    // This will be implemented with full registry resolution
+    // For now, just re-resolve the package graph and write lock
+    auto manifest = load_project_manifest(root / "emojineer.toml");
+    (void)resolve_package_graph(root, manifest);
     write_project_lock(root, manifest);
 }
 
