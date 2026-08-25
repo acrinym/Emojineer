@@ -185,20 +185,28 @@ private:
         dependency_names.reserve(manifest.dependencies.size());
 
         for (const auto& dependency : manifest.dependencies) {
-            const auto dep_root = dependency_root(root, dependency, manifest.name);
-            const auto dep_manifest = load_project_manifest(dep_root / "emojineer.toml");
-            if (dep_manifest.name != dependency.name) {
-                throw std::runtime_error("package '" + manifest.name + "' dependency key '" +
-                                         dependency.name + "' points to package '" +
-                                         dep_manifest.name + "'");
+            // Handle path dependencies (existing behavior)
+            if (dependency.kind == DependencyKind::Path) {
+                const auto dep_root = dependency_root(root, dependency, manifest.name);
+                const auto dep_manifest = load_project_manifest(dep_root / "emojineer.toml");
+                if (dep_manifest.name != dependency.name) {
+                    throw std::runtime_error("package '" + manifest.name + "' dependency key '" +
+                                             dependency.name + "' points to package '" +
+                                             dep_manifest.name + "'");
+                }
+                dependency_names.push_back(dependency.name);
+                visit(dep_root, dep_manifest, stack);
+            } else if (dependency.kind == DependencyKind::Registry) {
+                // Registry dependencies will be resolved during sync
+                // For now, just add the dependency name
+                dependency_names.push_back(dependency.name);
             }
-            dependency_names.push_back(dependency.name);
-            visit(dep_root, dep_manifest, stack);
         }
         std::sort(dependency_names.begin(), dependency_names.end());
 
         packages_.push_back({manifest.name,
                              manifest.version,
+                             DependencyKind::Path,  // Root is always a path package for now
                              root,
                              manifest.entry,
                              dependency_names,
@@ -230,9 +238,18 @@ PackageGraph resolve_package_graph(const std::filesystem::path& root) {
 
 PackageGraph resolve_package_graph(const std::filesystem::path& root,
                                    const ProjectManifest& root_manifest) {
+    return resolve_package_graph(root, root_manifest, {}, false);
+}
+
+PackageGraph resolve_package_graph(const std::filesystem::path& root,
+                                   const ProjectManifest& root_manifest,
+                                   const std::filesystem::path& store_root,
+                                   bool offline) {
     if (!std::filesystem::exists(root) || !std::filesystem::is_directory(root)) {
         throw std::runtime_error("package root is not a directory: " + root.string());
     }
+    // For now, just use the basic resolver
+    // Full registry resolution will be implemented with sync
     Resolver resolver;
     return resolver.resolve(root, root_manifest);
 }

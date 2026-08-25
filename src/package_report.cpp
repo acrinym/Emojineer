@@ -61,8 +61,17 @@ void append_tree_node(std::ostringstream& out,
                       std::set<std::string>& expanded) {
     out << prefix << connector << row.name << '@' << row.version
         << " [" << package_relation_name(row.relation) << ']'
-        << " path=" << row.path
-        << " entry=" << row.entry;
+        << " [" << dependency_kind_name(row.source_kind) << ']';
+    
+    // Show source-specific info
+    if (row.source_kind == DependencyKind::Registry) {
+        if (row.registry_alias) {
+            out << " registry=" << *row.registry_alias;
+        }
+    } else {
+        out << " path=" << row.path;
+    }
+    out << " entry=" << row.entry;
     if (include_hashes) out << " sha256=" << row.content_sha256;
 
     const bool already_expanded = !expanded.insert(row.name).second;
@@ -110,6 +119,14 @@ std::string package_relation_name(PackageRelation relation) {
     throw std::runtime_error("unknown package relation");
 }
 
+std::string dependency_kind_name(DependencyKind kind) {
+    switch (kind) {
+    case DependencyKind::Path: return "path";
+    case DependencyKind::Registry: return "registry";
+    }
+    throw std::runtime_error("unknown dependency kind");
+}
+
 PackageGraphReport build_package_graph_report(const PackageGraph& graph) {
     const auto* root = graph.find(graph.root_name);
     if (!root) throw std::runtime_error("package graph is missing its root package");
@@ -127,13 +144,25 @@ PackageGraphReport build_package_graph_report(const PackageGraph& graph) {
             relation = PackageRelation::Direct;
         }
 
-        report.packages.push_back({package.name,
-                                   package.version,
-                                   relation,
-                                   portable_relative_path(root->root, package.root, package.name),
-                                   package.entry.generic_string(),
-                                   package.dependencies,
-                                   package.content_sha256});
+        PackageReportRow row;
+        row.name = package.name;
+        row.version = package.version;
+        row.relation = relation;
+        row.source_kind = package.source_kind;
+        row.path = portable_relative_path(root->root, package.root, package.name);
+        row.entry = package.entry.generic_string();
+        row.dependencies = package.dependencies;
+        row.content_sha256 = package.content_sha256;
+        
+        // Copy registry-specific fields if present
+        if (package.registry_alias) {
+            row.registry_alias = package.registry_alias;
+        }
+        if (package.registry_endpoint) {
+            row.registry_endpoint = package.registry_endpoint;
+        }
+        
+        report.packages.push_back(std::move(row));
     }
 
     std::sort(report.packages.begin(), report.packages.end(),
@@ -165,10 +194,25 @@ std::string render_package_graph_json(const PackageGraphReport& report) {
             << "      \"name\": " << json_string(package.name) << ",\n"
             << "      \"version\": " << json_string(package.version) << ",\n"
             << "      \"relation\": " << json_string(package_relation_name(package.relation)) << ",\n"
+            << "      \"source\": " << json_string(dependency_kind_name(package.source_kind)) << ",\n"
             << "      \"path\": " << json_string(package.path) << ",\n"
             << "      \"entry\": " << json_string(package.entry) << ",\n"
-            << "      \"content_sha256\": " << json_string(package.content_sha256) << ",\n"
-            << "      \"dependencies\": [";
+            << "      \"content_sha256\": " << json_string(package.content_sha256) << ",\n";
+        
+        // Add registry-specific info if present
+        if (package.source_kind == DependencyKind::Registry) {
+            if (package.registry_alias) {
+                out << "      \"registry_alias\": " << json_string(*package.registry_alias) << ",\n";
+            }
+            if (package.registry_endpoint) {
+                out << "      \"registry_endpoint\": " << json_string(*package.registry_endpoint) << ",\n";
+            }
+            if (package.selected_version) {
+                out << "      \"selected_version\": " << json_string(*package.selected_version) << ",\n";
+            }
+        }
+        
+        out << "      \"dependencies\": [";
         for (std::size_t dependency = 0; dependency < package.dependencies.size(); ++dependency) {
             if (dependency != 0) out << ", ";
             out << json_string(package.dependencies[dependency]);

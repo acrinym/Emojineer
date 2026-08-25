@@ -14,13 +14,14 @@ namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.14\n"
+        << "emji 0.15\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"
         << "  emji lock [directory]\n"
         << "  emji show [directory]\n"
         << "  emji tree [directory] [--hashes] [--json]\n"
+        << "  emji sync [directory] [--offline] [--cache directory]\n"
         << "  emji pack [directory] [-o package.emjpkg]\n"
         << "  emji artifact <package.emjpkg>\n"
         << "  emji verify-artifact <package.emjpkg>\n"
@@ -30,6 +31,7 @@ void usage() {
         << "  emji publish [directory] --registry <endpoint>\n"
         << "  emji fetch <package_name> <requirement> --registry <endpoint> [--cache directory]\n"
         << "  emji add <package_name> <relative_path> [directory]\n"
+        << "  emji add <package_name> <requirement> --registry <endpoint> [--registry-name <alias>] [directory]\n"
         << "  emji remove <package_name> [directory]\n";
 }
 
@@ -235,13 +237,28 @@ int main(int argc, char** argv) {
                       << "version: " << manifest.version << '\n'
                       << "entry: " << manifest.entry.generic_string() << '\n'
                       << "manifest-hash: " << emojineer::project_manifest_hash(manifest) << '\n';
+            
+            // Show registries
+            if (!manifest.registries.empty()) {
+                std::cout << "registries:\n";
+                for (const auto& registry : manifest.registries) {
+                    std::cout << "  " << registry.alias << " = " << registry.endpoint << '\n';
+                }
+            }
+            
+            // Show dependencies
             if (manifest.dependencies.empty()) {
                 std::cout << "dependencies: (none)\n";
             } else {
                 std::cout << "dependencies:\n";
                 for (const auto& dependency : manifest.dependencies) {
-                    std::cout << "  " << dependency.name << " -> "
-                              << dependency.path.generic_string() << '\n';
+                    if (dependency.kind == emojineer::DependencyKind::Registry) {
+                        std::cout << "  " << dependency.name << " -> registry:" 
+                                  << dependency.registry_alias << ":" << dependency.requirement << '\n';
+                    } else {
+                        std::cout << "  " << dependency.name << " -> "
+                                  << dependency.path.generic_string() << '\n';
+                    }
                 }
             }
             return 0;
@@ -255,6 +272,37 @@ int main(int argc, char** argv) {
             } else {
                 std::cout << emojineer::render_package_tree(report, options.include_hashes);
             }
+            return 0;
+        }
+
+        if (command == "sync") {
+            // Parse sync options
+            std::filesystem::path root = std::filesystem::current_path();
+            std::filesystem::path cache_root;
+            bool offline = false;
+            
+            for (int i = 2; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--offline") {
+                    offline = true;
+                } else if (arg == "--cache") {
+                    if (++i >= argc) throw std::runtime_error("--cache requires a directory");
+                    cache_root = std::filesystem::path(argv[i]);
+                } else if (arg.rfind("--", 0) == 0) {
+                    throw std::runtime_error("unknown sync option '" + arg + "'");
+                } else if (i == 2) {
+                    root = std::filesystem::path(arg);
+                } else {
+                    throw std::runtime_error("sync accepts at most one project directory");
+                }
+            }
+            
+            if (cache_root.empty()) {
+                emojineer::sync_project(root, offline);
+            } else {
+                emojineer::sync_project(root, cache_root, offline);
+            }
+            std::cout << "✅ synced project in " << root.string() << '\n';
             return 0;
         }
 
@@ -362,17 +410,56 @@ int main(int argc, char** argv) {
         }
 
         if (command == "add") {
-            if (argc < 4 || argc > 5) {
-                throw std::runtime_error("add requires <package_name> <relative_path> and optional project directory");
+            // Parse options to check for --registry
+            std::optional<std::string> registry;
+            std::optional<std::string> registry_name;
+            std::vector<std::string> positional_args;
+            
+            for (int i = 2; i < argc; ++i) {
+                std::string arg = argv[i];
+                if (arg == "--registry") {
+                    if (++i >= argc) throw std::runtime_error("--registry requires an endpoint");
+                    registry = argv[i];
+                } else if (arg == "--registry-name") {
+                    if (++i >= argc) throw std::runtime_error("--registry-name requires an alias");
+                    registry_name = argv[i];
+                } else if (arg.rfind("--", 0) == 0) {
+                    throw std::runtime_error("unknown add option '" + arg + "'");
+                } else {
+                    positional_args.push_back(arg);
+                }
             }
-            const std::string name = argv[2];
-            const std::filesystem::path path = argv[3];
-            const std::filesystem::path root = argc == 5
-                                                   ? std::filesystem::path(argv[4])
-                                                   : std::filesystem::current_path();
-            emojineer::add_project_dependency(root, name, path);
-            std::cout << "✅ added " << name << " -> " << path.generic_string() << '\n';
-            return 0;
+            
+            if (registry) {
+                // Registry dependency add - transactional
+                // Format: emji add <name> <requirement> --registry <endpoint> [--registry-name <alias>] [directory]
+                if (positional_args.size() < 2 || positional_args.size() > 3) {
+                    throw std::runtime_error("add requires <package_name> <requirement> --registry <endpoint> and optional project directory");
+                }
+                const std::string name = positional_args[0];
+                const std::string requirement = positional_args[1];
+                std::filesystem::path root = positional_args.size() == 3
+                    ? std::filesystem::path(positional_args[2])
+                    : std::filesystem::current_path();
+                
+                emojineer::add_project_registry_dependency_transactional(root, name, requirement, *registry,
+                    registry_name.value_or("origin"));
+                std::cout << "✅ added " << name << " [" << requirement << "] from registry " << *registry << '\n';
+                return 0;
+            } else {
+                // Path dependency add (backward compatible)
+                if (positional_args.size() < 2 || positional_args.size() > 3) {
+                    throw std::runtime_error("add requires <package_name> <relative_path> and optional project directory");
+                }
+                const std::string name = positional_args[0];
+                const std::filesystem::path path = positional_args[1];
+                const std::filesystem::path root = positional_args.size() == 3
+                    ? std::filesystem::path(positional_args[2])
+                    : std::filesystem::current_path();
+                emojineer::add_project_dependency(root, name, path);
+                std::cout << "✅ added " << name << " -> " << path.generic_string() << '\n';
+                return 0;
+            }
         }
 
         if (command == "remove") {

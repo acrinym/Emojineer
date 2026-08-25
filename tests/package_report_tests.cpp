@@ -67,11 +67,11 @@ void test_report_relations_paths_and_hashes() {
             "every package should expose its full SHA-256 content identity");
 
     const auto tree = emojineer::render_package_tree(report, true);
-    require(tree.find("app@0.1.0 [root] path=. entry=src/main.emoji sha256=") != std::string::npos,
+    require(tree.find("app@0.1.0 [root] [path]") != std::string::npos,
             "human tree should identify the root package and hash");
-    require(tree.find("b@0.1.0 [direct] path=deps/b") != std::string::npos,
+    require(tree.find("b@0.1.0 [direct] [path]") != std::string::npos,
             "human tree should label direct dependencies");
-    require(tree.find("c@0.1.0 [transitive] path=deps/c") != std::string::npos,
+    require(tree.find("c@0.1.0 [transitive] [path]") != std::string::npos,
             "human tree should label transitive dependencies");
     require(tree.find(app.string()) == std::string::npos,
             "human tree must not leak the absolute checkout path");

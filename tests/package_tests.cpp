@@ -85,8 +85,10 @@ void test_independent_nested_package_is_excluded_from_container_hash() {
     emojineer::initialize_project(c, "c");
 
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
-    manifest.dependencies = {{"b", std::filesystem::path("deps/b")},
-                             {"c", std::filesystem::path("deps/b/vendor/c")}};
+    manifest.dependencies = {
+        {"b", emojineer::DependencyKind::Path, std::filesystem::path("deps/b"), {}, {}},
+        {"c", emojineer::DependencyKind::Path, std::filesystem::path("deps/b/vendor/c"), {}, {}}
+    };
 
     const auto first = emojineer::resolve_package_graph(root, manifest);
     require(first.find("b") != nullptr && first.find("c") != nullptr,

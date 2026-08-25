@@ -93,8 +93,11 @@ void test_dependency_manifest_is_canonical_and_deterministic() {
         "hash_demo",
         "1.2.3",
         std::filesystem::path("src/main.emoji"),
-        {{"zeta", std::filesystem::path("../zeta")},
-         {"alpha", std::filesystem::path("../alpha")}}
+        {},  // registries
+        {   // dependencies
+            {"zeta", emojineer::DependencyKind::Path, std::filesystem::path("../zeta"), {}, {}},
+            {"alpha", emojineer::DependencyKind::Path, std::filesystem::path("../alpha"), {}, {}}
+        }
     };
     const auto text = emojineer::canonical_manifest_text(manifest);
     const auto alpha = text.find("alpha = \"../alpha\"");
@@ -127,8 +130,8 @@ void test_add_remove_and_dependency_lock_drift() {
             "dependency name and relative path should round-trip");
 
     const auto lock = emojineer::canonical_project_lock(root, manifest);
-    require(lock.find("lock_version = 2") != std::string::npos,
-            "dependency-aware lockfile should use lock format v2");
+    require(lock.find("lock_version = 3") != std::string::npos,
+            "dependency-aware lockfile should use lock format v3");
     require(lock.find("name = \"mathkit\"") != std::string::npos &&
                 lock.find("content_sha256 = \"") != std::string::npos,
             "lockfile should pin dependency package identity and SHA-256 content");
@@ -159,7 +162,8 @@ void test_absolute_dependency_path_rejected() {
         "demo",
         "0.1.0",
         std::filesystem::path("src/main.emoji"),
-        {{"bad", std::filesystem::absolute("bad")}}
+        {},  // registries
+        {{"bad", emojineer::DependencyKind::Path, std::filesystem::absolute("bad"), {}, {}}}
     };
     bool rejected = false;
     try {
