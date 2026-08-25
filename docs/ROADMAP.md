@@ -114,8 +114,6 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - registry artifacts intentionally remain separate from project manifests until remote dependency resolution and lock provenance land together;
 - no ambient network authority in the language runtime and no audit machinery.
 
-## Next product train
-
 ### Train 15 — Remote dependency integration and reproducible materialization
 
 Turn verified registry artifacts into real project dependencies without weakening local/path packages:
@@ -133,15 +131,37 @@ Turn verified registry artifacts into real project dependencies without weakenin
 
 ### Train 16 — Authenticated registry publication
 
-After remote resolution is reproducible, define a real write trust boundary:
+Authenticated HTTPS publication protocol with explicit request/response media types:
 
-- authenticated HTTPS upload/session contract;
-- server-side immutable package/version conflict rules;
-- authorization and namespace ownership;
-- bounded upload behavior and artifact checksum confirmation;
-- explicit credentials handling outside manifests and source code;
-- publication receipt/provenance suitable for tooling;
-- no generic unauthenticated PUT masquerading as package publication.
+- versioned HTTPS publication protocol (`emjpub1`) with JSON request/response;
+- credentials supplied only through explicit CLI (`--token`) or environment (`EMOJINEER_TOKEN`);
+- credentials never serialized into `emojineer.toml`, artifacts, lockfiles, source, receipts, or diagnostics;
+- registry identity verification before write authority is used;
+- namespace/package ownership authorization surfaced as concrete protocol failures (HTTP 403);
+- immutable exact-version semantics enforced by server: identical republish is idempotent, differing same-version content fails (HTTP 409);
+- server confirms content SHA-256 and artifact SHA-256 in publication receipt;
+- durable publication receipt with registry id, package, version, content/artifact identities, receipt id, and protocol version;
+- deterministic machine-readable JSON receipt rendering;
+- optional receipt-file output (`--receipt <file>`);
+- redirects, plain HTTP, credential-in-URL, and cross-origin credential forwarding rejected;
+- bounded upload/request/response limits, TLS peer/host verification, timeouts, no secrets in diagnostics;
+- local/file registry publication remains available and works without credentials;
+- `emji publish` dispatches to local immutable publish for file registries and authenticated protocol for HTTPS registries;
+- representative interoperability test fixture implements auth, ownership, idempotent republish, conflicting republish, checksum mismatch, response tamper, and bounded request handling;
+- dedicated CTest target for authenticated publication end-to-end journey.
+
+## Next product train
+
+### Train 17 — Package search and discovery
+
+After authenticated publication exists, enable package discovery:
+
+- registry search API for finding packages by name prefix or keyword;
+- package metadata exposure (descriptions, author, dependencies);
+- version listing with pre-release/stable filtering;
+- reverse dependency queries;
+- ranked search results by popularity/usage metrics;
+- no ambient network authority for Emojineer programs or VM.
 
 ## Later product trains
 

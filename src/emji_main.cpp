@@ -14,7 +14,7 @@ namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.15\n"
+        << "emji 0.16\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"
@@ -28,7 +28,7 @@ void usage() {
         << "  emji registry-init <directory> --id <registry_id>\n"
         << "  emji registry-info --registry <endpoint>\n"
         << "  emji versions <package_name> --registry <endpoint>\n"
-        << "  emji publish [directory] --registry <endpoint>\n"
+        << "  emji publish [directory] --registry <endpoint> [--token <cred>] [--namespace <ns>] [--receipt <file>]\n"
         << "  emji fetch <package_name> <requirement> --registry <endpoint> [--cache directory]\n"
         << "  emji add <package_name> <relative_path> [directory]\n"
         << "  emji add <package_name> <requirement> --registry <endpoint> [--registry-name <alias>] [directory]\n"
@@ -100,6 +100,9 @@ PackOptions parse_pack_options(int argc, char** argv) {
 struct PublishOptions {
     std::filesystem::path root = std::filesystem::current_path();
     std::optional<std::string> registry;
+    std::optional<std::string> token;
+    std::optional<std::string> namespace_id;
+    std::optional<std::filesystem::path> receipt;
 };
 
 PublishOptions parse_publish_options(int argc, char** argv) {
@@ -111,6 +114,24 @@ PublishOptions parse_publish_options(int argc, char** argv) {
             if (options.registry) throw std::runtime_error("publish accepts only one --registry endpoint");
             if (++i >= argc) throw std::runtime_error("--registry requires an endpoint");
             options.registry = argv[i];
+            continue;
+        }
+        if (arg == "--token") {
+            if (options.token) throw std::runtime_error("publish accepts only one --token");
+            if (++i >= argc) throw std::runtime_error("--token requires a credential token");
+            options.token = argv[i];
+            continue;
+        }
+        if (arg == "--namespace") {
+            if (options.namespace_id) throw std::runtime_error("publish accepts only one --namespace");
+            if (++i >= argc) throw std::runtime_error("--namespace requires a namespace id");
+            options.namespace_id = argv[i];
+            continue;
+        }
+        if (arg == "--receipt") {
+            if (options.receipt) throw std::runtime_error("publish accepts only one --receipt");
+            if (++i >= argc) throw std::runtime_error("--receipt requires a file path");
+            options.receipt = std::filesystem::path(argv[i]);
             continue;
         }
         if (!arg.empty() && arg.front() == '-') {
@@ -382,12 +403,57 @@ int main(int argc, char** argv) {
         if (command == "publish") {
             const auto options = parse_publish_options(argc, argv);
             const auto endpoint = emojineer::parse_registry_endpoint(*options.registry);
-            const auto result = emojineer::publish_package_to_registry(options.root, endpoint);
-            std::cout << (result.already_present ? "✅ already published " : "✅ published ")
-                      << emojineer::load_project_manifest(options.root / "emojineer.toml").name
-                      << '@' << result.record.version << '\n'
-                      << "artifact-sha256: " << result.record.artifact_sha256 << '\n';
-            return 0;
+            const auto manifest = emojineer::load_project_manifest(options.root / "emojineer.toml");
+            
+            if (endpoint.kind == emojineer::RegistryTransportKind::File) {
+                // File registry publication - no credentials required
+                const auto result = emojineer::publish_package_to_registry(options.root, endpoint);
+                std::cout << (result.already_present ? "✅ already published " : "✅ published ")
+                          << manifest.name << '@' << result.record.version << '\n'
+                          << "artifact-sha256: " << result.record.artifact_sha256 << '\n';
+                return 0;
+            } else {
+                // HTTPS authenticated publication - requires credentials
+                std::string token;
+                std::string namespace_id;
+                
+                // Get token from CLI or environment
+                if (options.token) {
+                    token = *options.token;
+                } else {
+                    const auto env_token = emojineer::credential_from_environment();
+                    if (!env_token) {
+                        throw std::runtime_error("HTTPS publication requires --token or EMOJINEER_TOKEN environment variable");
+                    }
+                    token = *env_token;
+                }
+                
+                // Get namespace from CLI
+                if (options.namespace_id) {
+                    namespace_id = *options.namespace_id;
+                } else {
+                    throw std::runtime_error("HTTPS publication requires --namespace");
+                }
+                
+                // Parse and validate credential
+                const auto credential = emojineer::parse_credential(token, namespace_id);
+                
+                // Publish with authentication
+                const auto receipt = emojineer::publish_package_to_https_registry(options.root, endpoint, credential);
+                
+                // Save receipt to file if requested
+                if (options.receipt) {
+                    emojineer::save_receipt_file(*options.receipt, receipt);
+                    std::cout << "📄 receipt saved to " << options.receipt->string() << '\n';
+                }
+                
+                std::cout << "✅ published " << manifest.name << '@' << receipt.version << '\n'
+                          << "content-sha256: " << receipt.content_sha256 << '\n'
+                          << "artifact-sha256: " << receipt.artifact_sha256 << '\n'
+                          << "receipt-id: " << receipt.receipt_id << '\n'
+                          << "protocol: " << receipt.protocol_version << '\n';
+                return 0;
+            }
         }
 
         if (command == "fetch") {

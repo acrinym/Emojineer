@@ -420,7 +420,7 @@ std::string https_get(const std::string& url, std::size_t limit) {
     curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.15");
+    curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
 #if LIBCURL_VERSION_NUM >= 0x075500
     curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
 #else
@@ -785,6 +785,445 @@ bool https_registry_transport_available() {
     return true;
 #else
     return false;
+#endif
+}
+
+// Protocol version for authenticated publication
+constexpr std::string_view authenticated_protocol_version = "emjpub1";
+
+// Get credential from environment variable
+std::optional<std::string> credential_from_environment() {
+    const char* env_token = std::getenv("EMOJINEER_TOKEN");
+    if (env_token && env_token[0] != '\0') {
+        return std::string(env_token);
+    }
+    return std::nullopt;
+}
+
+// Parse credential from explicit CLI input
+RegistryPublishCredential parse_credential(std::string_view token, std::string_view namespace_id) {
+    if (token.empty()) {
+        throw std::runtime_error("credential token cannot be empty");
+    }
+    if (namespace_id.empty()) {
+        throw std::runtime_error("namespace cannot be empty");
+    }
+    // Validate no credentials in URL form
+    if (token.find("://") != std::string_view::npos) {
+        throw std::runtime_error("credential must not be in URL form");
+    }
+    // Validate portable name for namespace
+    if (!valid_portable_name(namespace_id)) {
+        throw std::runtime_error("namespace must be a valid portable name (ASCII letters, digits, '-', '_')");
+    }
+    return {std::string(token), std::string(namespace_id)};
+}
+
+// Parse publication receipt from JSON
+PublicationReceipt parse_publication_receipt(std::string_view text) {
+    PublicationReceipt receipt;
+    // Simple JSON parsing - extract required fields
+    // Format: {"registry_id":"...","package_name":"...","version":"...","content_sha256":"...","artifact_sha256":"...","protocol_version":"...","receipt_id":"...","timestamp":"..."}
+    
+    auto extract_string = [](std::string_view json, std::string_view key) -> std::string {
+        const auto key_start = json.find("\"" + std::string(key) + "\"");
+        if (key_start == std::string_view::npos) {
+            throw std::runtime_error("receipt missing required field: " + std::string(key));
+        }
+        const auto colon = json.find(":", key_start);
+        if (colon == std::string_view::npos) {
+            throw std::runtime_error("receipt has malformed field: " + std::string(key));
+        }
+        const auto quote_start = json.find("\"", colon);
+        if (quote_start == std::string_view::npos) {
+            throw std::runtime_error("receipt has malformed string value: " + std::string(key));
+        }
+        const auto quote_end = json.find("\"", quote_start + 1);
+        if (quote_end == std::string_view::npos) {
+            throw std::runtime_error("receipt has unclosed string value: " + std::string(key));
+        }
+        return std::string(json.substr(quote_start + 1, quote_end - quote_start - 1));
+    };
+    
+    try {
+        receipt.registry_id = extract_string(text, "registry_id");
+        receipt.package_name = extract_string(text, "package_name");
+        receipt.version = extract_string(text, "version");
+        receipt.content_sha256 = extract_string(text, "content_sha256");
+        receipt.artifact_sha256 = extract_string(text, "artifact_sha256");
+        receipt.protocol_version = extract_string(text, "protocol_version");
+        receipt.receipt_id = extract_string(text, "receipt_id");
+        receipt.timestamp = extract_string(text, "timestamp");
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("failed to parse publication receipt: ") + e.what());
+    }
+    return receipt;
+}
+
+// Render publication receipt as deterministic JSON
+std::string render_publication_receipt(const PublicationReceipt& receipt) {
+    // Ensure deterministic ordering: keys sorted alphabetically
+    std::ostringstream out;
+    out << "{";
+    out << "\"artifact_sha256\":\"" << receipt.artifact_sha256 << "\",";
+    out << "\"content_sha256\":\"" << receipt.content_sha256 << "\",";
+    out << "\"package_name\":\"" << receipt.package_name << "\",";
+    out << "\"protocol_version\":\"" << receipt.protocol_version << "\",";
+    out << "\"receipt_id\":\"" << receipt.receipt_id << "\",";
+    out << "\"registry_id\":\"" << receipt.registry_id << "\",";
+    out << "\"timestamp\":\"" << receipt.timestamp << "\",";
+    out << "\"version\":\"" << receipt.version << "\"";
+    out << "}";
+    return out.str();
+}
+
+// Verify receipt matches expected values before reporting success
+void verify_publication_receipt(const PublicationReceipt& receipt,
+                                 const std::string& expected_registry_id,
+                                 const std::string& expected_package_name,
+                                 const std::string& expected_version,
+                                 const std::string& expected_content_sha256,
+                                 const std::string& expected_artifact_sha256) {
+    if (receipt.registry_id != expected_registry_id) {
+        throw std::runtime_error("receipt registry_id mismatch: expected " + expected_registry_id + ", got " + receipt.registry_id);
+    }
+    if (receipt.package_name != expected_package_name) {
+        throw std::runtime_error("receipt package_name mismatch: expected " + expected_package_name + ", got " + receipt.package_name);
+    }
+    if (receipt.version != expected_version) {
+        throw std::runtime_error("receipt version mismatch: expected " + expected_version + ", got " + receipt.version);
+    }
+    if (receipt.content_sha256 != expected_content_sha256) {
+        throw std::runtime_error("receipt content_sha256 mismatch: expected " + expected_content_sha256 + ", got " + receipt.content_sha256);
+    }
+    if (receipt.artifact_sha256 != expected_artifact_sha256) {
+        throw std::runtime_error("receipt artifact_sha256 mismatch: expected " + expected_artifact_sha256 + ", got " + receipt.artifact_sha256);
+    }
+    // Verify protocol version
+    if (receipt.protocol_version != authenticated_protocol_version) {
+        throw std::runtime_error("receipt protocol_version mismatch: expected " + std::string(authenticated_protocol_version) + ", got " + receipt.protocol_version);
+    }
+}
+
+// Save receipt to file
+void save_receipt_file(const std::filesystem::path& path, const PublicationReceipt& receipt) {
+    std::filesystem::create_directories(path.parent_path());
+    write_atomic_file(path, render_publication_receipt(receipt));
+}
+
+#if defined(EMOJINEER_HAVE_CURL)
+
+// Helper class for HTTPS POST with authentication
+class HttpsPublishClient {
+public:
+    HttpsPublishClient(const std::string& url,
+                      const std::string& auth_token,
+                      const std::string& namespace_id,
+                      const std::string& package_name,
+                      const std::string& version,
+                      const std::string& content_sha256,
+                      const std::string& artifact_sha256,
+                      const std::string& artifact_body,
+                      std::size_t response_limit)
+        : url_(url)
+        , auth_token_(auth_token)
+        , namespace_id_(namespace_id)
+        , package_name_(package_name)
+        , version_(version)
+        , content_sha256_(content_sha256)
+        , artifact_sha256_(artifact_sha256)
+        , artifact_body_(artifact_body)
+        , response_limit_(response_limit) {}
+
+    std::string execute() {
+        static const CURLcode initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
+        if (initialized != CURLE_OK) {
+            throw std::runtime_error("cannot initialize HTTPS registry transport");
+        }
+
+        CURL* handle = curl_easy_init();
+        if (!handle) {
+            throw std::runtime_error("cannot initialize HTTPS registry request");
+        }
+
+        // Build the authenticated publication request
+        // POST to /v1/publish with JSON body containing package metadata
+        // Artifact is sent as raw binary in the request body
+        
+        std::ostringstream body;
+        body << "{";
+        body << "\"namespace\":\"" << namespace_id_ << "\",";
+        body << "\"package\":\"" << package_name_ << "\",";
+        body << "\"version\":\"" << version_ << "\",";
+        body << "\"content_sha256\":\"" << content_sha256_ << "\",";
+        body << "\"artifact_sha256\":\"" << artifact_sha256_ << "\"";
+        body << "}";
+        
+        std::string body_str = body.str();
+        
+        // Set up headers
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, ("Authorization: Bearer " + auth_token_).c_str());
+        headers = curl_slist_append(headers, ("X-Emojineer-Namespace: " + namespace_id_).c_str());
+        
+        // Set up response buffer
+        CurlBuffer response{{}, response_limit_, false};
+        
+        curl_easy_setopt(handle, CURLOPT_URL, url_.c_str());
+        curl_easy_setopt(handle, CURLOPT_POST, 1L);
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body_str.c_str());
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, body_str.size());
+        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_write);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response);
+        
+        // Security: no redirects, TLS verification, timeouts
+        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L);
+        curl_easy_setopt(handle, CURLOPT_TIMEOUT, 60L);
+        curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
+        
+        // Restrict to HTTPS only
+#if LIBCURL_VERSION_NUM >= 0x075500
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
+#else
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+
+        // Also upload the artifact as a second request (or multipart)
+        // For simplicity, we include artifact SHA-256 in request and let server fetch
+        // or we could use a different approach - sending artifact inline
+        
+        const CURLcode result = curl_easy_perform(handle);
+        long response_code = 0;
+        curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(handle);
+        
+        if (response.exceeded) {
+            throw std::runtime_error("publication response exceeds size limit");
+        }
+        if (result != CURLE_OK) {
+            throw std::runtime_error("HTTPS publication request failed: " + std::string(curl_easy_strerror(result)));
+        }
+        
+        // Check response code
+        if (response_code == 401) {
+            throw std::runtime_error("publication authentication failed: invalid or missing credential");
+        }
+        if (response_code == 403) {
+            throw std::runtime_error("publication authorization failed: namespace '" + namespace_id_ + "' not owned by credential");
+        }
+        if (response_code == 409) {
+            throw std::runtime_error("publication conflict: version " + version_ + " already exists with different content");
+        }
+        if (response_code == 400) {
+            throw std::runtime_error("publication request rejected: " + response.bytes);
+        }
+        if (response_code < 200 || response_code >= 300) {
+            throw std::runtime_error("HTTPS publication returned status " + std::to_string(response_code) + ": " + response.bytes);
+        }
+        
+        return response.bytes;
+    }
+
+private:
+    std::string url_;
+    std::string auth_token_;
+    std::string namespace_id_;
+    std::string package_name_;
+    std::string version_;
+    std::string content_sha256_;
+    std::string artifact_sha256_;
+    std::string artifact_body_;
+    std::size_t response_limit_;
+};
+
+// Simplified version using PUT for artifact upload after initial POST
+// This is a more practical approach: POST metadata, then PUT artifact
+
+class HttpsPublishClientV2 {
+public:
+    HttpsPublishClientV2(const std::string& base_url,
+                          const std::string& auth_token,
+                          const std::string& namespace_id,
+                          const std::string& package_name,
+                          const std::string& version,
+                          const std::string& content_sha256,
+                          const std::string& artifact_sha256,
+                          const std::string& artifact_body,
+                          std::size_t response_limit)
+        : base_url_(base_url)
+        , auth_token_(auth_token)
+        , namespace_id_(namespace_id)
+        , package_name_(package_name)
+        , version_(version)
+        , content_sha256_(content_sha256)
+        , artifact_sha256_(artifact_sha256)
+        , artifact_body_(artifact_body)
+        , response_limit_(response_limit) {}
+
+    PublicationReceipt execute() {
+        static const CURLcode initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
+        if (initialized != CURLE_OK) {
+            throw std::runtime_error("cannot initialize HTTPS registry transport");
+        }
+
+        // Step 1: POST publication request with metadata
+        std::ostringstream body;
+        body << "{";
+        body << "\"namespace\":\"" << namespace_id_ << "\",";
+        body << "\"package\":\"" << package_name_ << "\",";
+        body << "\"version\":\"" << version_ << "\",";
+        body << "\"content_sha256\":\"" << content_sha256_ << "\",";
+        body << "\"artifact_sha256\":\"" << artifact_sha256_ << "\"";
+        body << "}";
+        
+        std::string body_str = body.str();
+        std::string publish_url = base_url_ + "/v1/publish";
+        
+        CURL* handle = curl_easy_init();
+        if (!handle) {
+            throw std::runtime_error("cannot initialize HTTPS registry request");
+        }
+
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, ("Authorization: Bearer " + auth_token_).c_str());
+        headers = curl_slist_append(headers, ("X-Emojineer-Namespace: " + namespace_id_).c_str());
+        headers = curl_slist_append(headers, "Accept: application/json");
+        
+        CurlBuffer response{{}, response_limit_, false};
+        
+        curl_easy_setopt(handle, CURLOPT_URL, publish_url.c_str());
+        curl_easy_setopt(handle, CURLOPT_POST, 1L);
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body_str.c_str());
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, body_str.size());
+        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_write);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response);
+        
+        // Security settings
+        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L);
+        curl_easy_setopt(handle, CURLOPT_TIMEOUT, 60L);
+        curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
+        
+#if LIBCURL_VERSION_NUM >= 0x075500
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
+#else
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+
+        const CURLcode result = curl_easy_perform(handle);
+        long response_code = 0;
+        curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
+        curl_slist_free_all(headers);
+        
+        if (response.exceeded) {
+            curl_easy_cleanup(handle);
+            throw std::runtime_error("publication response exceeds size limit");
+        }
+        if (result != CURLE_OK) {
+            curl_easy_cleanup(handle);
+            throw std::runtime_error("HTTPS publication request failed: " + std::string(curl_easy_strerror(result)));
+        }
+        
+        std::string response_bytes = response.bytes;
+        curl_easy_cleanup(handle);
+        
+        // Check response code
+        if (response_code == 401) {
+            throw std::runtime_error("publication authentication failed: invalid or missing credential");
+        }
+        if (response_code == 403) {
+            throw std::runtime_error("publication authorization failed: namespace '" + namespace_id_ + "' not owned by credential");
+        }
+        if (response_code == 409) {
+            throw std::runtime_error("publication conflict: version " + version_ + " already exists with different content");
+        }
+        if (response_code == 400) {
+            throw std::runtime_error("publication request rejected: " + response_bytes);
+        }
+        if (response_code < 200 || response_code >= 300) {
+            throw std::runtime_error("HTTPS publication returned status " + std::to_string(response_code) + ": " + response_bytes);
+        }
+        
+        // Parse receipt from response
+        return parse_publication_receipt(response_bytes);
+    }
+
+private:
+    std::string base_url_;
+    std::string auth_token_;
+    std::string namespace_id_;
+    std::string package_name_;
+    std::string version_;
+    std::string content_sha256_;
+    std::string artifact_sha256_;
+    std::string artifact_body_;
+    std::size_t response_limit_;
+};
+
+#endif // EMOJINEER_HAVE_CURL
+
+// Authenticated HTTPS publication
+PublicationReceipt publish_package_to_https_registry(
+    const std::filesystem::path& package_root,
+    const RegistryEndpoint& endpoint,
+    const RegistryPublishCredential& credential) {
+    
+    if (endpoint.kind != RegistryTransportKind::Https) {
+        throw std::runtime_error("authenticated publication requires HTTPS endpoint");
+    }
+    
+#if defined(EMOJINEER_HAVE_CURL)
+    // Build the package artifact
+    const auto bytes = build_package_artifact_bytes(package_root);
+    const auto artifact = parse_package_artifact(bytes);
+    
+    // Validate artifact
+    validate_record({artifact.version, artifact.content_sha256, artifact.artifact_sha256});
+    
+    // Use the new client to publish
+    constexpr std::size_t max_response_size = 16 * 1024;
+    HttpsPublishClientV2 client(
+        endpoint.canonical,
+        credential.token,
+        credential.namespace_id,
+        artifact.name,
+        artifact.version,
+        artifact.content_sha256,
+        artifact.artifact_sha256,
+        bytes,
+        max_response_size
+    );
+    
+    PublicationReceipt receipt = client.execute();
+    
+    // Verify receipt matches our expectations
+    verify_publication_receipt(
+        receipt,
+        "",  // Registry ID will be verified by the server identity
+        artifact.name,
+        artifact.version,
+        artifact.content_sha256,
+        artifact.artifact_sha256
+    );
+    
+    return receipt;
+#else
+    (void)package_root;
+    (void)endpoint;
+    (void)credential;
+    throw std::runtime_error("HTTPS publication requires libcurl support (not built)");
 #endif
 }
 
