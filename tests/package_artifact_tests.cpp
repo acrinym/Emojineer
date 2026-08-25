@@ -207,14 +207,14 @@ void test_artifact_size_bound_enforced_before_read() {
     // Create a file that exceeds the 128 MiB limit using sparse file / seek to avoid
     // unnecessary giant in-memory allocation
     std::ofstream fake(artifact_path, std::ios::binary | std::ios::trunc);
-    require(fake, "should be able to create test file");
+    require(static_cast<bool>(fake), "should be able to create test file");
     // Write magic
     fake << "EMJPKG1\n";
     fake.close();
 
     // Use seek to create a sparse file larger than 128 MiB without allocating blocks
     std::fstream sparse(artifact_path, std::ios::binary | std::ios::in | std::ios::out);
-    require(sparse, "should be able to open test file for sparse write");
+    require(static_cast<bool>(sparse), "should be able to open test file for sparse write");
     sparse.seekp(128ull * 1024ull * 1024ull, std::ios::beg);
     sparse.put('x');
     sparse.close();

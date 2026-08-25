@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -21,6 +22,14 @@
 #include <curl/curl.h>
 #endif
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 namespace emojineer {
 namespace {
 
@@ -29,6 +38,61 @@ constexpr std::uintmax_t max_index_bytes = 4 * 1024 * 1024;
 constexpr std::uintmax_t max_artifact_bytes = 128ull * 1024ull * 1024ull;
 constexpr std::string_view registry_magic = "EMJREGISTRY1\n";
 constexpr std::string_view index_magic = "EMJREGPKG1\n";
+
+// Package-scoped interprocess lock for serializing package-index publication
+class PackageLock {
+public:
+    explicit PackageLock(const std::filesystem::path& lock_path)
+        : lock_path_(lock_path), fd_(-1) {
+        std::filesystem::create_directories(lock_path_.parent_path());
+#if defined(_WIN32)
+        HANDLE handle = CreateFileW(lock_path_.c_str(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            throw std::runtime_error("cannot create registry lock file");
+        }
+        fd_ = reinterpret_cast<intptr_t>(handle);
+        if (!LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, nullptr)) {
+            CloseHandle(handle);
+            throw std::runtime_error("cannot acquire registry lock");
+        }
+#else
+        fd_ = open(lock_path_.c_str(), O_CREAT | O_RDWR, 0666);
+        if (fd_ < 0) {
+            throw std::runtime_error("cannot create registry lock file");
+        }
+        if (flock(fd_, LOCK_EX) != 0) {
+            close(fd_);
+            throw std::runtime_error("cannot acquire registry lock");
+        }
+#endif
+    }
+
+    ~PackageLock() {
+#if defined(_WIN32)
+        if (fd_ >= 0) {
+            UnlockFileEx(reinterpret_cast<HANDLE>(fd_), 0, 1, 0, nullptr);
+            CloseHandle(reinterpret_cast<HANDLE>(fd_));
+        }
+#else
+        if (fd_ >= 0) {
+            flock(fd_, LOCK_UN);
+            close(fd_);
+        }
+#endif
+        std::error_code ignored;
+        std::filesystem::remove(lock_path_, ignored);
+    }
+
+    PackageLock(const PackageLock&) = delete;
+    PackageLock& operator=(const PackageLock&) = delete;
+
+private:
+    std::filesystem::path lock_path_;
+    int fd_;
+};
 
 bool valid_portable_name(std::string_view value, bool allow_dot = false) {
     if (value.empty()) return false;
@@ -73,30 +137,52 @@ std::string read_bounded_file(const std::filesystem::path& path, std::uintmax_t 
     if (size > limit) throw std::runtime_error("registry response exceeds format size limit");
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot open registry file '" + path.string() + "'");
-    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    std::string result;
+    result.reserve(static_cast<std::size_t>(std::min(size, limit)));
+    std::uintmax_t remaining = limit;
+    char buffer[4096];
+    while (remaining > 0 && input) {
+        input.read(buffer, static_cast<std::streamsize>(std::min(remaining, static_cast<std::uintmax_t>(sizeof(buffer)))));
+        const auto got = input.gcount();
+        if (got <= 0) break;
+        result.append(buffer, static_cast<std::size_t>(got));
+        remaining -= static_cast<std::uintmax_t>(got);
+    }
+    if (input.fail() && !input.eof()) {
+        throw std::runtime_error("error reading registry file '" + path.string() + "'");
+    }
+    if (result.size() > limit) {
+        throw std::runtime_error("registry response exceeds format size limit");
+    }
+    return result;
 }
 
 void write_atomic_file(const std::filesystem::path& path, std::string_view data) {
     std::filesystem::create_directories(path.parent_path());
+    // Generate unique temp file name using random suffix to avoid collisions
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(0, 15);
+    std::string suffix;
+    for (int i = 0; i < 16; ++i) {
+        suffix += "0123456789abcdef"[dis(gen)];
+    }
     auto temp = path;
-    temp += ".tmp";
+    temp += ".tmp.";
+    temp += suffix;
     {
         std::ofstream output(temp, std::ios::binary | std::ios::trunc);
         if (!output) throw std::runtime_error("cannot write registry file '" + temp.string() + "'");
         output.write(data.data(), static_cast<std::streamsize>(data.size()));
         if (!output) throw std::runtime_error("failed while writing registry file '" + temp.string() + "'");
+        output.flush();
+        if (!output) throw std::runtime_error("failed while flushing registry file '" + temp.string() + "'");
     }
     std::error_code error;
     std::filesystem::rename(temp, path, error);
     if (error) {
-        error.clear();
-        std::filesystem::remove(path, error);
-        error.clear();
-        std::filesystem::rename(temp, path, error);
-        if (error) {
-            std::filesystem::remove(temp);
-            throw std::runtime_error("cannot commit registry file '" + path.string() + "'");
-        }
+        std::filesystem::remove(temp, error);
+        throw std::runtime_error("cannot commit registry file '" + path.string() + "': " + error.message());
     }
 }
 
@@ -363,6 +449,9 @@ void initialize_file_registry(const std::filesystem::path& raw_root,
                               const std::string& registry_id) {
     validate_registry_id(registry_id);
     const auto endpoint = parse_registry_endpoint(raw_root.string());
+    if (endpoint.kind != RegistryTransportKind::File) {
+        throw std::runtime_error("initialize_file_registry requires a file endpoint, not " + endpoint.canonical);
+    }
     const auto descriptor = endpoint.file_root / "v1/registry.txt";
     if (std::filesystem::exists(descriptor)) {
         const auto existing = parse_registry_descriptor(read_bounded_file(descriptor, max_descriptor_bytes));
@@ -454,6 +543,11 @@ RegistryPublishResult publish_package_to_registry(const std::filesystem::path& p
         write_atomic_file(artifact_path, bytes);
     }
 
+    // Acquire package-scoped interprocess lock for index serialization
+    const auto lock_path = endpoint.file_root / "v1/packages" / (artifact.name + ".lock");
+    PackageLock lock(lock_path);
+
+    // Reload and revalidate under lock
     const auto index_path = endpoint.file_root / relative_resource_path(index_resource(artifact.name));
     RegistryPackageIndex index{identity, artifact.name, {}};
     if (std::filesystem::exists(index_path)) {
