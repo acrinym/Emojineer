@@ -23,13 +23,6 @@
 namespace emojineer {
 namespace {
 
-// Public read_text for tests
-std::string read_text_standalone(const std::filesystem::path& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
-    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-}
-
 std::string read_text(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
@@ -116,6 +109,57 @@ void validate_dependency_path(const std::filesystem::path& path, const std::stri
     }
 }
 
+std::uint64_t fnv1a64(std::string_view text) {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (unsigned char byte : text) {
+        hash ^= byte;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+std::vector<ProjectDependency> sorted_dependencies(const ProjectManifest& manifest) {
+    auto dependencies = manifest.dependencies;
+    std::sort(dependencies.begin(), dependencies.end(),
+              [](const ProjectDependency& left, const ProjectDependency& right) {
+                  return left.name < right.name;
+              });
+    return dependencies;
+}
+
+void write_manifest(const std::filesystem::path& root, const ProjectManifest& manifest) {
+    write_text(root / "emojineer.toml", canonical_manifest_text(manifest));
+}
+
+std::string joined_dependencies(const std::vector<std::string>& dependencies) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < dependencies.size(); ++i) {
+        if (i != 0) out << ',';
+        out << dependencies[i];
+    }
+    return out.str();
+}
+
+std::string relative_package_path(const std::filesystem::path& root,
+                                  const std::filesystem::path& package_root) {
+    std::error_code error;
+    auto relative = std::filesystem::relative(package_root, root, error);
+    if (error || relative.empty()) {
+        throw std::runtime_error("cannot express dependency package path relative to project root");
+    }
+    return relative.generic_string();
+}
+
+} // namespace
+
+// Public read_text for tests
+std::string read_text_standalone(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+// Public validate_manifest function
 void validate_manifest(const ProjectManifest& manifest) {
     validate_name(manifest.name);
     validate_version(manifest.version);
@@ -161,49 +205,6 @@ void validate_manifest(const ProjectManifest& manifest) {
         }
     }
 }
-
-std::uint64_t fnv1a64(std::string_view text) {
-    std::uint64_t hash = 14695981039346656037ull;
-    for (unsigned char byte : text) {
-        hash ^= byte;
-        hash *= 1099511628211ull;
-    }
-    return hash;
-}
-
-std::vector<ProjectDependency> sorted_dependencies(const ProjectManifest& manifest) {
-    auto dependencies = manifest.dependencies;
-    std::sort(dependencies.begin(), dependencies.end(),
-              [](const ProjectDependency& left, const ProjectDependency& right) {
-                  return left.name < right.name;
-              });
-    return dependencies;
-}
-
-void write_manifest(const std::filesystem::path& root, const ProjectManifest& manifest) {
-    write_text(root / "emojineer.toml", canonical_manifest_text(manifest));
-}
-
-std::string joined_dependencies(const std::vector<std::string>& dependencies) {
-    std::ostringstream out;
-    for (std::size_t i = 0; i < dependencies.size(); ++i) {
-        if (i != 0) out << ',';
-        out << dependencies[i];
-    }
-    return out.str();
-}
-
-std::string relative_package_path(const std::filesystem::path& root,
-                                  const std::filesystem::path& package_root) {
-    std::error_code error;
-    auto relative = std::filesystem::relative(package_root, root, error);
-    if (error || relative.empty()) {
-        throw std::runtime_error("cannot express dependency package path relative to project root");
-    }
-    return relative.generic_string();
-}
-
-} // namespace
 
 ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path) {
     std::istringstream input(read_text(manifest_path));
@@ -555,6 +556,14 @@ void sync_project(const std::filesystem::path& root, bool offline) {
     sync_project(root, {}, offline);
 }
 
+// Forward declaration for recursive resolution
+std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
+    const ProjectManifest& manifest,
+    const std::filesystem::path& store_root,
+    bool offline,
+    std::unordered_map<std::string, ResolvedRegistryDependency>& resolved,
+    std::unordered_set<std::string>& resolving);
+
 // Public resolve_registry_dependencies wrapper
 std::vector<ResolvedRegistryDependency> resolve_registry_dependencies(
     const ProjectManifest& manifest,
@@ -805,7 +814,7 @@ std::string canonical_lock_text(const ProjectLock& lock) {
             if (dep.registry_endpoint) out << "registry_endpoint = \"" << *dep.registry_endpoint << "\"\n";
             if (dep.requirement) out << "requirement = \"" << *dep.requirement << "\"\n";
             if (dep.artifact_sha256) out << "artifact_sha256 = \"" << *dep.artifact_sha256 << "\"\n";
-            if (dep.store_path) out << "store_path = \"" << dep.store_path->generic_string() << "\"\n";
+            if (dep.store_path) out << "store_path = \"" << *dep.store_path << "\"\n";
         }
         
         out << "dependencies = \"" << joined_dependencies(dep.dependencies) << "\"\n";
@@ -841,7 +850,7 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
             auto eq = line.find('=');
             if (eq != std::string::npos) {
                 auto key = trim(line.substr(0, eq));
-                auto value = trim(parse_quoted(line, 1));
+                auto value = trim(parse_quoted(line.substr(eq + 1), 1));
                 if (key == "alias") current_reg->alias = value;
                 else if (key == "id") current_reg->id = value;
                 else if (key == "endpoint") current_reg->endpoint = value;
@@ -850,7 +859,7 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
             auto eq = line.find('=');
             if (eq != std::string::npos) {
                 auto key = trim(line.substr(0, eq));
-                auto value = trim(parse_quoted(line, 1));
+                auto value = trim(parse_quoted(line.substr(eq + 1), 1));
                 if (key == "source") {
                     current_dep->source = (value == "registry") ? LockSourceKind::Registry : LockSourceKind::Path;
                 } else if (key == "name") current_dep->name = value;
@@ -881,7 +890,7 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
         } else if (line.find("manifest_hash") != std::string::npos) {
             auto eq = line.find('=');
             if (eq != std::string::npos) {
-                lock.manifest_hash = trim(parse_quoted(line, 1));
+                lock.manifest_hash = trim(parse_quoted(line.substr(eq + 1), 1));
             }
         }
     }
@@ -1006,21 +1015,21 @@ ResolvedRegistryDependency resolve_single_registry_dependency(
     
     // Select deterministic version
     auto selected_version = select_deterministic_version(name, {std::string(requirement)}, available_versions);
-    if (!selected_version) {
+    if (selected_version.empty()) {
         throw std::runtime_error("no matching version for " + name + "@" + std::string(requirement));
     }
     
     // Find the record
     RegistryVersionRecord record;
     for (const auto& r : index.versions) {
-        if (r.version == *selected_version) {
+        if (r.version == selected_version) {
             record = r;
             break;
         }
     }
     
     // Fetch the package
-    auto fetch_result = fetch_registry_package(endpoint, name, *selected_version, {});
+    auto fetch_result = fetch_registry_package(endpoint, name, selected_version, {});
     
     // Determine store path
     auto store_root = default_registry_cache_root();

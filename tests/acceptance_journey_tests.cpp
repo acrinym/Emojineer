@@ -42,6 +42,7 @@ void test_publish_library_versions() {
     
     // Create version 1.0.0
     write_text(lib_root / "emojineer.toml",
+        "[package]\n"
         "name = \"mathkit\"\n"
         "version = \"1.0.0\"\n"
         "entry = \"src/math.emoji\"\n");
@@ -59,6 +60,7 @@ void test_publish_library_versions() {
     
     // Update to version 1.1.0 and publish again
     write_text(lib_root / "emojineer.toml",
+        "[package]\n"
         "name = \"mathkit\"\n"
         "version = \"1.1.0\"\n"
         "entry = \"src/math.emoji\"\n");
@@ -91,6 +93,7 @@ void test_publish_library_with_dependency() {
     const auto mathkit_root = temp_root("mathkit");
     std::filesystem::create_directories(mathkit_root);
     write_text(mathkit_root / "emojineer.toml",
+        "[package]\n"
         "name = \"mathkit\"\n"
         "version = \"1.0.0\"\n"
         "entry = \"src/math.emoji\"\n");
@@ -102,6 +105,7 @@ void test_publish_library_with_dependency() {
     const auto calckit_root = temp_root("calckit");
     std::filesystem::create_directories(calckit_root);
     write_text(calckit_root / "emojineer.toml",
+        "[package]\n"
         "name = \"calckit\"\n"
         "version = \"2.0.0\"\n"
         "entry = \"src/calc.emoji\"\n"
@@ -147,6 +151,7 @@ void test_add_remote_dependency() {
     const auto lib_root = temp_root("utils");
     std::filesystem::create_directories(lib_root);
     write_text(lib_root / "emojineer.toml",
+        "[package]\n"
         "name = \"utils\"\n"
         "version = \"1.0.0\"\n"
         "entry = \"src/utils.emoji\"\n");
@@ -194,6 +199,7 @@ void test_sync_creates_lock_v3() {
     const auto lib_root = temp_root("lib-sync");
     std::filesystem::create_directories(lib_root);
     write_text(lib_root / "emojineer.toml",
+        "[package]\n"
         "name = \"lib\"\n"
         "version = \"1.0.0\"\n"
         "entry = \"src/lib.emoji\"\n");
@@ -241,6 +247,7 @@ void test_deterministic_version_selection() {
     
     for (const auto& ver : {"1.0.0", "1.1.0", "2.0.0"}) {
         write_text(lib_root / "emojineer.toml",
+            "[package]\n"
             "name = \"lib\"\n"
             "version = \"" + std::string(ver) + "\"\n"
             "entry = \"src/lib.emoji\"\n");
@@ -260,9 +267,10 @@ void test_deterministic_version_selection() {
         {"1.0.0", "1.1.0", "2.0.0"});
     require(selected == "2.0.0", "^2.0.0 should select 2.0.0, got " + selected);
     
-    // Test conflict detection
+    // Test conflict detection - use caret ranges that create real conflict
+    // ^1.0.0 allows 1.x but not 2.x, ^2.0.0 allows 2.x but not 1.x
     auto conflict = emojineer::detect_version_conflict("lib", 
-        {">=2.0.0", "<2.0.0"}, {"1.0.0", "1.1.0", "2.0.0"});
+        {"^1.0.0", "^2.0.0"}, {"1.0.0", "1.1.0", "2.0.0"});
     require(conflict.has_value(), "conflict should be detected for incompatible requirements");
     
     // Cleanup
@@ -292,6 +300,7 @@ void test_stale_lock_detection() {
     
     // After modifying manifest, lock should be stale
     write_text(app_root / "emojineer.toml",
+        "[package]\n"
         "name = \"app\"\n"
         "version = \"0.2.0\"\n"
         "entry = \"src/main.emoji\"\n");
@@ -327,8 +336,9 @@ void test_version_conflict_error() {
     std::cout << "Test: version conflict error message...\n";
     
     // Test that select_deterministic_version throws on conflict
+    // Use caret ranges that conflict: ^1.0.0 and ^2.0.0 can't both be satisfied
     try {
-        emojineer::select_deterministic_version("pkg", {">2.0.0", "<1.0.0"}, 
+        emojineer::select_deterministic_version("pkg", {"^1.0.0", "^2.0.0"}, 
             {"1.0.0", "2.0.0"});
         require(false, "should have thrown on conflict");
     } catch (const std::exception& e) {

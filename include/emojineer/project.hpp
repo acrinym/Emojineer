@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include "emojineer/registry_transport.hpp"
+
 namespace emojineer {
 
 struct ProjectRegistry {
@@ -85,6 +87,7 @@ enum class SyncMode {
 ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path);
 void initialize_project(const std::filesystem::path& root, const std::string& name);
 std::vector<ProjectDiagnostic> check_project(const std::filesystem::path& root);
+void validate_manifest(const ProjectManifest& manifest);
 std::string canonical_manifest_text(const ProjectManifest& manifest);
 std::string project_manifest_hash(const ProjectManifest& manifest);
 std::string canonical_project_lock(const std::filesystem::path& root,
