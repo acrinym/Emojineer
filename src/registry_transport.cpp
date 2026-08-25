@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cerrno>
 #include <cstdint>
+#include <ctime>
 #include <limits>
 #include <cstdlib>
 #include <cstring>
@@ -878,13 +879,16 @@ std::string render_publication_receipt(const PublicationReceipt& receipt) {
 }
 
 // Verify receipt matches expected values before reporting success
+// Note: expected_registry_id can be empty to skip the check (registry ID verification
+// may be done separately in the client before any credentialed write)
 void verify_publication_receipt(const PublicationReceipt& receipt,
                                  const std::string& expected_registry_id,
                                  const std::string& expected_package_name,
                                  const std::string& expected_version,
                                  const std::string& expected_content_sha256,
                                  const std::string& expected_artifact_sha256) {
-    if (receipt.registry_id != expected_registry_id) {
+    // Skip registry_id check if expected value is empty (client verifies separately)
+    if (!expected_registry_id.empty() && receipt.registry_id != expected_registry_id) {
         throw std::runtime_error("receipt registry_id mismatch: expected " + expected_registry_id + ", got " + receipt.registry_id);
     }
     if (receipt.package_name != expected_package_name) {
@@ -913,139 +917,28 @@ void save_receipt_file(const std::filesystem::path& path, const PublicationRecei
 
 #if defined(EMOJINEER_HAVE_CURL)
 
-// Helper class for HTTPS POST with authentication
-class HttpsPublishClient {
-public:
-    HttpsPublishClient(const std::string& url,
-                      const std::string& auth_token,
-                      const std::string& namespace_id,
-                      const std::string& package_name,
-                      const std::string& version,
-                      const std::string& content_sha256,
-                      const std::string& artifact_sha256,
-                      const std::string& artifact_body,
-                      std::size_t response_limit)
-        : url_(url)
-        , auth_token_(auth_token)
-        , namespace_id_(namespace_id)
-        , package_name_(package_name)
-        , version_(version)
-        , content_sha256_(content_sha256)
-        , artifact_sha256_(artifact_sha256)
-        , artifact_body_(artifact_body)
-        , response_limit_(response_limit) {}
-
-    std::string execute() {
-        static const CURLcode initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
-        if (initialized != CURLE_OK) {
-            throw std::runtime_error("cannot initialize HTTPS registry transport");
-        }
-
-        CURL* handle = curl_easy_init();
-        if (!handle) {
-            throw std::runtime_error("cannot initialize HTTPS registry request");
-        }
-
-        // Build the authenticated publication request
-        // POST to /v1/publish with JSON body containing package metadata
-        // Artifact is sent as raw binary in the request body
-        
-        std::ostringstream body;
-        body << "{";
-        body << "\"namespace\":\"" << namespace_id_ << "\",";
-        body << "\"package\":\"" << package_name_ << "\",";
-        body << "\"version\":\"" << version_ << "\",";
-        body << "\"content_sha256\":\"" << content_sha256_ << "\",";
-        body << "\"artifact_sha256\":\"" << artifact_sha256_ << "\"";
-        body << "}";
-        
-        std::string body_str = body.str();
-        
-        // Set up headers
-        struct curl_slist* headers = nullptr;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        headers = curl_slist_append(headers, ("Authorization: Bearer " + auth_token_).c_str());
-        headers = curl_slist_append(headers, ("X-Emojineer-Namespace: " + namespace_id_).c_str());
-        
-        // Set up response buffer
-        CurlBuffer response{{}, response_limit_, false};
-        
-        curl_easy_setopt(handle, CURLOPT_URL, url_.c_str());
-        curl_easy_setopt(handle, CURLOPT_POST, 1L);
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body_str.c_str());
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, body_str.size());
-        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_write);
-        curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response);
-        
-        // Security: no redirects, TLS verification, timeouts
-        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
-        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);
-        curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L);
-        curl_easy_setopt(handle, CURLOPT_TIMEOUT, 60L);
-        curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
-        
-        // Restrict to HTTPS only
-#if LIBCURL_VERSION_NUM >= 0x075500
-        curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
-#else
-        curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
-#endif
-
-        // Also upload the artifact as a second request (or multipart)
-        // For simplicity, we include artifact SHA-256 in request and let server fetch
-        // or we could use a different approach - sending artifact inline
-        
-        const CURLcode result = curl_easy_perform(handle);
-        long response_code = 0;
-        curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(handle);
-        
-        if (response.exceeded) {
-            throw std::runtime_error("publication response exceeds size limit");
-        }
-        if (result != CURLE_OK) {
-            throw std::runtime_error("HTTPS publication request failed: " + std::string(curl_easy_strerror(result)));
-        }
-        
-        // Check response code
-        if (response_code == 401) {
-            throw std::runtime_error("publication authentication failed: invalid or missing credential");
-        }
-        if (response_code == 403) {
-            throw std::runtime_error("publication authorization failed: namespace '" + namespace_id_ + "' not owned by credential");
-        }
-        if (response_code == 409) {
-            throw std::runtime_error("publication conflict: version " + version_ + " already exists with different content");
-        }
-        if (response_code == 400) {
-            throw std::runtime_error("publication request rejected: " + response.bytes);
-        }
-        if (response_code < 200 || response_code >= 300) {
-            throw std::runtime_error("HTTPS publication returned status " + std::to_string(response_code) + ": " + response.bytes);
-        }
-        
-        return response.bytes;
+// Helper to sanitize error messages - redact potential secrets from server responses
+// Never include untrusted server response bodies verbatim in auth/protocol error diagnostics
+std::string sanitize_error_response(std::string_view response, bool is_auth_error) {
+    if (is_auth_error) {
+        // For auth errors, don't include server response at all - it could reflect bearer tokens
+        return "[redacted for security]";
     }
+    // For non-auth errors, truncate to first 200 chars to avoid dumping large responses
+    if (response.size() > 200) {
+        return std::string(response.substr(0, 200)) + "... [truncated]";
+    }
+    return std::string(response);
+}
 
-private:
-    std::string url_;
-    std::string auth_token_;
-    std::string namespace_id_;
-    std::string package_name_;
-    std::string version_;
-    std::string content_sha256_;
-    std::string artifact_sha256_;
-    std::string artifact_body_;
-    std::size_t response_limit_;
-};
+// Versioned protocol media types
+constexpr std::string_view metadata_media_type = "application/vnd.emojineer.publication.metadata.v1+json";
+constexpr std::string_view artifact_media_type = "application/vnd.emojineer.package.v1+octet-stream";
+constexpr std::string_view receipt_media_type = "application/vnd.emojineer.publication.receipt.v1+json";
+constexpr std::string_view identity_media_type = "application/vnd.emojineer.registry.identity.v1+json";
 
-// Simplified version using PUT for artifact upload after initial POST
-// This is a more practical approach: POST metadata, then PUT artifact
-
+// Authenticated HTTPS publication client using single bounded multipart request
+// Protocol: POST /v1/publish with multipart/form-data containing metadata + artifact
 class HttpsPublishClientV2 {
 public:
     HttpsPublishClientV2(const std::string& base_url,
@@ -1067,23 +960,105 @@ public:
         , artifact_body_(artifact_body)
         , response_limit_(response_limit) {}
 
+    // First verify registry identity before any credentialed write
+    std::string verify_registry_identity() {
+        std::string identity_url = base_url_ + "/v1/identity";
+        
+        CURL* handle = curl_easy_init();
+        if (!handle) {
+            throw std::runtime_error("cannot initialize HTTPS registry request");
+        }
+        
+        CurlBuffer response{{}, 4096, false};  // Small limit for identity response
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, ("Accept: " + std::string(identity_media_type)).c_str());
+        
+        curl_easy_setopt(handle, CURLOPT_URL, identity_url.c_str());
+        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_write);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response);
+        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L);
+        curl_easy_setopt(handle, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
+#if LIBCURL_VERSION_NUM >= 0x075500
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
+#else
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+        
+        const CURLcode result = curl_easy_perform(handle);
+        long response_code = 0;
+        curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(handle);
+        
+        if (result != CURLE_OK) {
+            throw std::runtime_error("registry identity verification failed: " + std::string(curl_easy_strerror(result)));
+        }
+        if (response_code != 200) {
+            throw std::runtime_error("registry identity endpoint returned status " + std::to_string(response_code));
+        }
+        if (response.exceeded) {
+            throw std::runtime_error("registry identity response exceeds size limit");
+        }
+        
+        // Parse {"registry_id":"..."} from response
+        return extract_string(response.bytes, "registry_id");
+    }
+
     PublicationReceipt execute() {
         static const CURLcode initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
         if (initialized != CURLE_OK) {
             throw std::runtime_error("cannot initialize HTTPS registry transport");
         }
 
-        // Step 1: POST publication request with metadata
-        std::ostringstream body;
-        body << "{";
-        body << "\"namespace\":\"" << namespace_id_ << "\",";
-        body << "\"package\":\"" << package_name_ << "\",";
-        body << "\"version\":\"" << version_ << "\",";
-        body << "\"content_sha256\":\"" << content_sha256_ << "\",";
-        body << "\"artifact_sha256\":\"" << artifact_sha256_ << "\"";
-        body << "}";
+        // Step 1: Verify registry identity BEFORE any credentialed write
+        std::string verified_registry_id = verify_registry_identity();
         
-        std::string body_str = body.str();
+        // Bound the request body - artifact size + metadata overhead
+        constexpr std::uintmax_t max_artifact_size = 128ULL * 1024ULL * 1024ULL;  // 128MB
+        if (artifact_body_.size() > max_artifact_size) {
+            throw std::runtime_error("artifact size exceeds maximum allowed (" + std::to_string(max_artifact_size) + " bytes)");
+        }
+
+        // Step 2: Build multipart request with metadata + artifact
+        // Generate unique boundary
+        std::string boundary = "----EmjPubBoundary";
+        boundary += std::to_string(static_cast<std::uint64_t>(std::time(nullptr)));
+        boundary += ".";
+        boundary += std::to_string(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(this)));
+        
+        // Build multipart body
+        std::string multipart_body;
+        multipart_body.reserve(1024 + artifact_body_.size());
+        
+        // Part 1: metadata JSON
+        multipart_body += "--" + boundary + "\r\n";
+        multipart_body += "Content-Type: " + std::string(metadata_media_type) + "\r\n";
+        multipart_body += "Content-Disposition: form-data; name=\"metadata\"\r\n\r\n";
+        multipart_body += "{";
+        multipart_body += "\"namespace\":\"" + namespace_id_ + "\",";
+        multipart_body += "\"package\":\"" + package_name_ + "\",";
+        multipart_body += "\"version\":\"" + version_ + "\",";
+        multipart_body += "\"content_sha256\":\"" + content_sha256_ + "\",";
+        multipart_body += "\"artifact_sha256\":\"" + artifact_sha256_ + "\"";
+        multipart_body += "}\r\n";
+        
+        // Part 2: artifact binary
+        multipart_body += "--" + boundary + "\r\n";
+        multipart_body += "Content-Type: " + std::string(artifact_media_type) + "\r\n";
+        multipart_body += "Content-Disposition: form-data; name=\"artifact\"; filename=\"" + package_name_ + ".emjpkg\"\r\n\r\n";
+        multipart_body += artifact_body_;
+        multipart_body += "\r\n";
+        
+        // Final boundary
+        multipart_body += "--" + boundary + "--\r\n";
+        
+        std::string content_type = "multipart/form-data; boundary=" + boundary;
         std::string publish_url = base_url_ + "/v1/publish";
         
         CURL* handle = curl_easy_init();
@@ -1092,29 +1067,31 @@ public:
         }
 
         struct curl_slist* headers = nullptr;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
+        headers = curl_slist_append(headers, ("Content-Type: " + content_type).c_str());
         headers = curl_slist_append(headers, ("Authorization: Bearer " + auth_token_).c_str());
-        headers = curl_slist_append(headers, ("X-Emojineer-Namespace: " + namespace_id_).c_str());
-        headers = curl_slist_append(headers, "Accept: application/json");
+        headers = curl_slist_append(headers, ("Accept: " + std::string(receipt_media_type)).c_str());
         
         CurlBuffer response{{}, response_limit_, false};
         
         curl_easy_setopt(handle, CURLOPT_URL, publish_url.c_str());
         curl_easy_setopt(handle, CURLOPT_POST, 1L);
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, body_str.c_str());
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, body_str.size());
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, multipart_body.c_str());
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, multipart_body.size());
         curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
         curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_write);
         curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response);
         
-        // Security settings
+        // Security settings: no redirects, TLS verification, timeouts, bounded upload
         curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);
         curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);
         curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);
         curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, 10L);
-        curl_easy_setopt(handle, CURLOPT_TIMEOUT, 60L);
+        curl_easy_setopt(handle, CURLOPT_TIMEOUT, 300L);  // 5 min for large uploads
         curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
         curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
+        
+        // Bound request body size
+        curl_easy_setopt(handle, CURLOPT_MAXFILESIZE_LARGE, static_cast<curl_off_t>(max_artifact_size + 8192));
         
 #if LIBCURL_VERSION_NUM >= 0x075500
         curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
@@ -1139,7 +1116,7 @@ public:
         std::string response_bytes = response.bytes;
         curl_easy_cleanup(handle);
         
-        // Check response code
+        // Check response code - sanitize error messages to prevent secret leakage
         if (response_code == 401) {
             throw std::runtime_error("publication authentication failed: invalid or missing credential");
         }
@@ -1150,14 +1127,21 @@ public:
             throw std::runtime_error("publication conflict: version " + version_ + " already exists with different content");
         }
         if (response_code == 400) {
-            throw std::runtime_error("publication request rejected: " + response_bytes);
+            throw std::runtime_error("publication request rejected: " + sanitize_error_response(response_bytes, false));
         }
         if (response_code < 200 || response_code >= 300) {
-            throw std::runtime_error("HTTPS publication returned status " + std::to_string(response_code) + ": " + response_bytes);
+            throw std::runtime_error("HTTPS publication returned status " + std::to_string(response_code) + ": " + sanitize_error_response(response_bytes, false));
         }
         
         // Parse receipt from response
-        return parse_publication_receipt(response_bytes);
+        PublicationReceipt receipt = parse_publication_receipt(response_bytes);
+        
+        // Verify receipt matches verified registry identity
+        if (receipt.registry_id != verified_registry_id) {
+            throw std::runtime_error("receipt registry_id mismatch: expected " + verified_registry_id + ", got " + receipt.registry_id);
+        }
+        
+        return receipt;
     }
 
 private:
