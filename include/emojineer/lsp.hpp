@@ -3,6 +3,7 @@
 #include "emojineer/cer.hpp"
 #include "emojineer/project.hpp"
 
+#include <any>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -15,6 +16,12 @@
 #include <vector>
 
 namespace emojineer {
+
+// Forward declarations for ast
+namespace ast {
+struct Program;
+}
+
 namespace lsp {
 
 // Forward declarations
@@ -33,7 +40,6 @@ struct Range {
 };
 
 // JsonValue - using std::any for recursive types
-#include <any>
 
 struct JsonValue {
     std::any value;
@@ -42,6 +48,8 @@ struct JsonValue {
     JsonValue(std::nullptr_t v) : value(v) {}
     JsonValue(bool v) : value(v) {}
     JsonValue(double v) : value(v) {}
+    JsonValue(int v) : value(static_cast<double>(v)) {}  // Integers stored as double
+    JsonValue(unsigned int v) : value(static_cast<double>(v)) {}  // Unsigned integers
     JsonValue(const std::string& v) : value(v) {}
     JsonValue(const char* v) : value(std::string(v)) {}
     
@@ -62,7 +70,10 @@ struct JsonValue {
     T get() const { return std::any_cast<T>(value); }
     
     template<typename T>
-    T* getPtr() const { return std::any_cast<T>(&value); }
+    const T* getPtr() const { return std::any_cast<T>(&value); }
+    
+    template<typename T>
+    T* getPtr() { return std::any_cast<T>(&value); }
 };
 
 // Helper functions for JsonValue
@@ -124,7 +135,7 @@ struct TextDocumentEdit {
 
 struct Diagnostic {
     Range range;
-    int severity{0};  // 1=Error, 2=Warning, 3=Info, 4=Hint
+    int severity{0};  // 1=Error, 2=Warning, 3=Info, 4=Hint (LSP enum)
     std::string message;
     std::optional<std::string> source;
 };
@@ -139,9 +150,66 @@ struct Hover {
     std::optional<Range> range;
 };
 
+// LSP CompletionItemKind enum (numeric)
+enum class CompletionItemKind : int {
+    Text = 1,
+    Method = 2,
+    Function = 3,
+    Constructor = 4,
+    Field = 5,
+    Variable = 6,
+    Class = 7,
+    Interface = 8,
+    Module = 9,
+    Property = 10,
+    Unit = 11,
+    Value = 12,
+    Enum = 13,
+    Keyword = 14,
+    Snippet = 15,
+    Color = 16,
+    File = 17,
+    Reference = 18,
+    Folder = 19,
+    EnumMember = 20,
+    Constant = 21,
+    Struct = 22,
+    Event = 23,
+    Operator = 24,
+    TypeParameter = 25
+};
+
+// LSP SymbolKind enum (numeric)
+enum class SymbolKind : int {
+    File = 1,
+    Module = 2,
+    Namespace = 3,
+    Package = 4,
+    Class = 5,
+    Method = 6,
+    Property = 7,
+    Field = 8,
+    Constructor = 9,
+    Function = 10,
+    Variable = 11,
+    Constant = 12,
+    String = 13,
+    Number = 14,
+    Boolean = 15,
+    Array = 16,
+    Object = 17,
+    Key = 18,
+    Null = 19,
+    EnumMember = 20,
+    Struct = 21,
+    Event = 22,
+    Operator = 23,
+    TypeParameter = 24
+};
+
 struct CompletionItem {
     std::string label;
-    std::optional<std::string> kind;
+    std::optional<int> kind;  // Numeric LSP CompletionItemKind
     std::optional<std::string> detail;
     std::optional<std::string> documentation;
     std::optional<std::string> insertText;
@@ -155,14 +223,14 @@ struct CompletionList {
 
 struct SymbolInformation {
     std::string name;
-    std::optional<std::string> kind;  // "file", "module", "class", "function", "variable"
+    std::optional<int> kind;  // Numeric LSP SymbolKind
     Location location;
     std::optional<std::string> containerName;
 };
 
 struct DocumentSymbol {
     std::string name;
-    std::optional<std::string> kind;
+    std::optional<int> kind;  // Numeric LSP SymbolKind
     Range range;
     Range selectionRange;
     std::optional<std::string> detail;
@@ -316,11 +384,13 @@ private:
 // Utility functions
 std::string readFile(const std::filesystem::path& path);
 void writeFile(const std::filesystem::path& path, const std::string& content);
-JsonValue parseJson(const std::string& json);
-std::string toJson(const JsonValue& value);
+// parseJson and toJson are internal implementation details
+
 std::string formatJsonRpc(const std::string& method, const JsonValue& params, std::optional<int> id = std::nullopt);
 std::string formatJsonRpcResponse(const JsonValue& result, std::optional<int> id = std::nullopt);
 std::string formatJsonRpcError(int code, const std::string& message, std::optional<int> id = std::nullopt);
+std::string formatJsonRpcResponseStringId(const JsonValue& result, const std::string& id);
+std::string formatJsonRpcErrorStringId(int code, const std::string& message, const std::string& id);
 std::string formatNotification(const std::string& method, const JsonValue& params);
 
 }  // namespace lsp

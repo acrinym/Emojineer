@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -51,9 +52,17 @@ static std::vector<JsonValue> getJsonArray(const JsonValue& val) {
 
 namespace {
 
+// Forward declarations for parsing functions
+JsonValue parseJsonValue(const std::string& json, std::size_t& pos);
+
 // JSON parsing utilities
 void skipWhitespace(const std::string& json, std::size_t& pos) {
     while (pos < json.size() && std::isspace(json[pos])) pos++;
+}
+
+// Helper to decode a surrogate pair
+static char32_t decodeSurrogatePair(char16_t high, char16_t low) {
+    return 0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00);
 }
 
 std::string parseJsonString(const std::string& json, std::size_t& pos) {
@@ -69,6 +78,47 @@ std::string parseJsonString(const std::string& json, std::size_t& pos) {
                 case 'n': result += '\n'; break;
                 case 'r': result += '\r'; break;
                 case 't': result += '\t'; break;
+                case 'b': result += '\b'; break;
+                case 'f': result += '\f'; break;
+                case '/': result += '/'; break;
+                case 'u':
+                    // Handle \uXXXX escapes
+                    if (pos + 4 < json.size()) {
+                        std::string hex = json.substr(pos + 1, 4);
+                        char32_t codePoint = static_cast<char32_t>(std::stoul(hex, nullptr, 16));
+                        pos += 4;
+                        
+                        // Check for surrogate pair
+                        if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
+                            // High surrogate, expect \uXXXX low surrogate
+                            if (pos + 6 < json.size() && json[pos + 1] == '\\' && json[pos + 2] == 'u') {
+                                std::string lowHex = json.substr(pos + 3, 4);
+                                char32_t lowSurrogate = static_cast<char32_t>(std::stoul(lowHex, nullptr, 16));
+                                if (lowSurrogate >= 0xDC00 && lowSurrogate <= 0xDFFF) {
+                                    codePoint = decodeSurrogatePair(static_cast<char16_t>(codePoint), static_cast<char16_t>(lowSurrogate));
+                                    pos += 6;
+                                }
+                            }
+                        }
+                        
+                        // Encode as UTF-8
+                        if (codePoint < 0x80) {
+                            result += static_cast<char>(codePoint);
+                        } else if (codePoint < 0x800) {
+                            result += static_cast<char>(0xC0 | (codePoint >> 6));
+                            result += static_cast<char>(0x80 | (codePoint & 0x3F));
+                        } else if (codePoint < 0x10000) {
+                            result += static_cast<char>(0xE0 | (codePoint >> 12));
+                            result += static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F));
+                            result += static_cast<char>(0x80 | (codePoint & 0x3F));
+                        } else {
+                            result += static_cast<char>(0xF0 | (codePoint >> 18));
+                            result += static_cast<char>(0x80 | ((codePoint >> 12) & 0x3F));
+                            result += static_cast<char>(0x80 | ((codePoint >> 6) & 0x3F));
+                            result += static_cast<char>(0x80 | (codePoint & 0x3F));
+                        }
+                    }
+                    break;
                 default: result += json[pos]; break;
             }
         } else {
@@ -90,20 +140,40 @@ JsonValue parseJsonObject(const std::string& json, std::size_t& pos) {
         pos++;
         return obj;
     }
+    bool expectCommaOrEnd = false;
     while (pos < json.size()) {
         skipWhitespace(json, pos);
+        
+        if (expectCommaOrEnd) {
+            if (json[pos] == '}') {
+                pos++;
+                break;
+            }
+            if (json[pos] == ',') {
+                pos++;
+                expectCommaOrEnd = false;
+            } else {
+                throw std::runtime_error("expected ',' or '}'");
+            }
+            skipWhitespace(json, pos);
+        }
+        
+        // Parse key
         std::string key = parseJsonString(json, pos);
         skipWhitespace(json, pos);
-        if (pos < json.size() && json[pos] == ':') pos++;
+        
+        // Expect colon
+        if (pos >= json.size() || json[pos] != ':') {
+            throw std::runtime_error("expected ':' after object key");
+        }
+        pos++;
         skipWhitespace(json, pos);
+        
+        // Parse value
         JsonValue value = parseJsonValue(json, pos);
         json::objectSet(obj, key, value);
-        skipWhitespace(json, pos);
-        if (pos < json.size() && json[pos] == '}') {
-            pos++;
-            break;
-        }
-        if (pos < json.size() && json[pos] == ',') pos++;
+        
+        expectCommaOrEnd = true;
     }
     return obj;
 }
@@ -169,13 +239,55 @@ JsonValue parseJson(const std::string& json) {
 // JSON serialization
 void jsonValueToString(const JsonValue& value, std::ostringstream& out);
 
+// Helper to escape a Unicode code point as \uXXXX
+static void encodeUnicodeEscape(std::ostringstream& out, char32_t cp) {
+    if (cp < 0x10000) {
+        // BMP character - encode as \uXXXX
+        char16_t code = static_cast<char16_t>(cp);
+        out << "\\u" << std::hex << std::setfill('0') << std::setw(4) << static_cast<int>(code);
+    } else {
+        // Supplementary plane - encode as surrogate pair
+        char16_t high = static_cast<char16_t>((cp - 0x10000) >> 10) + 0xD800;
+        char16_t low = static_cast<char16_t>((cp - 0x10000) & 0x3FF) + 0xDC00;
+        out << "\\u" << std::hex << std::setfill('0') << std::setw(4) << static_cast<int>(high);
+        out << "\\u" << std::hex << std::setfill('0') << std::setw(4) << static_cast<int>(low);
+    }
+}
+
+// Helper to escape a JSON string value
+static void escapeJsonString(const std::string& s, std::ostringstream& out) {
+    for (char c : s) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        switch (c) {
+            case '"': out << "\\\""; break;
+            case '\\': out << "\\\\"; break;
+            case '\n': out << "\\n"; break;
+            case '\r': out << "\\r"; break;
+            case '\t': out << "\\t"; break;
+            case '\b': out << "\\b"; break;
+            case '\f': out << "\\f"; break;
+            case '/': out << "\\/"; break;
+            default:
+                // Escape control characters (0x00-0x1F) and non-ASCII as \uXXXX
+                if (uc < 0x20 || uc >= 0x80) {
+                    encodeUnicodeEscape(out, static_cast<char32_t>(uc));
+                } else {
+                    out << c;
+                }
+                break;
+        }
+    }
+}
+
 void jsonObjectToString(const std::unordered_map<std::string, JsonValue>& obj, std::ostringstream& out) {
     out << '{';
     bool first = true;
     for (const auto& [key, val] : obj) {
         if (!first) out << ',';
         first = false;
-        out << '"' << key << "\":";
+        out << '"';
+        escapeJsonString(key, out);
+        out << "\":";
         jsonValueToString(val, out);
     }
     out << '}';
@@ -199,16 +311,7 @@ void jsonValueToString(const JsonValue& value, std::ostringstream& out) {
         out << std::fixed << std::setprecision(6) << value.get<double>();
     } else if (value.isString()) {
         out << '"';
-        for (char c : value.get<std::string>()) {
-            switch (c) {
-                case '"': out << "\\\""; break;
-                case '\\': out << "\\\\"; break;
-                case '\n': out << "\\n"; break;
-                case '\r': out << "\\r"; break;
-                case '\t': out << "\\t"; break;
-                default: out << c; break;
-            }
-        }
+        escapeJsonString(value.get<std::string>(), out);
         out << '"';
     } else if (value.isArray()) {
         jsonArrayToString(value.get<std::vector<JsonValue>>(), out);
@@ -228,20 +331,84 @@ std::string toJson(const JsonValue& value) {
 LanguageServer::LanguageServer() = default;
 LanguageServer::~LanguageServer() = default;
 
+// Percent-decode a string (URI component decoding)
+static std::string percentDecode(const std::string& s) {
+    std::string result;
+    for (std::size_t i = 0; i < s.size(); i++) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            // Decode percent-encoded character
+            std::string hex = s.substr(i + 1, 2);
+            try {
+                char c = static_cast<char>(std::stoul(hex, nullptr, 16));
+                result += c;
+                i += 2;
+            } catch (...) {
+                result += s[i];
+            }
+        } else if (s[i] == '+') {
+            // URL query string encoding: + represents space
+            result += ' ';
+        } else {
+            result += s[i];
+        }
+    }
+    return result;
+}
+
+// Percent-encode a string (URI component encoding)
+static std::string percentEncode(const std::string& s) {
+    std::string result;
+    for (unsigned char c : s) {
+        // Characters that don't need encoding: A-Z a-z 0-9 - _ . ~ 
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || 
+            (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
+            result += c;
+        } else {
+            // Percent-encode
+            char hex[4];
+            snprintf(hex, sizeof(hex), "%%%02X", c);
+            result += hex;
+        }
+    }
+    return result;
+}
+
 std::string LanguageServer::uriToPath(const std::string& uri) const {
     if (uri.rfind("file://", 0) == 0) {
         std::string path = uri.substr(7);
-        // Handle Windows paths
-        if (path.size() >= 2 && path[1] == ':') {
-            path = path[0] + ":" + path.substr(2);
+        
+        // Decode percent-encoded characters
+        path = percentDecode(path);
+        
+        // Handle Windows paths (e.g., /C:/Users/... or C:/Users/...)
+        if (path.size() >= 3 && path[0] == '/' && path[2] == ':') {
+            path = path.substr(1); // Remove leading slash from /C:/
+        } else if (path.size() >= 2 && path[1] == ':') {
+            // Already has drive letter like C:\
+            // Keep as-is
         }
+        
         return path;
     }
-    return uri;
+    // Only accept file:// URIs - reject other URI schemes for security
+    return "";
 }
 
 std::string LanguageServer::pathToUri(const std::filesystem::path& path) const {
-    return "file://" + path.string();
+    std::string pathStr = path.string();
+    
+    // Convert backslashes to forward slashes for URI
+    std::replace(pathStr.begin(), pathStr.end(), '\\', '/');
+    
+    // Percent-encode special characters
+    pathStr = percentEncode(pathStr);
+    
+    // On Windows, add leading slash if not present (e.g., C:/... -> /C:/...)
+    if (pathStr.size() >= 2 && pathStr[1] == ':') {
+        pathStr = "/" + pathStr;
+    }
+    
+    return "file://" + pathStr;
 }
 
 std::optional<OpenDocument> LanguageServer::getDocument(const std::string& uri) const {
@@ -285,43 +452,109 @@ void LanguageServer::closeDocument(const std::string& uri) {
     openDocuments_.erase(uri);
 }
 
+// Helper to count UTF-16 code units for a UTF-8 code point
+static std::uint32_t countUtf16Units(unsigned char byte) {
+    if ((byte & 0x80) == 0) return 1;       // ASCII
+    if ((byte & 0xE0) == 0xC0) return 1;    // 2-byte sequence, 1 UTF-16 unit
+    if ((byte & 0xF0) == 0xE0) return 1;    // 3-byte sequence, 1 UTF-16 unit (BMP)
+    if ((byte & 0xF8) == 0xF0) return 2;    // 4-byte sequence, 2 UTF-16 units (surrogate pair)
+    return 1;
+}
+
+// Convert UTF-8 byte index to UTF-16 position (line, column)
 Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Offset) const {
     Position pos;
-    const auto graphemes = segment_graphemes(text);
     std::size_t utf8Pos = 0;
-    std::size_t utf16Col = 0;
+    std::uint32_t utf16Col = 0;
     
-    for (const auto& g : graphemes) {
-        if (utf8Pos >= utf8Offset) break;
-        if (g.display == "\n") {
+    // Clamp offset to text length
+    utf8Offset = std::min(utf8Offset, text.size());
+    
+    while (utf8Pos < utf8Offset) {
+        unsigned char byte = static_cast<unsigned char>(text[utf8Pos]);
+        
+        if (byte == '\n') {
             pos.line++;
             utf16Col = 0;
         } else {
-            utf16Col++;
+            // Count UTF-16 code units for this character
+            utf16Col += countUtf16Units(byte);
+            
+            // Skip continuation bytes
+            if ((byte & 0xC0) == 0x80) {
+                // Continuation byte, already counted
+            } else {
+                // Determine sequence length
+                int seqLen = 0;
+                if ((byte & 0x80) == 0) seqLen = 1;
+                else if ((byte & 0xE0) == 0xC0) seqLen = 2;
+                else if ((byte & 0xF0) == 0xE0) seqLen = 3;
+                else if ((byte & 0xF8) == 0xF0) seqLen = 4;
+                
+                // For supplementary plane (4-byte sequences), count as 2 UTF-16 units
+                if (seqLen == 4) {
+                    utf16Col++; // Add extra unit for surrogate pair
+                }
+                
+                // Skip continuation bytes
+                for (int i = 1; i < seqLen && utf8Pos + i < utf8Offset; i++) {
+                    // continuation bytes don't add to utf8Pos separately
+                }
+            }
         }
-        utf8Pos += g.display.size();
+        utf8Pos++;
     }
-    pos.character = static_cast<std::uint32_t>(utf16Col);
+    
+    pos.character = utf16Col;
     return pos;
 }
 
+// Convert UTF-16 position to UTF-8 byte offset
 std::size_t LanguageServer::utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const {
-    const auto graphemes = segment_graphemes(text);
     std::uint32_t currentLine = 0;
     std::uint32_t currentCol = 0;
     std::size_t utf8Offset = 0;
     
-    for (const auto& g : graphemes) {
-        if (g.display == "\n") {
-            if (currentLine == line) break;
+    while (utf8Offset < text.size()) {
+        unsigned char byte = static_cast<unsigned char>(text[utf8Offset]);
+        
+        if (byte == '\n') {
+            if (currentLine == line) {
+                // At end of target line
+                return utf8Offset;
+            }
             currentLine++;
             currentCol = 0;
-        } else {
-            if (currentLine == line && currentCol >= utf16Col) break;
-            currentCol++;
+            utf8Offset++;
+            continue;
         }
-        utf8Offset += g.display.size();
+        
+        if (currentLine == line) {
+            // Count UTF-16 code units
+            std::uint32_t units = countUtf16Units(byte);
+            
+            // For 4-byte sequences (supplementary plane), count as 2 units
+            if ((byte & 0xF8) == 0xF0) {
+                units = 2;
+            }
+            
+            if (currentCol + units > utf16Col) {
+                // Found the position
+                return utf8Offset;
+            }
+            currentCol += units;
+        }
+        
+        // Determine sequence length and skip
+        int seqLen = 1;
+        if ((byte & 0x80) == 0) seqLen = 1;
+        else if ((byte & 0xE0) == 0xC0) seqLen = 2;
+        else if ((byte & 0xF0) == 0xE0) seqLen = 3;
+        else if ((byte & 0xF8) == 0xF0) seqLen = 4;
+        
+        utf8Offset += seqLen;
     }
+    
     return utf8Offset;
 }
 
@@ -393,7 +626,16 @@ void LanguageServer::publishDiagnostics(const std::string& uri, const std::vecto
     }
     json::objectSet(params, "diagnostics", diagJson);
     
-    std::cerr << "LSP: " << formatNotification("textDocument/publishDiagnostics", params) << std::endl;
+    // Send proper LSP notification through stdout with Content-Length framing
+    auto notificationObj = json::makeObject();
+    json::objectSet(notificationObj, "jsonrpc", JsonValue(std::string("2.0")));
+    json::objectSet(notificationObj, "method", JsonValue(std::string("textDocument/publishDiagnostics")));
+    json::objectSet(notificationObj, "params", params);
+    std::string jsonBody = toJson(notificationObj);
+    std::ostringstream framed;
+    framed << "Content-Length: " << jsonBody.size() << "\r\n\r\n" << jsonBody;
+    std::cout << framed.str();
+    std::cout.flush();
 }
 
 std::optional<ProjectManifest> LanguageServer::getProjectManifest(const std::filesystem::path& path) const {
@@ -535,7 +777,11 @@ void LanguageServer::handleDidCloseTextDocument(const JsonValue& params) {
 void LanguageServer::handleInitialized(const JsonValue& params) {}
 
 JsonValue LanguageServer::handleHover(const JsonValue& params) {
-    auto doc = getDocument(params);
+    // Extract URI from textDocument
+    auto textDoc = getJsonObject(params, "textDocument");
+    std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
+    
+    auto doc = getDocument(uri);
     if (!doc) return JsonValue(nullptr);
     
     auto posObj = getJsonObject(params, "position");
@@ -606,6 +852,8 @@ JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
     for (const auto& item : completions) {
         auto itemJson = json::makeObject();
         json::objectSet(itemJson, "label", JsonValue(item.label));
+        // Use numeric kind for LSP CompletionItemKind
+        if (item.kind) json::objectSet(itemJson, "kind", JsonValue(static_cast<double>(*item.kind)));
         if (item.detail) json::objectSet(itemJson, "detail", JsonValue(*item.detail));
         if (item.documentation) json::objectSet(itemJson, "documentation", JsonValue(*item.documentation));
         json::arrayPushBack(items, itemJson);
@@ -755,17 +1003,34 @@ void LanguageServer::handleMessage(const JsonValue& message) {
     std::string method = getJsonString(methodIt->second);
     const JsonValue& params = getJsonObject(message, "params");
     const JsonValue& idVal = getJsonObject(message, "id");
-    std::optional<int> id;
+    
+    // Support both integer and string request IDs
+    std::optional<int> intId;
+    std::optional<std::string> stringId;
     if (!idVal.isNull()) {
-        id = static_cast<int>(getJsonNumber(idVal));
+        if (idVal.isNumber()) {
+            intId = static_cast<int>(getJsonNumber(idVal));
+        } else if (idVal.isString()) {
+            stringId = idVal.get<std::string>();
+        }
     }
     
-    if (id.has_value()) {
+    // Handle the response - prefer string IDs if present
+    if (stringId || intId) {
         try {
             auto result = handleRequest(method, params);
-            std::cout << formatJsonRpcResponse(result, id) << "\n";
+            if (stringId) {
+                // Use string ID format
+                std::cout << formatJsonRpcResponseStringId(result, *stringId) << "\n";
+            } else {
+                std::cout << formatJsonRpcResponse(result, intId) << "\n";
+            }
         } catch (const std::exception& e) {
-            std::cout << formatJsonRpcError(-32603, e.what(), id) << "\n";
+            if (stringId) {
+                std::cout << formatJsonRpcErrorStringId(-32603, e.what(), *stringId) << "\n";
+            } else {
+                std::cout << formatJsonRpcError(-32603, e.what(), intId) << "\n";
+            }
         }
     } else {
         handleNotification(method, params);
@@ -855,6 +1120,36 @@ std::string formatJsonRpcError(int code, const std::string& message, std::option
     json::objectSet(obj, "error", error);
     
     if (id) json::objectSet(obj, "id", JsonValue(static_cast<double>(*id)));
+    
+    std::string body = toJson(obj);
+    std::ostringstream out;
+    out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
+    return out.str();
+}
+
+// String ID variants for JSON-RPC 2.0
+std::string formatJsonRpcResponseStringId(const JsonValue& result, const std::string& id) {
+    auto obj = json::makeObject();
+    json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
+    json::objectSet(obj, "result", result);
+    json::objectSet(obj, "id", JsonValue(id));
+    
+    std::string body = toJson(obj);
+    std::ostringstream out;
+    out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
+    return out.str();
+}
+
+std::string formatJsonRpcErrorStringId(int code, const std::string& message, const std::string& id) {
+    auto obj = json::makeObject();
+    json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
+    
+    auto error = json::makeObject();
+    json::objectSet(error, "code", JsonValue(static_cast<double>(code)));
+    json::objectSet(error, "message", JsonValue(message));
+    json::objectSet(obj, "error", error);
+    
+    json::objectSet(obj, "id", JsonValue(id));
     
     std::string body = toJson(obj);
     std::ostringstream out;
