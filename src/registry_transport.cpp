@@ -228,14 +228,27 @@ void write_atomic_file(const std::filesystem::path& path, std::string_view data)
         throw std::runtime_error("cannot create registry temp file: too many name collisions");
     }
 
-    // Write data through owned handle
-    DWORD bytesWritten = 0;
-    if (!WriteFile(hFile, data.data(), static_cast<DWORD>(data.size()), &bytesWritten, nullptr)) {
-        const DWORD err = GetLastError();
-        CloseHandle(hFile);
-        std::error_code ignored;
-        std::filesystem::remove(temp, ignored);
-        throw std::runtime_error("failed while writing registry file '" + temp.string() + "': error " + std::to_string(err));
+    // Write data through owned handle - loop to handle short writes
+    std::size_t remaining = data.size();
+    const char* ptr = data.data();
+    while (remaining > 0) {
+        DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(remaining, static_cast<std::size_t>(std::numeric_limits<DWORD>::max())));
+        DWORD bytesWritten = 0;
+        if (!WriteFile(hFile, ptr, chunk, &bytesWritten, nullptr)) {
+            const DWORD err = GetLastError();
+            CloseHandle(hFile);
+            std::error_code ignored;
+            std::filesystem::remove(temp, ignored);
+            throw std::runtime_error("failed while writing registry file '" + temp.string() + "': error " + std::to_string(err));
+        }
+        if (bytesWritten == 0) {
+            CloseHandle(hFile);
+            std::error_code ignored;
+            std::filesystem::remove(temp, ignored);
+            throw std::runtime_error("failed while writing registry file '" + temp.string() + "': no progress");
+        }
+        ptr += bytesWritten;
+        remaining -= bytesWritten;
     }
 
     // Ensure data is flushed to disk
@@ -293,14 +306,27 @@ void write_atomic_file(const std::filesystem::path& path, std::string_view data)
         throw std::runtime_error("cannot create registry temp file: too many name collisions");
     }
 
-    // Write data through owned file descriptor
-    ssize_t written = write(fd, data.data(), data.size());
-    if (written != static_cast<ssize_t>(data.size())) {
-        int saved_errno = errno;
-        close(fd);
-        std::error_code ignored;
-        std::filesystem::remove(temp, ignored);
-        throw std::runtime_error("failed while writing registry file '" + temp.string() + "': " + std::strerror(saved_errno));
+    // Write data through owned file descriptor - loop to handle short writes and EINTR
+    std::size_t remaining = data.size();
+    const char* ptr = data.data();
+    while (remaining > 0) {
+        ssize_t written = write(fd, ptr, remaining);
+        if (written < 0) {
+            if (errno == EINTR) continue;  // Retry interrupted system call
+            int saved_errno = errno;
+            close(fd);
+            std::error_code ignored;
+            std::filesystem::remove(temp, ignored);
+            throw std::runtime_error("failed while writing registry file '" + temp.string() + "': " + std::strerror(saved_errno));
+        }
+        if (written == 0) {
+            close(fd);
+            std::error_code ignored;
+            std::filesystem::remove(temp, ignored);
+            throw std::runtime_error("failed while writing registry file '" + temp.string() + "': no progress");
+        }
+        ptr += written;
+        remaining -= static_cast<std::size_t>(written);
     }
 
     // Ensure data is flushed to disk
