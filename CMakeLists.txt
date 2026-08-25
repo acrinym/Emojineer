@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(Emojineer VERSION 0.13.0 LANGUAGES CXX)
+project(Emojineer VERSION 0.14.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(ICU 70 REQUIRED COMPONENTS uc i18n)
+find_package(CURL QUIET)
 add_library(emojineer_core
     src/unicode.cpp
     src/cer.cpp
@@ -16,6 +17,7 @@ add_library(emojineer_core
     src/package_report.cpp
     src/package_artifact.cpp
     src/registry.cpp
+    src/registry_transport.cpp
     src/bytecode.cpp
     src/compiler.cpp
     src/vm.cpp
@@ -26,6 +28,10 @@ add_library(emojineer_core
 )
 target_include_directories(emojineer_core PUBLIC include)
 target_link_libraries(emojineer_core PUBLIC ICU::uc ICU::i18n)
+if(CURL_FOUND)
+ target_link_libraries(emojineer_core PRIVATE CURL::libcurl)
+ target_compile_definitions(emojineer_core PRIVATE EMOJINEER_HAVE_CURL=1)
+endif()
 target_compile_options(emojineer_core PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(emojineer src/main.cpp)
 target_link_libraries(emojineer PRIVATE emojineer_core)
@@ -51,6 +57,9 @@ if(BUILD_TESTING)
  add_executable(emojineer_package_artifact_tests tests/package_artifact_tests.cpp)
  target_link_libraries(emojineer_package_artifact_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_package_artifact_tests COMMAND emojineer_package_artifact_tests)
+ add_executable(emojineer_registry_transport_tests tests/registry_transport_tests.cpp)
+ target_link_libraries(emojineer_registry_transport_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_registry_transport_tests COMMAND emojineer_registry_transport_tests)
  add_executable(emojineer_repl_stream_tests tests/repl_stream_tests.cpp)
  target_link_libraries(emojineer_repl_stream_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_repl_stream_tests COMMAND emojineer_repl_stream_tests)

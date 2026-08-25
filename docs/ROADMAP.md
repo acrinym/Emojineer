@@ -92,25 +92,56 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - bounded parser with format, path, ordering, checksum, content-identity, and trailing-byte validation;
 - `emji pack`, `emji artifact`, and `emji verify-artifact`;
 - content-addressed cache path contract `<cache>/<package>/<version>/<artifact-sha256>.emjpkg`;
-- SemVer 2.0 parsing and deterministic `*`, exact, caret, and tilde requirement selection primitives;
-- explicit prerelease/default-stable behavior and deterministic build-metadata tie breaking;
-- no network retrieval, remote manifest dependency syntax, `publish`, or fake remote `add` behavior yet.
+- full SemVer 2.0 numeric precision plus deterministic `*`, exact, caret, and tilde requirement selection primitives;
+- explicit prerelease/default-stable behavior and deterministic build-metadata tie breaking.
+
+### Train 14 — Registry transport and verified artifact exchange
+
+- canonical local/file and HTTPS registry endpoint model;
+- `EMJREGISTRY1` registry identity/discovery descriptor;
+- deterministic `EMJREGPKG1` package-version indexes;
+- every indexed version binds package content SHA-256 and exact artifact SHA-256;
+- `emji registry-init`, `registry-info`, and `versions`;
+- immutable local-registry `emji publish` with idempotent exact republishing and same-version conflict rejection;
+- `emji fetch <package> <requirement>` using Train 13 SemVer selection;
+- exact package/version/content/artifact identity verification before cache admission;
+- registry-scoped content-addressed cache with verification on cache hits and automatic corrupt-entry repair;
+- bounded registry descriptors, indexes, artifact reads, and HTTPS responses;
+- plain HTTP rejection;
+- optional HTTPS read transport through libcurl with TLS peer/host verification, no redirects, and request timeouts;
+- local registry behavior remains fully available without libcurl;
+- HTTPS publication intentionally withheld until an authenticated immutable-upload protocol exists;
+- registry artifacts intentionally remain separate from project manifests until remote dependency resolution and lock provenance land together;
+- no ambient network authority in the language runtime and no audit machinery.
 
 ## Next product train
 
-### Train 14 — Registry transport and remote resolution
+### Train 15 — Remote dependency integration and reproducible materialization
 
-Build the real network layer on top of Train 13 rather than redefining package identity:
+Turn verified registry artifacts into real project dependencies without weakening local/path packages:
 
-- canonical HTTPS registry identity/discovery contract;
-- package-version indexes carrying selected version, package content SHA-256, and artifact SHA-256;
-- bounded authenticated retrieval with exact artifact checksum verification before cache admission;
-- verified content-addressed local cache reuse;
-- manifest syntax for registry version requirements while preserving local/path dependencies as a first-class source type;
-- deterministic lock records for registry identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency graph;
-- real remote `emji add` only after resolution/locking is reproducible;
-- publication only after an authenticated immutable-upload contract exists;
-- no ambient network authority in the language runtime.
+- manifest dependency source model that distinguishes local paths from registry requirements;
+- canonical registry endpoint/identity plus requested SemVer requirement in manifest semantics;
+- recursive remote dependency resolution from immutable artifacts;
+- verified materialization into a deterministic package store instead of arbitrary extraction paths;
+- dependency graph ownership and package-aware linking across local and materialized registry packages;
+- deterministic lock format carrying source kind, registry identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency edges;
+- stale-lock detection when registry requirements or selected immutable identities change;
+- offline reproducibility from a complete verified cache/store;
+- real remote `emji add` only after the manifest, resolver, materializer, and lock path agree;
+- no implicit network access during ordinary language execution.
+
+### Train 16 — Authenticated registry publication
+
+After remote resolution is reproducible, define a real write trust boundary:
+
+- authenticated HTTPS upload/session contract;
+- server-side immutable package/version conflict rules;
+- authorization and namespace ownership;
+- bounded upload behavior and artifact checksum confirmation;
+- explicit credentials handling outside manifests and source code;
+- publication receipt/provenance suitable for tooling;
+- no generic unauthenticated PUT masquerading as package publication.
 
 ## Later product trains
 
