@@ -98,7 +98,7 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 ### Train 14 — Registry transport and verified artifact exchange
 
 - canonical local/file and HTTPS registry endpoint model;
-- `EMJREGISTRY1` registry identity/discovery descriptor;
+- `EMJREGISTRY1` registry identity/discovery descriptor at `v1/registry.txt`;
 - deterministic `EMJREGPKG1` package-version indexes;
 - every indexed version binds package content SHA-256 and exact artifact SHA-256;
 - `emji registry-init`, `registry-info`, and `versions`;
@@ -110,64 +110,68 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - plain HTTP rejection;
 - optional HTTPS read transport through libcurl with TLS peer/host verification, no redirects, and request timeouts;
 - local registry behavior remains fully available without libcurl;
-- HTTPS publication intentionally withheld until an authenticated immutable-upload protocol exists;
-- registry artifacts intentionally remain separate from project manifests until remote dependency resolution and lock provenance land together;
+- registry artifacts remain separate from project manifests until reproducible remote dependency provenance lands;
 - no ambient network authority in the language runtime and no audit machinery.
 
 ### Train 15 — Remote dependency integration and reproducible materialization
 
-Turn verified registry artifacts into real project dependencies without weakening local/path packages:
-
-- manifest dependency source model that distinguishes local paths from registry requirements;
-- canonical registry endpoint/identity plus requested SemVer requirement in manifest semantics;
-- recursive remote dependency resolution from immutable artifacts;
-- verified materialization into a deterministic package store instead of arbitrary extraction paths;
-- dependency graph ownership and package-aware linking across local and materialized registry packages;
-- deterministic lock format carrying source kind, registry identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency edges;
-- stale-lock detection when registry requirements or selected immutable identities change;
-- offline reproducibility from a complete verified cache/store;
-- real remote `emji add` only after the manifest, resolver, materializer, and lock path agree;
-- no implicit network access during ordinary language execution.
+- manifest dependency sources distinguish local paths from registry requirements;
+- manifests bind registry aliases/endpoints and requested SemVer requirements;
+- recursive remote dependency resolution consumes immutable verified artifacts;
+- deterministic materialization into the package store instead of arbitrary extraction paths;
+- package ownership and package-aware linking work across local and materialized registry packages;
+- lock format 3 carries source kind, registry identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency edges;
+- stale-lock detection covers registry requirement/selection drift;
+- offline reproducibility works from complete verified cache/store state;
+- real remote `emji add` updates manifest and lock transactionally;
+- ordinary language execution still receives no implicit network access.
 
 ### Train 16 — Authenticated registry publication
 
-Authenticated HTTPS publication protocol with explicit request/response media types:
-
-- versioned HTTPS publication protocol (`emjpub1`) with JSON request/response;
-- credentials supplied only through explicit CLI (`--token`) or environment (`EMOJINEER_TOKEN`);
-- credentials never serialized into `emojineer.toml`, artifacts, lockfiles, source, receipts, or diagnostics;
-- registry identity verification before write authority is used;
-- namespace/package ownership authorization surfaced as concrete protocol failures (HTTP 403);
-- immutable exact-version semantics enforced by server: identical republish is idempotent, differing same-version content fails (HTTP 409);
-- server confirms content SHA-256 and artifact SHA-256 in publication receipt;
-- durable publication receipt with registry id, package, version, content/artifact identities, receipt id, and protocol version;
-- deterministic machine-readable JSON receipt rendering;
-- optional receipt-file output (`--receipt <file>`);
-- redirects, plain HTTP, credential-in-URL, and cross-origin credential forwarding rejected;
-- bounded upload/request/response limits, TLS peer/host verification, timeouts, no secrets in diagnostics;
-- local/file registry publication remains available and works without credentials;
-- `emji publish` dispatches to local immutable publish for file registries and authenticated protocol for HTTPS registries;
-- representative interoperability test fixture implements auth, ownership, idempotent republish, conflicting republish, checksum mismatch, response tamper, and bounded request handling;
-- dedicated CTest target for authenticated publication end-to-end journey.
+- versioned `emjpub1` authenticated HTTPS write protocol;
+- Train 14 `GET <endpoint>/v1/registry.txt` identity preflight MUST succeed before any bearer credential is sent;
+- authenticated `POST <endpoint>/v1/publish` carries the actual immutable `.emjpkg` bytes using `application/vnd.emojineer.publish.v1+octet-stream`;
+- request headers bind protocol version, namespace, package, exact SemVer, content SHA-256, and artifact SHA-256;
+- credentials are indirect process authority: currently `EMOJINEER_TOKEN`; raw secret CLI arguments are not accepted;
+- credential-in-URL and whitespace/control/header-injection forms are rejected;
+- credentials never enter manifests, artifacts, lockfiles, source, receipts, or normal diagnostics;
+- missing/invalid auth is `401`, namespace/package authority failure is `403`, malformed/checksum mismatch is `400`, immutable conflict is `409`, and server request-bound rejection is `413`;
+- exact republishing of the same registry/package/version/content SHA-256/artifact SHA-256 tuple MUST succeed idempotently;
+- differing immutable content under the same registry/package/version MUST fail without replacement;
+- successful responses use `application/vnd.emojineer.publish-receipt.v1+json` and bind registry id, package, version, content/artifact SHA-256, protocol version, receipt id, and timestamp;
+- receipt JSON is strict and canonical: duplicate/unknown/trailing fields and mismatched immutable identities are rejected before success;
+- every successful authenticated publication atomically persists the verified receipt to `<package-root>/.emojineer-receipt.json`, with `--receipt <file>` as an alternate destination rather than an opt-out;
+- TLS peer/host verification and HTTPS-only transport remain mandatory, redirects remain disabled, and failed response bodies are never echoed into normal diagnostics;
+- concrete client bounds: 128 MiB upload, 16 KiB receipt, 10-second connect, 300-second upload, 30-second response-header wait after upload, and 300-second response-body deadline;
+- local/file registry publication remains unchanged and credential-free;
+- the dedicated interoperability fixture consumes the exact encoded request, enforces auth/ownership/immutability/checksums/bounds, and proves uploaded artifacts round-trip through the existing verified fetch path;
+- no ambient network authority for Emojineer programs or the VM and no audit machinery.
 
 ## Next product train
 
-### Train 17 — Package search and discovery
+### Train 17 — Language server and editor integration
 
-After authenticated publication exists, enable package discovery:
+Build the already-open Train 17 language-server stack as a native C++ LSP implementation over Emojineer's sovereign compiler/toolchain:
 
-- registry search API for finding packages by name prefix or keyword;
-- package metadata exposure (descriptions, author, dependencies);
-- version listing with pre-release/stable filtering;
-- reverse dependency queries;
-- ranked search results by popularity/usage metrics;
-- no ambient network authority for Emojineer programs or VM.
+- dedicated `emojineer-lsp` executable speaking JSON-RPC/LSP over stdio;
+- initialize/shutdown/exit and text-document open/change/save/close lifecycle;
+- correct LSP UTF-16 position translation over Emojineer's UTF-8/grapheme-aware source model;
+- unsaved-buffer diagnostics and navigation without mutating project files;
+- syntax/semantic/module/package/lock/materialization/CER-aware diagnostics;
+- completion and hover for core emoji, CER aliases/descriptions, user symbols, exports, std modules, local modules, path packages, and materialized registry packages;
+- definition/references across modules and declared direct package dependencies without exposing undeclared transitive imports;
+- document/workspace symbols and canonical formatter integration;
+- workspace discovery from `emojineer.toml`, lock/store state, `PackageGraph`, and module graph;
+- ordinary LSP requests never initiate registry network access;
+- deterministic textual views for emoji/CER semantics and accessibility tooling;
+- no alternate parser or JavaScript/Python language-server implementation;
+- no editor-specific extension requirement and no audit machinery.
 
 ## Later product trains
 
-### Language server and editor integration
+### Package search and discovery
 
-LSP diagnostics, completion, hover/explain, go-to-definition/references across modules and dependencies, formatter integration, syntax support, and accessible textual token views.
+Registry search/discovery can follow after publication and editor tooling are stable: package name/keyword search, metadata, stable/prerelease filtering, reverse dependency queries, and deterministic discovery semantics without granting runtime network authority.
 
 ### Debugging
 

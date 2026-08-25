@@ -18,6 +18,7 @@ add_library(emojineer_core
     src/package_artifact.cpp
     src/registry.cpp
     src/registry_transport.cpp
+    src/authenticated_publication.cpp
     src/bytecode.cpp
     src/compiler.cpp
     src/vm.cpp

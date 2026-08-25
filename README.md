@@ -8,11 +8,11 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → package-aware module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.14**.
+Current language/toolchain version: **0.16**.
 
 ## What works now
 
-Product Trains 1 through 14 provide:
+Product Trains 1 through 16 provide:
 
 - Unicode/grapheme-aware emoji-native syntax and canonical token identity;
 - variables, optional runtime declaration types, arithmetic, comparisons, booleans, input/output;
@@ -25,11 +25,13 @@ Product Trains 1 through 14 provide:
 - canonical formatter and linter;
 - deterministic multi-file `🧩` modules with local `🔗` imports and explicit `📤` exports;
 - native standard modules imported as `std:math`, `std:arrays`, and `std:text`, implemented in Emojineer source and compiled by the normal toolchain;
-- `emji` local/path dependency manifests, recursive package resolution, deterministic lockfile v2, and SHA-256 package content identity;
+- local/path dependency manifests, recursive package resolution, deterministic locks, and SHA-256 package content identity;
 - explicit `pkg:<dependency>/<module>.emoji` imports through declared direct dependencies, with package-boundary enforcement and checkout-portable linked identities;
 - deterministic `emji tree` package graph inspection with root/direct/transitive classification, optional SHA-256 identities, shared-DAG markers, and checkout-portable JSON;
 - deterministic immutable `.emjpkg` source artifacts, strict checksum verification, content-addressed artifact identity, and full SemVer 2.0 requirement/selection primitives;
-- real registry identity/discovery, immutable local-registry publication, package-version indexes, verified artifact fetching, content-addressed cache reuse/repair, and optional HTTPS read transport through libcurl.
+- real registry identity/discovery, immutable local-registry publication, package-version indexes, verified artifact fetching, content-addressed cache reuse/repair, and optional HTTPS read transport through libcurl;
+- first-class registry dependencies with deterministic version selection, verified materialization, lockfile v3 provenance, offline reuse, and remote `emji add`/`sync` workflow;
+- authenticated HTTPS `emji publish` using the `emjpub1` write protocol, registry identity preflight, external credentials, immutable artifact upload, namespace ownership, strict verifiable receipts, and bounded/no-redirect TLS transport.
 
 ## Package workflow
 
@@ -49,7 +51,7 @@ Product Trains 1 through 14 provide:
 
 ## Registry workflow
 
-A local registry is a real implementation of the same registry protocol used by the read client:
+Local registries remain a complete credential-free development path:
 
 ```bash
 ./build/emji registry-init ./registry --id local.dev
@@ -61,20 +63,30 @@ A local registry is a real implementation of the same registry protocol used by 
 
 Registry package indexes bind each immutable package version to both its package `content-sha256` and exact `.emjpkg` `artifact-sha256`. Fetch resolves the requested SemVer range, verifies the complete artifact against the index, then admits it to a registry-scoped content-addressed cache. Corrupt cache entries are discarded and fetched again.
 
-Network registry endpoints must use `https://`. HTTPS reads are enabled when Emojineer is built with libcurl; local file registries remain available without it. Plain HTTP is rejected. HTTPS publication is intentionally not exposed yet because an authenticated immutable upload contract has not been defined.
+Remote dependencies are explicit project state:
 
-Registry-fetched artifacts are also **not yet written into `emojineer.toml`**. Remote dependency declarations and lockfile provenance need to land together so a future remote `emji add` remains deterministic and reproducible instead of becoming a disguised mutable path dependency.
+```bash
+./build/emji add mathkit '^1.2.0' --registry https://registry.example.test --registry-name origin my-project
+./build/emji sync my-project
+./build/emji sync my-project --offline
+```
+
+`emojineer.toml` records the registry requirement, while lockfile v3 records the exact selected version, registry identity, content SHA-256, artifact SHA-256, and dependency edges. Ordinary language execution does not initiate registry access.
+
+Authenticated remote publication is tooling authority, not language-runtime authority:
+
+```bash
+EMOJINEER_TOKEN='…' ./build/emji publish my-project \
+  --registry https://registry.example.test \
+  --namespace my_namespace \
+  --receipt publication-receipt.json
+```
+
+The client verifies `EMJREGISTRY1` identity before sending authorization, uploads the actual immutable `.emjpkg` bytes with `emjpub1`, rejects redirects/plain HTTP/credential-in-URL forms, and verifies the returned receipt against the exact package/version/content/artifact identities before reporting success. Credentials are never written to manifests, locks, artifacts, source, or receipts.
 
 ## Package import example
 
-Given a declared local dependency:
-
-```toml
-[dependencies]
-mathkit = "../mathkit"
-```
-
-import one of its modules explicitly:
+Given a declared dependency named `mathkit`, import one of its modules explicitly:
 
 ```emoji
 🧩 🚀
@@ -85,7 +97,7 @@ Only the current package's declared **direct** dependencies are available throug
 
 ## Build
 
-Requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`). libcurl is optional and enables HTTPS registry reads.
+Requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`). libcurl is optional and enables HTTPS registry reads and authenticated HTTPS publication; local file registries remain available without it.
 
 ```bash
 cmake -S . -B build
@@ -121,10 +133,11 @@ Key references:
 - [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1/v2/v3 format and VM contract;
 - [`docs/CLI.md`](docs/CLI.md) — full command-line/toolchain guide;
 - [`docs/MODULES.md`](docs/MODULES.md) — local, package, and standard module/import/export semantics;
-- [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects, local dependencies, package imports, graph inspection, and lockfiles;
+- [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects, local/remote dependencies, package imports, graph inspection, and locks;
 - [`docs/REGISTRY.md`](docs/REGISTRY.md) — immutable artifacts, registry protocol, publishing/fetching, cache identity, and transport boundaries;
+- [`docs/AUTHENTICATED_REGISTRY_PUBLICATION.md`](docs/AUTHENTICATED_REGISTRY_PUBLICATION.md) — `emjpub1` authenticated write protocol and receipt contract;
 - [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — next product trains.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — landed and next product trains.
 
 ## Why ICU is here
 
@@ -132,4 +145,4 @@ Emoji are extended grapheme clusters, not reliably one Unicode code point. Emoji
 
 ## Project direction
 
-The next package frontier is **remote dependency integration** over the v0.14 registry transport: registry requirements in manifests, recursive registry dependency resolution, registry provenance in deterministic locks, materialization into a verified package store, and only then real remote `emji add`. Authenticated HTTPS publication remains a separate trust-boundary step. The longer roadmap continues into language-server/editor tooling, debugging, capability-gated host facilities, WASM/HIL interop, low-level ABI work, and later native compilation.
+The next product train is **Train 17: native language-server/editor integration** through `emojineer-lsp`, backed by the existing sovereign parser, module graph, package graph, formatter, diagnostics, CER semantics, and standard library. LSP requests must remain offline with respect to registries and use only already-verified lock/materialized package state. Later work includes debugging, package discovery, capability-gated host facilities, WASM/HIL interop, low-level ABI work, semantic compression/macros, and native compilation.
