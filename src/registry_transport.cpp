@@ -5,9 +5,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdint>
 #include <limits>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -177,30 +179,79 @@ std::string read_bounded_file(const std::filesystem::path& path, std::uintmax_t 
 
 void write_atomic_file(const std::filesystem::path& path, std::string_view data) {
     std::filesystem::create_directories(path.parent_path());
+
     // Generate unique temp file name using thread-local PRNG to avoid race conditions
     thread_local std::random_device rd;
     thread_local std::mt19937 gen(rd());
     thread_local std::uniform_int_distribution<> dis(0, 15);
-    std::string suffix;
-    for (int i = 0; i < 16; ++i) {
-        suffix += "0123456789abcdef"[dis(gen)];
-    }
-    auto temp = path;
-    temp += ".tmp.";
-    temp += suffix;
-    {
-        std::ofstream output(temp, std::ios::binary | std::ios::trunc);
-        if (!output) throw std::runtime_error("cannot write registry file '" + temp.string() + "'");
-        output.write(data.data(), static_cast<std::streamsize>(data.size()));
-        if (!output) throw std::runtime_error("failed while writing registry file '" + temp.string() + "'");
-        output.flush();
-        if (!output) throw std::runtime_error("failed while flushing registry file '" + temp.string() + "'");
-        output.close();
-        if (!output) throw std::runtime_error("failed while closing registry file '" + temp.string() + "'");
-    }
+
+    std::filesystem::path temp;
+    bool temp_created = false;
+
 #if defined(_WIN32)
-    // Use MoveFileExW with MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
-    // for proper atomic replacement on Windows (POSIX rename cannot replace)
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    OVERLAPPED overlapped = {};
+
+    // Retry loop for exclusive-create name collisions
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        std::string suffix;
+        for (int i = 0; i < 16; ++i) {
+            suffix += "0123456789abcdef"[dis(gen)];
+        }
+        temp = path;
+        temp += ".tmp.";
+        temp += suffix;
+
+        // Use CREATE_NEW for exclusive-create semantics - fails if file exists
+        hFile = CreateFileW(temp.c_str(),
+            GENERIC_WRITE,
+            0,  // No sharing - exclusive access
+            nullptr,
+            CREATE_NEW,  // Fail if exists, create if not
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr);
+
+        if (hFile != INVALID_HANDLE_VALUE) {
+            temp_created = true;
+            break;
+        }
+
+        const DWORD err = GetLastError();
+        // Retry only on true name collision (ERROR_FILE_EXISTS)
+        if (err != ERROR_FILE_EXISTS) {
+            throw std::runtime_error("cannot create registry temp file '" + temp.string() + "': error " + std::to_string(err));
+        }
+        // Otherwise, retry with new suffix
+    }
+
+    if (!temp_created) {
+        throw std::runtime_error("cannot create registry temp file: too many name collisions");
+    }
+
+    // Write data through owned handle
+    DWORD bytesWritten = 0;
+    if (!WriteFile(hFile, data.data(), static_cast<DWORD>(data.size()), &bytesWritten, nullptr)) {
+        const DWORD err = GetLastError();
+        CloseHandle(hFile);
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+        throw std::runtime_error("failed while writing registry file '" + temp.string() + "': error " + std::to_string(err));
+    }
+
+    // Ensure data is flushed to disk
+    if (!FlushFileBuffers(hFile)) {
+        const DWORD err = GetLastError();
+        CloseHandle(hFile);
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+        throw std::runtime_error("failed while flushing registry file '" + temp.string() + "': error " + std::to_string(err));
+    }
+
+    // Close the handle before atomic replace
+    CloseHandle(hFile);
+    hFile = INVALID_HANDLE_VALUE;
+
+    // Atomically replace destination using MoveFileEx with WRITE_THROUGH
     const auto temp_str = temp.native();
     const auto path_str = path.native();
     if (!MoveFileExW(temp_str.c_str(), path_str.c_str(),
@@ -212,6 +263,59 @@ void write_atomic_file(const std::filesystem::path& path, std::string_view data)
         throw std::runtime_error("cannot commit registry file '" + path.string() + "': " + ec.message());
     }
 #else
+    int fd = -1;
+
+    // Retry loop for exclusive-create name collisions
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        std::string suffix;
+        for (int i = 0; i < 16; ++i) {
+            suffix += "0123456789abcdef"[dis(gen)];
+        }
+        temp = path;
+        temp += ".tmp.";
+        temp += suffix;
+
+        // Use O_CREAT | O_EXCL for exclusive-create semantics - fails if file exists
+        fd = open(temp.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0666);
+        if (fd >= 0) {
+            temp_created = true;
+            break;
+        }
+
+        // Retry only on true name collision (EEXIST)
+        if (errno != EEXIST) {
+            throw std::runtime_error("cannot create registry temp file '" + temp.string() + "': " + std::strerror(errno));
+        }
+        // Otherwise, retry with new suffix
+    }
+
+    if (!temp_created) {
+        throw std::runtime_error("cannot create registry temp file: too many name collisions");
+    }
+
+    // Write data through owned file descriptor
+    ssize_t written = write(fd, data.data(), data.size());
+    if (written != static_cast<ssize_t>(data.size())) {
+        int saved_errno = errno;
+        close(fd);
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+        throw std::runtime_error("failed while writing registry file '" + temp.string() + "': " + std::strerror(saved_errno));
+    }
+
+    // Ensure data is flushed to disk
+    if (fsync(fd) != 0) {
+        int saved_errno = errno;
+        close(fd);
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+        throw std::runtime_error("failed while flushing registry file '" + temp.string() + "': " + std::strerror(saved_errno));
+    }
+
+    // Close the file descriptor before atomic rename
+    close(fd);
+    fd = -1;
+
     // POSIX rename provides atomic replacement semantics
     std::error_code error;
     std::filesystem::rename(temp, path, error);
