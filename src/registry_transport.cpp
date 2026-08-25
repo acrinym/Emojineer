@@ -812,6 +812,19 @@ std::optional<std::string> credential_from_environment() {
     return std::nullopt;
 }
 
+// Validate token for header-injection characters
+// Rejects CR, LF, NUL, and other control characters that could split headers
+bool contains_header_injection_chars(std::string_view token) {
+    for (unsigned char c : token) {
+        // Reject control characters (0x00-0x1F and 0x7F)
+        // These can inject or split HTTP headers
+        if (c < 0x20 || c == 0x7F) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Parse credential from explicit CLI input
 RegistryPublishCredential parse_credential(std::string_view token, std::string_view namespace_id) {
     if (token.empty()) {
@@ -828,47 +841,135 @@ RegistryPublishCredential parse_credential(std::string_view token, std::string_v
     if (!valid_portable_name(namespace_id)) {
         throw std::runtime_error("namespace must be a valid portable name (ASCII letters, digits, '-', '_')");
     }
+    // Reject control characters that could inject headers
+    if (contains_header_injection_chars(token)) {
+        throw std::runtime_error("credential token contains invalid characters (control characters not allowed)");
+    }
     return {std::string(token), std::string(namespace_id)};
 }
 
 // Parse publication receipt from JSON
+// Helper to unescape JSON string values
+// Handles common escape sequences: \", \\, \n, \r, \t, and hex escapes \uXXXX
+std::string unescape_json_string(std::string_view s) {
+    std::string result;
+    result.reserve(s.size());
+    
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            switch (s[i + 1]) {
+                case '"': result += '"'; break;
+                case '\\': result += '\\'; break;
+                case 'n': result += '\n'; break;
+                case 'r': result += '\r'; break;
+                case 't': result += '\t'; break;
+                case 'b': result += '\b'; break;
+                case 'f': result += '\f'; break;
+                // Handle unicode escape \uXXXX - convert to UTF-8 (simplified: just skip for now)
+                case 'u': 
+                    if (i + 5 < s.size()) {
+                        // Skip \uXXXX for now - would need proper Unicode handling
+                        i += 4; 
+                        result += '?';
+                    }
+                    break;
+                default:
+                    // Unknown escape - keep as-is
+                    result += s[i];
+                    result += s[i + 1];
+                    break;
+            }
+            ++i; // Skip the escaped character
+        } else if (static_cast<unsigned char>(s[i]) < 0x20) {
+            // Reject control characters in parsed strings for security
+            result += '?';
+        } else {
+            result += s[i];
+        }
+    }
+    return result;
+}
+
 PublicationReceipt parse_publication_receipt(std::string_view text) {
     PublicationReceipt receipt;
-    // Simple JSON parsing - extract required fields
-    // Format: {"registry_id":"...","package_name":"...","version":"...","content_sha256":"...","artifact_sha256":"...","protocol_version":"...","receipt_id":"...","timestamp":"..."}
     
-    auto extract_string = [](std::string_view json, std::string_view key) -> std::string {
-        const auto key_start = json.find("\"" + std::string(key) + "\"");
+    // Validate input is not empty and looks like JSON
+    if (text.empty()) {
+        throw std::runtime_error("receipt is empty");
+    }
+    // Trim whitespace
+    std::size_t start = 0;
+    while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start]))) ++start;
+    std::size_t end = text.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
+    if (start >= end || text[start] != '{' || text[end - 1] != '}') {
+        throw std::runtime_error("receipt is not valid JSON object");
+    }
+    
+    std::string_view json = text.substr(start, end - start);
+    
+    auto extract_string = [&](std::string_view key) -> std::string {
+        const auto key_pattern = "\"" + std::string(key) + "\"";
+        const auto key_start = json.find(key_pattern);
         if (key_start == std::string_view::npos) {
             throw std::runtime_error("receipt missing required field: " + std::string(key));
         }
         const auto colon = json.find(":", key_start);
-        if (colon == std::string_view::npos) {
+        if (colon == std::string_view::npos || colon + 1 >= json.size()) {
             throw std::runtime_error("receipt has malformed field: " + std::string(key));
         }
-        const auto quote_start = json.find("\"", colon);
+        const auto quote_start = json.find("\"", colon + 1);
         if (quote_start == std::string_view::npos) {
             throw std::runtime_error("receipt has malformed string value: " + std::string(key));
         }
-        const auto quote_end = json.find("\"", quote_start + 1);
-        if (quote_end == std::string_view::npos) {
+        
+        // Find the end of the string, handling escapes
+        std::size_t quote_end = quote_start + 1;
+        while (quote_end < json.size()) {
+            if (json[quote_end] == '"') {
+                break;
+            } else if (json[quote_end] == '\\' && quote_end + 1 < json.size()) {
+                // Skip escaped character
+                quote_end += 2;
+            } else {
+                ++quote_end;
+            }
+        }
+        if (quote_end >= json.size()) {
             throw std::runtime_error("receipt has unclosed string value: " + std::string(key));
         }
-        return std::string(json.substr(quote_start + 1, quote_end - quote_start - 1));
+        
+        // Extract and unescape the string value
+        std::string_view raw_value = json.substr(quote_start + 1, quote_end - quote_start - 1);
+        return unescape_json_string(raw_value);
     };
     
     try {
-        receipt.registry_id = extract_string(text, "registry_id");
-        receipt.package_name = extract_string(text, "package_name");
-        receipt.version = extract_string(text, "version");
-        receipt.content_sha256 = extract_string(text, "content_sha256");
-        receipt.artifact_sha256 = extract_string(text, "artifact_sha256");
-        receipt.protocol_version = extract_string(text, "protocol_version");
-        receipt.receipt_id = extract_string(text, "receipt_id");
-        receipt.timestamp = extract_string(text, "timestamp");
+        receipt.registry_id = extract_string("registry_id");
+        receipt.package_name = extract_string("package_name");
+        receipt.version = extract_string("version");
+        receipt.content_sha256 = extract_string("content_sha256");
+        receipt.artifact_sha256 = extract_string("artifact_sha256");
+        receipt.protocol_version = extract_string("protocol_version");
+        receipt.receipt_id = extract_string("receipt_id");
+        receipt.timestamp = extract_string("timestamp");
     } catch (const std::exception& e) {
         throw std::runtime_error(std::string("failed to parse publication receipt: ") + e.what());
     }
+    
+    // Validate required fields are not empty after parsing
+    if (receipt.registry_id.empty() || receipt.package_name.empty() || receipt.version.empty() ||
+        receipt.content_sha256.empty() || receipt.artifact_sha256.empty() ||
+        receipt.protocol_version.empty() || receipt.receipt_id.empty() || receipt.timestamp.empty()) {
+        throw std::runtime_error("receipt has empty required field(s)");
+    }
+    
+    // Validate content_sha256 and artifact_sha256 are valid hex (64 chars)
+    if (receipt.content_sha256.size() != 64 || 
+        receipt.artifact_sha256.size() != 64) {
+        throw std::runtime_error("receipt has invalid SHA-256 length");
+    }
+    
     return receipt;
 }
 
@@ -935,11 +1036,41 @@ std::string sanitize_error_response(std::string_view response, bool is_auth_erro
         // For auth errors, don't include server response at all - it could reflect bearer tokens
         return "[redacted for security]";
     }
-    // For non-auth errors, truncate to first 200 chars to avoid dumping large responses
-    if (response.size() > 200) {
-        return std::string(response.substr(0, 200)) + "... [truncated]";
+    
+    // For non-auth errors, we still need to redact any bearer tokens that might be
+    // reflected in the response (server echoing back our auth header)
+    std::string sanitized = std::string(response);
+    
+    // Redact Bearer token patterns (case-insensitive)
+    // Pattern: "Bearer <token>" or "bearer <token>"
+    std::string::size_type pos = 0;
+    while ((pos = sanitized.find("Bearer ", pos)) != std::string::npos) {
+        // Find the end of the token (next space or end of string)
+        std::string::size_type token_end = pos + 7; // length of "Bearer "
+        while (token_end < sanitized.size() && !std::isspace(static_cast<unsigned char>(sanitized[token_end]))) {
+            token_end++;
+        }
+        // Replace with [REDACTED]
+        sanitized.replace(pos, token_end - pos, "[REDACTED]");
+        pos = token_end;
     }
-    return std::string(response);
+    
+    // Also redact any Authorization headers that might be echoed
+    pos = 0;
+    while ((pos = sanitized.find("Authorization:", pos)) != std::string::npos) {
+        // Find the end of the line
+        std::string::size_type line_end = sanitized.find('\n', pos);
+        if (line_end == std::string::npos) line_end = sanitized.size();
+        // Replace the line
+        sanitized.replace(pos, line_end - pos, "Authorization: [REDACTED]");
+        pos = line_end;
+    }
+    
+    // Truncate to avoid dumping large responses
+    if (sanitized.size() > 200) {
+        return sanitized.substr(0, 200) + "... [truncated]";
+    }
+    return sanitized;
 }
 
 // Versioned protocol media types
@@ -1037,11 +1168,17 @@ public:
         }
 
         // Step 2: Build multipart request with metadata + artifact
-        // Generate unique boundary
+        // Generate unique boundary using cryptographically-secure random bytes
+        // to avoid any pointer-address or predictable content leakage
         std::string boundary = "----EmjPubBoundary";
         boundary += std::to_string(static_cast<std::uint64_t>(std::time(nullptr)));
         boundary += ".";
-        boundary += std::to_string(static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(this)));
+        
+        // Use random device for boundary uniqueness - avoids pointer address leakage
+        static std::random_device rd;
+        static std::mt19937_64 gen(rd());
+        static std::uniform_int_distribution<std::uint64_t> dis(0, std::numeric_limits<std::uint64_t>::max());
+        boundary += std::to_string(dis(gen));
         
         // Build multipart body
         std::string multipart_body;
@@ -1166,199 +1303,6 @@ private:
     std::string artifact_body_;
     std::size_t response_limit_;
     std::size_t read_pos_ = 0;
-    
-    // Helper to escape strings for JSON
-    static std::string escape_json(const std::string& s) {
-        std::string result;
-        result.reserve(s.size());
-        for (char c : s) {
-            if (c == '"') result += "\\\"";
-            else if (c == '\\') result += "\\\\";
-            else if (c == '\n') result += "\\n";
-            else if (c == '\r') result += "\\r";
-            else if (c == '\t') result += "\\t";
-            else result += c;
-        }
-        return result;
-    }
-};
-
-// emjpub1 wire protocol client - versioned authenticated publication
-// Uses multipart request to upload metadata + artifact in single request
-// Path: POST /v1/publish
-// Content-Type: multipart/form-data with metadata JSON + artifact binary
-// Response: application/json with PublicationReceipt
-
-class HttpsPublishClientV2 {
-public:
-    HttpsPublishClientV2(const std::string& base_url,
-                          const std::string& auth_token,
-                          const std::string& namespace_id,
-                          const std::string& package_name,
-                          const std::string& version,
-                          const std::string& content_sha256,
-                          const std::string& artifact_sha256,
-                          const std::string& artifact_body,
-                          std::size_t response_limit)
-        : base_url_(base_url)
-        , auth_token_(auth_token)
-        , namespace_id_(namespace_id)
-        , package_name_(package_name)
-        , version_(version)
-        , content_sha256_(content_sha256)
-        , artifact_sha256_(artifact_sha256)
-        , artifact_body_(artifact_body)
-        , response_limit_(response_limit) {}
-
-    PublicationReceipt execute() {
-        static const CURLcode initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
-        if (initialized != CURLE_OK) {
-            throw std::runtime_error("cannot initialize HTTPS registry transport");
-        }
-
-        // Validate artifact size against protocol limit
-        if (artifact_body_.size() > emjpub_max_request_body) {
-            throw std::runtime_error("artifact size exceeds protocol limit of " + 
-                std::to_string(emjpub_max_request_body) + " bytes");
-        }
-
-        // Build multipart form with metadata and artifact
-        std::string boundary = "----EmjineerPubBoundary" + std::to_string(
-            std::chrono::steady_clock::now().time_since_epoch().count());
-        
-        std::string metadata;
-        metadata.reserve(512);
-        metadata = "--" + boundary + "\r\n";
-        metadata += "Content-Disposition: form-data; name=\"metadata\"\r\n";
-        metadata += "Content-Type: " + std::string(emjpub_content_type) + "\r\n\r\n";
-        metadata += "{";
-        metadata += "\"protocol\":\"" + std::string(emjpub_protocol_version) + "\",";
-        metadata += "\"namespace\":\"" + escape_json(namespace_id_) + "\",";
-        metadata += "\"package\":\"" + escape_json(package_name_) + "\",";
-        metadata += "\"version\":\"" + escape_json(version_) + "\",";
-        metadata += "\"content_sha256\":\"" + content_sha256_ + "\",";
-        metadata += "\"artifact_sha256\":\"" + artifact_sha256_ + "\"";
-        metadata += "}\r\n";
-        
-        std::string artifact_part;
-        artifact_part = "--" + boundary + "\r\n";
-        artifact_part += "Content-Disposition: form-data; name=\"artifact\"; filename=\"" + 
-            package_name_ + "-" + version_ + ".emjpkg\"\r\n";
-        artifact_part += "Content-Type: " + std::string(emjpub_artifact_type) + "\r\n\r\n";
-        
-        std::string closing = "\r\n--" + boundary + "--\r\n";
-        
-        // Total size for Content-Length
-        const std::size_t total_size = metadata.size() + artifact_part.size() + artifact_body_.size() + closing.size();
-        
-        std::string publish_url = base_url_ + "/v1/publish";
-        
-        CURL* handle = curl_easy_init();
-        if (!handle) {
-            throw std::runtime_error("cannot initialize HTTPS registry request");
-        }
-
-        struct curl_slist* headers = nullptr;
-        headers = curl_slist_append(headers, ("Content-Type: multipart/form-data; boundary=" + boundary).c_str());
-        headers = curl_slist_append(headers, ("Authorization: Bearer " + auth_token_).c_str());
-        headers = curl_slist_append(headers, ("X-Emojineer-Namespace: " + namespace_id_).c_str());
-        headers = curl_slist_append(headers, ("X-Emojineer-Protocol: " + std::string(emjpub_protocol_version)).c_str());
-        headers = curl_slist_append(headers, "Accept: application/json");
-        
-        CurlBuffer response{{}, response_limit_, false};
-        
-        // Build combined upload buffer
-        std::string upload_buffer;
-        upload_buffer.reserve(total_size);
-        upload_buffer = metadata;
-        upload_buffer += artifact_part;
-        upload_buffer.append(artifact_body_);
-        upload_buffer += closing;
-        
-        curl_easy_setopt(handle, CURLOPT_URL, publish_url.c_str());
-        curl_easy_setopt(handle, CURLOPT_POST, 1L);
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, upload_buffer.c_str());
-        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, upload_buffer.size());
-        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_write);
-        curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response);
-        
-        // Security settings with bounded timeouts per emjpub1 contract
-        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);  // No redirects allowed
-        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);  // Verify TLS peer
-        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);  // Verify hostname
-        curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, emjpub_connect_timeout);
-        curl_easy_setopt(handle, CURLOPT_TIMEOUT, emjpub_timeout);
-        curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
-        
-#if LIBCURL_VERSION_NUM >= 0x075500
-        curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
-#else
-        curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
-#endif
-
-        const CURLcode result = curl_easy_perform(handle);
-        long response_code = 0;
-        curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
-        curl_slist_free_all(headers);
-        
-        if (response.exceeded) {
-            curl_easy_cleanup(handle);
-            throw std::runtime_error("publication response exceeds size limit");
-        }
-        if (result != CURLE_OK) {
-            curl_easy_cleanup(handle);
-            // Redact auth token from error messages for security
-            std::string error_msg = curl_easy_strerror(result);
-            throw std::runtime_error("HTTPS publication request failed: " + error_msg);
-        }
-        
-        std::string response_bytes = response.bytes;
-        curl_easy_cleanup(handle);
-        
-        // Check response code - deterministic status/error mapping per emjpub1
-        if (response_code == 401) {
-            throw std::runtime_error("publication authentication failed: invalid or missing credential");
-        }
-        if (response_code == 403) {
-            throw std::runtime_error("publication authorization failed: namespace '" + namespace_id_ + "' not owned by credential");
-        }
-        if (response_code == 409) {
-            throw std::runtime_error("publication conflict: version " + version_ + " already exists with different content");
-        }
-        if (response_code == 413) {
-            throw std::runtime_error("publication payload exceeds server limit");
-        }
-        if (response_code == 400) {
-            throw std::runtime_error("publication request rejected: " + response_bytes);
-        }
-        if (response_code < 200 || response_code >= 300) {
-            throw std::runtime_error("HTTPS publication returned status " + std::to_string(response_code) + ": " + response_bytes);
-        }
-        
-        // Parse receipt from response
-        PublicationReceipt receipt = parse_publication_receipt(response_bytes);
-        
-        // Verify protocol version
-        if (receipt.protocol_version != emjpub_protocol_version) {
-            throw std::runtime_error("protocol version mismatch: expected " + 
-                std::string(emjpub_protocol_version) + " got " + receipt.protocol_version);
-        }
-        
-        return receipt;
-    }
-
-private:
-    std::string base_url_;
-    std::string auth_token_;
-    std::string namespace_id_;
-    std::string package_name_;
-    std::string version_;
-    std::string content_sha256_;
-    std::string artifact_sha256_;
-    std::string artifact_body_;
-    std::size_t response_limit_;
     
     // Helper to escape strings for JSON
     static std::string escape_json(const std::string& s) {

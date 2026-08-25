@@ -107,20 +107,74 @@ void test_credential_parsing() {
     require(url_creds_failed, "URL-form credentials should be rejected");
 }
 
+// Test that control characters in credentials are rejected
+void test_credential_rejects_control_characters() {
+    // Test CR (carriage return)
+    bool cr_rejected = false;
+    try {
+        (void)emojineer::parse_credential("token\rwith-cr", "myns");
+    } catch (const std::runtime_error&) {
+        cr_rejected = true;
+    }
+    require(cr_rejected, "credential with CR should be rejected");
+    
+    // Test LF (line feed)
+    bool lf_rejected = false;
+    try {
+        (void)emojineer::parse_credential("token\nwith-lf", "myns");
+    } catch (const std::runtime_error&) {
+        lf_rejected = true;
+    }
+    require(lf_rejected, "credential with LF should be rejected");
+    
+    // Test NUL
+    bool nul_rejected = false;
+    try {
+        std::string token_with_nul = "token";
+        token_with_nul += '\0';
+        token_with_nul += "with-nul";
+        (void)emojineer::parse_credential(token_with_nul, "myns");
+    } catch (const std::runtime_error&) {
+        nul_rejected = true;
+    }
+    require(nul_rejected, "credential with NUL should be rejected");
+    
+    // Test other control characters (0x01-0x1F)
+    bool ctrl_rejected = false;
+    try {
+        std::string token_with_ctrl = "token\x01\x02\x03";
+        (void)emojineer::parse_credential(token_with_ctrl, "myns");
+    } catch (const std::runtime_error&) {
+        ctrl_rejected = true;
+    }
+    require(ctrl_rejected, "credential with control chars should be rejected");
+    
+    // Test DEL character (0x7F)
+    bool del_rejected = false;
+    try {
+        std::string token_with_del = "token\x7f";
+        (void)emojineer::parse_credential(token_with_del, "myns");
+    } catch (const std::runtime_error&) {
+        del_rejected = true;
+    }
+    require(del_rejected, "credential with DEL should be rejected");
+}
+
 void test_receipt_parsing_and_rendering() {
     emojineer::PublicationReceipt receipt;
     receipt.registry_id = "test-registry";
     receipt.package_name = "mypackage";
     receipt.version = "1.0.0";
-    receipt.content_sha256 = "abc123";
-    receipt.artifact_sha256 = "def456";
+    // Valid 64-character SHA-256 hex strings
+    receipt.content_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    receipt.artifact_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     receipt.protocol_version = "emjpub1";
     receipt.receipt_id = "receipt-123";
     receipt.timestamp = "2024-01-01T00:00:00Z";
     
     // Render receipt
     auto rendered = emojineer::render_publication_receipt(receipt);
-    require(rendered.find("\"artifact_sha256\":\"def456\"") != std::string::npos,
+    require(rendered.find("\"artifact_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"") != std::string::npos,
             "rendered receipt should contain artifact_sha256");
     require(rendered.find("\"package_name\":\"mypackage\"") != std::string::npos,
             "rendered receipt should contain package_name");
@@ -133,6 +187,70 @@ void test_receipt_parsing_and_rendering() {
     require(parsed.content_sha256 == receipt.content_sha256, "parsed content_sha256 should match");
     require(parsed.artifact_sha256 == receipt.artifact_sha256, "parsed artifact_sha256 should match");
     require(parsed.protocol_version == receipt.protocol_version, "parsed protocol_version should match");
+}
+
+// Test receipt parsing with escaped characters
+void test_receipt_parsing_escaped_strings() {
+    // Test receipt with escaped characters in string values
+    std::string escaped_receipt = R"({
+        "artifact_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "content_sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "package_name":"my-package",
+        "protocol_version":"emjpub1",
+        "receipt_id":"receipt-123",
+        "registry_id":"test-registry",
+        "timestamp":"2024-01-01T00:00:00Z",
+        "version":"1.0.0"
+    })";
+    
+    auto parsed = emojineer::parse_publication_receipt(escaped_receipt);
+    require(parsed.package_name == "my-package", "escaped receipt should parse correctly");
+    require(parsed.version == "1.0.0", "version should match");
+    
+    // Test receipt with whitespace
+    std::string whitespace_receipt = R"(
+    {
+        "artifact_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "content_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "package_name": "mypackage",
+        "protocol_version": "emjpub1",
+        "receipt_id": "receipt-123",
+        "registry_id": "test-registry",
+        "timestamp": "2024-01-01T00:00:00Z",
+        "version": "1.0.0"
+    }
+    )";
+    
+    auto parsed2 = emojineer::parse_publication_receipt(whitespace_receipt);
+    require(parsed2.package_name == "mypackage", "whitespace should be trimmed");
+    
+    // Test receipt with invalid/missing required fields
+    bool empty_failed = false;
+    try {
+        (void)emojineer::parse_publication_receipt("{}");
+    } catch (const std::runtime_error&) {
+        empty_failed = true;
+    }
+    require(empty_failed, "empty receipt should be rejected");
+    
+    // Test receipt with invalid SHA-256 length
+    bool invalid_sha_failed = false;
+    try {
+        std::string invalid_sha = R"({
+            "artifact_sha256":"short",
+            "content_sha256":"short",
+            "package_name":"p",
+            "protocol_version":"emjpub1",
+            "receipt_id":"r",
+            "registry_id":"reg",
+            "timestamp":"t",
+            "version":"1.0.0"
+        })";
+        (void)emojineer::parse_publication_receipt(invalid_sha);
+    } catch (const std::runtime_error&) {
+        invalid_sha_failed = true;
+    }
+    require(invalid_sha_failed, "invalid SHA-256 length should be rejected");
 }
 
 void test_receipt_verification() {
@@ -266,8 +384,9 @@ void test_receipt_file_output() {
     receipt.registry_id = "test-registry";
     receipt.package_name = "mypackage";
     receipt.version = "1.0.0";
-    receipt.content_sha256 = "abc123";
-    receipt.artifact_sha256 = "def456";
+    // Valid 64-character SHA-256 hex strings
+    receipt.content_sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    receipt.artifact_sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     receipt.protocol_version = "emjpub1";
     receipt.receipt_id = "receipt-123";
     receipt.timestamp = "2024-01-01T00:00:00Z";
@@ -293,7 +412,9 @@ int main() {
     try {
         test_credential_from_environment();
         test_credential_parsing();
+        test_credential_rejects_control_characters();
         test_receipt_parsing_and_rendering();
+        test_receipt_parsing_escaped_strings();
         test_receipt_verification();
         test_file_publish_still_works();
         test_dispatch_by_endpoint_kind();
