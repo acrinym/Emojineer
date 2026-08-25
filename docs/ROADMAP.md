@@ -68,24 +68,36 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - package-qualified import regression coverage for direct, transitive, nested, missing, duplicate-name, cycle, and checkout-portability behavior;
 - no remote registry and no VM opcode/EMJBC format bump.
 
-## Next product train
-
 ### Train 12 — Package workflow maturation
 
-Make the now-connected package/source graph easier to inspect and diagnose without introducing audit machinery:
+- `emji tree` over the real resolved `PackageGraph`;
+- explicit `root`, `direct`, and `transitive` package relation presentation;
+- checkout-relative package paths and entry-source presentation;
+- optional full SHA-256 package content identities with `--hashes`;
+- deterministic `emojineer.package-graph.v1` JSON output with full hashes and sorted dependency names;
+- shared dependency DAGs shown with repeated edges but bounded recursive expansion via `(shared)` markers;
+- graph output excludes absolute checkout paths and timestamps, so equivalent checkouts render identically;
+- package graph failures receive explicit CLI diagnostic context;
+- graph-report logic is a presentation layer over the existing resolver rather than a second package model;
+- no fake registry and no audit/report subsystem.
 
-- richer dependency graph commands such as `emji tree`;
-- direct/transitive dependency presentation;
-- package source identity and content-hash UX;
-- clearer package/import diagnostic context;
-- checkout-portable graph output suitable for humans and tooling;
-- no fake registry, no audit/report subsystem.
+## Next product train
+
+### Train 13 — Registry protocol and package distribution
+
+Define a real remote package system only after specifying the protocol coherently:
+
+- registry identity and endpoint contract;
+- immutable package artifact format and canonical package metadata;
+- cryptographic artifact/content checksums;
+- semantic version selection and deterministic dependency resolution;
+- retrieval and local cache model with reproducibility guarantees;
+- source/artifact trust boundaries and failure diagnostics;
+- then real remote `emji add` / `emji publish` behavior;
+- preserve local/path dependency support as a first-class source type;
+- no placeholder network commands before the protocol exists.
 
 ## Later product trains
-
-### Registry protocol and package distribution
-
-Define a real remote registry API/protocol, package/artifact identity, cryptographic checksums, version selection, package retrieval/cache, reproducible resolution, and only then `emji publish` and remote `emji add` behavior.
 
 ### Language server and editor integration
 
