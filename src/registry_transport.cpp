@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <limits>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -43,19 +44,21 @@ constexpr std::string_view index_magic = "EMJREGPKG1\n";
 class PackageLock {
 public:
     explicit PackageLock(const std::filesystem::path& lock_path)
-        : lock_path_(lock_path), fd_(-1) {
+        : lock_path_(lock_path) {
         std::filesystem::create_directories(lock_path_.parent_path());
 #if defined(_WIN32)
-        HANDLE handle = CreateFileW(lock_path_.c_str(),
+        handle_ = CreateFileW(lock_path_.c_str(),
             GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
-            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (handle == INVALID_HANDLE_VALUE) {
+            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (handle_ == INVALID_HANDLE_VALUE) {
             throw std::runtime_error("cannot create registry lock file");
         }
-        fd_ = reinterpret_cast<intptr_t>(handle);
-        if (!LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, nullptr)) {
-            CloseHandle(handle);
+        // Initialize OVERLAPPED with zero offset - required by LockFileEx/UnlockFileEx
+        overlapped_ = {};
+        if (!LockFileEx(handle_, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &overlapped_)) {
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
             throw std::runtime_error("cannot acquire registry lock");
         }
 #else
@@ -65,6 +68,7 @@ public:
         }
         if (flock(fd_, LOCK_EX) != 0) {
             close(fd_);
+            fd_ = -1;
             throw std::runtime_error("cannot acquire registry lock");
         }
 #endif
@@ -72,14 +76,16 @@ public:
 
     ~PackageLock() {
 #if defined(_WIN32)
-        if (fd_ >= 0) {
-            UnlockFileEx(reinterpret_cast<HANDLE>(fd_), 0, 1, 0, nullptr);
-            CloseHandle(reinterpret_cast<HANDLE>(fd_));
+        if (handle_ != INVALID_HANDLE_VALUE) {
+            UnlockFileEx(handle_, 0, 1, 0, &overlapped_);
+            CloseHandle(handle_);
+            handle_ = INVALID_HANDLE_VALUE;
         }
 #else
         if (fd_ >= 0) {
             flock(fd_, LOCK_UN);
             close(fd_);
+            fd_ = -1;
         }
 #endif
         // Keep lock file persistent to avoid splitting the lock domain:
@@ -92,7 +98,12 @@ public:
 
 private:
     std::filesystem::path lock_path_;
-    int fd_;
+#if defined(_WIN32)
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+    OVERLAPPED overlapped_ = {};
+#else
+    int fd_ = -1;
+#endif
 };
 
 bool valid_portable_name(std::string_view value, bool allow_dot = false) {
@@ -138,8 +149,11 @@ std::string read_bounded_file(const std::filesystem::path& path, std::uintmax_t 
     if (size > limit) throw std::runtime_error("registry response exceeds format size limit");
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot open registry file '" + path.string() + "'");
-    // Read at most limit+1 bytes to detect if file grows during read
-    const std::uintmax_t max_read = (limit > 0) ? limit + 1 : 1;
+    // Read at most limit+1 bytes to detect if file grows during read (overflow-safe)
+    constexpr std::uintmax_t one = 1;
+    const std::uintmax_t max_read = (limit > std::numeric_limits<std::uintmax_t>::max() - one)
+        ? std::numeric_limits<std::uintmax_t>::max()
+        : limit + one;
     std::string result;
     result.reserve(static_cast<std::size_t>(std::min(size, max_read)));
     std::uintmax_t remaining = max_read;
