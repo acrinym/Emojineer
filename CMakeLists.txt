@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Emojineer VERSION 0.12.0 LANGUAGES CXX)
+project(Emojineer VERSION 0.13.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -14,6 +14,8 @@ add_library(emojineer_core
     src/hash.cpp
     src/package.cpp
     src/package_report.cpp
+    src/package_artifact.cpp
+    src/registry.cpp
     src/bytecode.cpp
     src/compiler.cpp
     src/vm.cpp
@@ -46,6 +48,9 @@ if(BUILD_TESTING)
  add_executable(emojineer_package_report_tests tests/package_report_tests.cpp)
  target_link_libraries(emojineer_package_report_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_package_report_tests COMMAND emojineer_package_report_tests)
+ add_executable(emojineer_package_artifact_tests tests/package_artifact_tests.cpp)
+ target_link_libraries(emojineer_package_artifact_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_package_artifact_tests COMMAND emojineer_package_artifact_tests)
  add_executable(emojineer_repl_stream_tests tests/repl_stream_tests.cpp)
  target_link_libraries(emojineer_repl_stream_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_repl_stream_tests COMMAND emojineer_repl_stream_tests)
