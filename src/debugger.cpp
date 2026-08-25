@@ -1,12 +1,17 @@
 #include "emojineer/debugger.hpp"
+#include "emojineer/vm.hpp"
 #include "emojineer/module.hpp"
 #include "emojineer/unicode.hpp"
+#include "emojineer/compiler.hpp"
+#include "emojineer/lexer.hpp"
+#include "emojineer/parser.hpp"
 #include <climits>
 #include <cmath>
+#include <fstream>
 #include <istream>
 #include <ostream>
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 
 namespace emojineer {
 
@@ -84,6 +89,7 @@ void DebugController::pause_execution() {
 
 void DebugController::step_into() {
     run_mode_ = DebugRunMode::SteppingInto;
+    step_into_start_ip_ = vm_.current_ip();
     paused_ = false;
     vm_.set_debug_paused(false);
 }
@@ -126,12 +132,32 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
 std::optional<std::string> DebugController::get_source_text(const std::string& path, 
                                                            std::uint32_t start_line,
                                                            std::uint32_t end_line) const {
-    // This would need to read from the source file
-    // For now, return nullopt - placeholder implementation
-    (void)path;
-    (void)start_line;
-    (void)end_line;
-    return std::nullopt;
+    // Try to read from the source file
+    std::filesystem::path source_path(path);
+    if (!std::filesystem::exists(source_path)) {
+        return std::nullopt;
+    }
+    
+    std::ifstream file(source_path);
+    if (!file.is_open()) {
+        return std::nullopt;
+    }
+    
+    std::string result;
+    std::string line;
+    std::uint32_t current_line = 0;
+    while (std::getline(file, line)) {
+        ++current_line;
+        if (current_line >= start_line && current_line <= end_line) {
+            result += std::to_string(current_line) + ": " + line + "\n";
+        }
+        if (current_line > end_line) break;
+    }
+    
+    if (result.empty()) {
+        return std::nullopt;
+    }
+    return result;
 }
 
 std::optional<SourcePosition> DebugController::get_source_position(std::size_t ip) const {
@@ -156,6 +182,13 @@ std::vector<SourcePosition> DebugController::get_breakable_positions() const {
 }
 
 bool DebugController::debug_hook() {
+    // Rebuild breakpoint index if chunk changed
+    const Chunk* chunk = vm_.current_chunk();
+    if (chunk != current_chunk_) {
+        current_chunk_ = chunk;
+        rebuild_breakpoint_index();
+    }
+    
     // Check if we should pause
     if (run_mode_ == DebugRunMode::Paused) {
         return false;
@@ -223,17 +256,24 @@ bool DebugController::should_pause_for_step() const {
     }
     
     if (run_mode_ == DebugRunMode::SteppingInto) {
-        return true;
+        // For step into, we need to execute at least one instruction first
+        // The initial position is recorded when step_into is called
+        std::size_t current_ip = vm_.current_ip();
+        return current_ip != step_into_start_ip_;
     }
     
     if (run_mode_ == DebugRunMode::SteppingOver) {
         std::size_t current_ip = vm_.current_ip();
-        return current_ip >= step_over_start_ip_;
+        // Only pause after we've moved past the starting IP
+        // and only if we're at the same or deeper call depth
+        std::size_t current_depth = vm_.get_call_stack().size();
+        return current_ip > step_over_start_ip_;
     }
     
     if (run_mode_ == DebugRunMode::SteppingOut) {
         std::size_t current_depth = vm_.get_call_stack().size();
-        return current_depth <= step_out_frame_depth_;
+        // Only pause when we've returned to a shallower depth than where we started
+        return current_depth < step_out_frame_depth_;
     }
     
     return false;
@@ -307,9 +347,7 @@ void DebugVM::set_debug_callback(DebugCallback callback) {
 }
 
 void DebugVM::execute(const Chunk& chunk) {
-    // Rebuild breakpoint index now that we have the chunk
-    controller_->rebuild_breakpoint_index();
-    
+    // Breakpoint index will be rebuilt lazily in debug_hook when chunk is set
     finished_ = false;
     try {
         vm_->execute(chunk);
@@ -317,7 +355,10 @@ void DebugVM::execute(const Chunk& chunk) {
         finished_ = true;
         throw;
     }
-    finished_ = true;
+    // Only mark finished if VM execution actually completed (not paused)
+    if (!vm_->is_debug_paused()) {
+        finished_ = true;
+    }
 }
 
 void DebugVM::add_breakpoint(const BreakpointLocation& bp) {
@@ -388,28 +429,255 @@ std::size_t DebugVM::current_ip() const {
     return vm_->current_ip();
 }
 
-// Interactive debug session implementation would go here
-// For now, we'll provide a placeholder
+// Interactive debug session implementation
+namespace {
+std::string trim(const std::string& s) {
+    auto start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+std::vector<std::string> split(const std::string& s, char delim) {
+    std::vector<std::string> result;
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, delim)) {
+        result.push_back(trim(item));
+    }
+    return result;
+}
+} // anonymous namespace
 
 int run_debug_session(const std::filesystem::path& source_file,
                      std::istream& input,
                      std::ostream& output,
                      std::ostream& error,
                      const CustomEmojiRegistry& registry) {
-    (void)source_file;
-    (void)input;
-    (void)output;
-    (void)error;
-    (void)registry;
+    // Compile the source file
+    emojineer::Chunk chunk;
+    try {
+        chunk = emojineer::compile_file(source_file, registry);
+    } catch (const std::exception& e) {
+        error << "Debug session failed to compile: " << e.what() << "\n";
+        return 1;
+    }
     
-    // Placeholder - full implementation would:
-    // 1. Compile the source file
-    // 2. Create a DebugVM with the compiled chunk
-    // 3. Run interactive command loop
-    // 4. Handle all debugger commands
+    // Create DebugVM with the compiled chunk using pointer to allow recreation
+    std::unique_ptr<emojineer::DebugVM> debug_vm = std::make_unique<emojineer::DebugVM>(input, output);
     
-    error << "Interactive debug session not fully implemented\n";
-    return 1;
+    // Set up debug callback for pause events
+    debug_vm->set_debug_callback([&output](const emojineer::DebugSnapshot& snapshot) {
+        output << "\n" << snapshot.reason << " at ";
+        output << snapshot.current_position.source_path << ":";
+        output << snapshot.current_position.line << "\n";
+    });
+    
+    // Initial execution to first breakpoint/pause
+    debug_vm->execute(chunk);
+    
+    output << "Emojineer debugger (type 'help' for commands)\n";
+    output << "Loaded: " << source_file.string() << "\n";
+    
+    bool running = true;
+    while (running) {
+        // Show current position
+        auto pos = debug_vm->current_position();
+        if (pos) {
+            output << "(" << pos->source_path << ":" << pos->line << ") ";
+        }
+        output << "> ";
+        output.flush();
+        
+        std::string line;
+        if (!std::getline(input, line)) {
+            break;
+        }
+        
+        line = trim(line);
+        if (line.empty()) continue;
+        
+        auto parts = split(line, ' ');
+        auto cmd = parts[0];
+        
+        if (cmd == "quit" || cmd == "q" || cmd == "exit") {
+            running = false;
+        }
+        else if (cmd == "help" || cmd == "h") {
+            output << "Commands:\n";
+            output << "  break <file:line>  - Set breakpoint\n";
+            output << "  continue, c         - Continue execution\n";
+            output << "  step, s            - Step into\n";
+            output << "  next, n            - Step over\n";
+            output << "  out, o             - Step out\n";
+            output << "  backtrace, bt      - Show call stack\n";
+            output << "  frame, f          - Show current frame\n";
+            output << "  locals             - Show local variables\n";
+            output << "  globals            - Show global variables\n";
+            output << "  print, p <expr>   - Evaluate expression\n";
+            output << "  list, l [n]       - List source lines\n";
+            output << "  run                - Restart debug session\n";
+            output << "  help, h            - Show this help\n";
+            output << "  quit, q            - Exit debugger\n";
+        }
+        else if (cmd == "continue" || cmd == "c") {
+            debug_vm->continue_run();
+            debug_vm->execute(chunk);
+            auto pos = debug_vm->current_position();
+            if (pos) {
+                output << "Continued to " << pos->source_path << ":" << pos->line << "\n";
+            }
+        }
+        else if (cmd == "step" || cmd == "s") {
+            debug_vm->step_into();
+            debug_vm->execute(chunk);
+            auto pos = debug_vm->current_position();
+            if (pos) {
+                output << "Stepped to " << pos->source_path << ":" << pos->line << "\n";
+            }
+        }
+        else if (cmd == "next" || cmd == "n") {
+            debug_vm->step_over();
+            debug_vm->execute(chunk);
+            auto pos = debug_vm->current_position();
+            if (pos) {
+                output << "Stepped over to " << pos->source_path << ":" << pos->line << "\n";
+            }
+        }
+        else if (cmd == "out" || cmd == "o") {
+            debug_vm->step_out();
+            debug_vm->execute(chunk);
+            auto pos = debug_vm->current_position();
+            if (pos) {
+                output << "Stepped out to " << pos->source_path << ":" << pos->line << "\n";
+            }
+        }
+        else if (cmd == "break" || cmd == "b") {
+            if (parts.size() < 2) {
+                output << "Usage: break <file:line>\n";
+                continue;
+            }
+            auto arg = parts[1];
+            auto colon = arg.find(':');
+            if (colon == std::string::npos) {
+                output << "Usage: break <file:line>\n";
+                continue;
+            }
+            std::string file = arg.substr(0, colon);
+            std::string line_str = arg.substr(colon + 1);
+            try {
+                std::uint32_t line_num = std::stoul(line_str);
+                emojineer::BreakpointLocation bp;
+                bp.source_position.source_path = file;
+                bp.source_position.line = line_num;
+                debug_vm->add_breakpoint(bp);
+                output << "Breakpoint set at " << file << ":" << line_num << "\n";
+            } catch (...) {
+                output << "Invalid line number\n";
+            }
+        }
+        else if (cmd == "backtrace" || cmd == "bt") {
+            auto snapshot = debug_vm->get_debug_snapshot();
+            if (!snapshot) {
+                output << "Not paused\n";
+                continue;
+            }
+            output << "Call stack:\n";
+            for (std::size_t i = 0; i < snapshot->call_stack.size(); ++i) {
+                const auto& frame = snapshot->call_stack[i];
+                output << "#" << i << " " << frame.function_name << " at ";
+                output << frame.source_position.source_path << ":" << frame.source_position.line << "\n";
+            }
+        }
+        else if (cmd == "frame" || cmd == "f") {
+            auto snapshot = debug_vm->get_debug_snapshot();
+            if (!snapshot) {
+                output << "Not paused\n";
+                continue;
+            }
+            const auto& frame = snapshot->call_stack[0];
+            output << "Frame #0: " << frame.function_name << "\n";
+            output << "  at " << frame.source_position.source_path << ":" << frame.source_position.line << "\n";
+        }
+        else if (cmd == "locals") {
+            auto snapshot = debug_vm->get_debug_snapshot();
+            if (!snapshot) {
+                output << "Not paused\n";
+                continue;
+            }
+            const auto& frame = snapshot->call_stack[0];
+            output << "Locals:\n";
+            for (std::size_t i = 0; i < frame.locals.size(); ++i) {
+                output << "  local[" << i << "]: " << emojineer::debug_render_value(frame.locals[i]) << "\n";
+            }
+            output << "Parameters:\n";
+            for (std::size_t i = 0; i < frame.parameters.size(); ++i) {
+                output << "  param[" << i << "]: " << emojineer::debug_render_value(frame.parameters[i]) << "\n";
+            }
+        }
+        else if (cmd == "globals") {
+            auto snapshot = debug_vm->get_debug_snapshot();
+            if (!snapshot) {
+                output << "Not paused\n";
+                continue;
+            }
+            const auto& frame = snapshot->call_stack[0];
+            output << "Globals:\n";
+            for (const auto& g : frame.globals) {
+                output << "  " << g.first << ": " << emojineer::debug_render_value(g.second) << "\n";
+            }
+        }
+        else if (cmd == "print" || cmd == "p") {
+            if (parts.size() < 2) {
+                output << "Usage: print <expression>\n";
+                continue;
+            }
+            // For now, just show the expression back - full eval would need expression parser
+            output << "Expression evaluation not yet implemented\n";
+        }
+        else if (cmd == "list" || cmd == "l") {
+            auto pos = debug_vm->current_position();
+            if (!pos) {
+                output << "No current position\n";
+                continue;
+            }
+            std::uint32_t start = 1;
+            if (parts.size() >= 2) {
+                try {
+                    start = std::stoul(parts[1]);
+                } catch (...) {}
+            }
+            std::uint32_t end = start + 10;
+            auto source_text = debug_vm->get_source_text(pos->source_path, start, end);
+            if (source_text) {
+                output << *source_text << "\n";
+            } else {
+                output << "Could not read source\n";
+            }
+        }
+        else if (cmd == "run") {
+            // Restart the debug session
+            debug_vm = std::make_unique<emojineer::DebugVM>(input, output);
+            debug_vm->set_debug_callback([&output](const emojineer::DebugSnapshot& snapshot) {
+                output << "\n" << snapshot.reason << " at ";
+                output << snapshot.current_position.source_path << ":";
+                output << snapshot.current_position.line << "\n";
+            });
+            debug_vm->execute(chunk);
+            output << "Restarted debug session\n";
+        }
+        else {
+            output << "Unknown command: " << cmd << " (type 'help' for commands)\n";
+        }
+        
+        if (debug_vm->is_finished()) {
+            output << "Program finished\n";
+            break;
+        }
+    }
+    
+    output << "Exiting debugger\n";
+    return 0;
 }
 
 } // namespace emojineer
