@@ -114,6 +114,24 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - registry artifacts intentionally remain separate from project manifests until remote dependency resolution and lock provenance land together;
 - no ambient network authority in the language runtime and no audit machinery.
 
+### Train 18 — Source-level debugger
+
+Add a real source-level debugger over the existing compiler/bytecode/VM/module/package model:
+
+- compiler-generated deterministic bytecode source mappings for module identity, source ranges, functions, and executable locations;
+- bytecode format evolution only as actually required, with explicit compatibility and diagnostics;
+- VM debugger control interface with breakpoints, continue, pause-at-next-safe-point, step into/over/out;
+- call stack/frame selection, locals, globals, parameters, and deterministic value rendering;
+- debugger inspection does not mutate state or consume program input;
+- `emojineer debug <source-or-project>` interactive session with breakpoint, continue, step/next/out, backtrace, frame, locals, globals, print/inspect, source/list, quit;
+- breakpoints work across root modules, local modules, direct path packages, materialized registry packages, and stdlib source when available;
+- existing package ownership/direct-dependency semantics preserved;
+- deterministic module/package identities with no checkout-specific absolute root encoded in bytecode/debug protocol;
+- stale/unbound breakpoint/source drift diagnostics;
+- offline operation and no new ambient program capabilities;
+- protocol-neutral debugger core suitable for later DAP/editor adapter;
+- dedicated CTest target plus full source-debugger acceptance journey.
+
 ## Next product train
 
 ### Train 15 — Remote dependency integration and reproducible materialization
@@ -148,10 +166,6 @@ After remote resolution is reproducible, define a real write trust boundary:
 ### Language server and editor integration
 
 LSP diagnostics, completion, hover/explain, go-to-definition/references across modules and dependencies, formatter integration, syntax support, and accessible textual token views.
-
-### Debugging
-
-Source breakpoints, stepping, stack/call-frame inspection, local/global value inspection, and source-position mappings across module graphs.
 
 ### Capability model and native facilities
 

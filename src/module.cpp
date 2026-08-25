@@ -409,6 +409,7 @@ public:
             }
         }
         Compiler compiler;
+        compiler.set_source_path(entry_id);
         return compiler.compile(linked);
     }
 
@@ -774,6 +775,7 @@ Chunk compile_file(const std::filesystem::path& raw_entry,
     ast::Program entry_program = parse_source(entry, registry, identity);
     if (!has_module_syntax(entry_program)) {
         Compiler compiler;
+        compiler.set_source_path(identity);
         return compiler.compile(entry_program);
     }
 
