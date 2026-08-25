@@ -8,7 +8,7 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → package-aware module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.14**.
+Current language/toolchain version: **0.17**.
 
 ## What works now
 
