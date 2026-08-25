@@ -82,8 +82,9 @@ public:
             close(fd_);
         }
 #endif
-        std::error_code ignored;
-        std::filesystem::remove(lock_path_, ignored);
+        // Keep lock file persistent to avoid splitting the lock domain:
+        // a waiter may hold/open the old inode while a later process
+        // recreates a new lock file and acquires a different lock.
     }
 
     PackageLock(const PackageLock&) = delete;
@@ -137,12 +138,15 @@ std::string read_bounded_file(const std::filesystem::path& path, std::uintmax_t 
     if (size > limit) throw std::runtime_error("registry response exceeds format size limit");
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot open registry file '" + path.string() + "'");
+    // Read at most limit+1 bytes to detect if file grows during read
+    const std::uintmax_t max_read = (limit > 0) ? limit + 1 : 1;
     std::string result;
-    result.reserve(static_cast<std::size_t>(std::min(size, limit)));
-    std::uintmax_t remaining = limit;
+    result.reserve(static_cast<std::size_t>(std::min(size, max_read)));
+    std::uintmax_t remaining = max_read;
     char buffer[4096];
     while (remaining > 0 && input) {
-        input.read(buffer, static_cast<std::streamsize>(std::min(remaining, static_cast<std::uintmax_t>(sizeof(buffer)))));
+        const auto chunk = static_cast<std::streamsize>(std::min(remaining, static_cast<std::uintmax_t>(sizeof(buffer))));
+        input.read(buffer, chunk);
         const auto got = input.gcount();
         if (got <= 0) break;
         result.append(buffer, static_cast<std::size_t>(got));
@@ -159,10 +163,10 @@ std::string read_bounded_file(const std::filesystem::path& path, std::uintmax_t 
 
 void write_atomic_file(const std::filesystem::path& path, std::string_view data) {
     std::filesystem::create_directories(path.parent_path());
-    // Generate unique temp file name using random suffix to avoid collisions
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    static std::uniform_int_distribution<> dis(0, 15);
+    // Generate unique temp file name using thread-local PRNG to avoid race conditions
+    thread_local std::random_device rd;
+    thread_local std::mt19937 gen(rd());
+    thread_local std::uniform_int_distribution<> dis(0, 15);
     std::string suffix;
     for (int i = 0; i < 16; ++i) {
         suffix += "0123456789abcdef"[dis(gen)];
@@ -177,13 +181,32 @@ void write_atomic_file(const std::filesystem::path& path, std::string_view data)
         if (!output) throw std::runtime_error("failed while writing registry file '" + temp.string() + "'");
         output.flush();
         if (!output) throw std::runtime_error("failed while flushing registry file '" + temp.string() + "'");
+        output.close();
+        if (!output) throw std::runtime_error("failed while closing registry file '" + temp.string() + "'");
     }
+#if defined(_WIN32)
+    // Use MoveFileExW with MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
+    // for proper atomic replacement on Windows (POSIX rename cannot replace)
+    const auto temp_str = temp.native();
+    const auto path_str = path.native();
+    if (!MoveFileExW(temp_str.c_str(), path_str.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const auto err = GetLastError();
+        std::error_code ec(err, std::system_category());
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
+        throw std::runtime_error("cannot commit registry file '" + path.string() + "': " + ec.message());
+    }
+#else
+    // POSIX rename provides atomic replacement semantics
     std::error_code error;
     std::filesystem::rename(temp, path, error);
     if (error) {
-        std::filesystem::remove(temp, error);
+        std::error_code ignored;
+        std::filesystem::remove(temp, ignored);
         throw std::runtime_error("cannot commit registry file '" + path.string() + "': " + error.message());
     }
+#endif
 }
 
 std::string registry_descriptor(const std::string& id) {
