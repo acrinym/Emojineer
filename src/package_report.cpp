@@ -194,10 +194,25 @@ std::string render_package_graph_json(const PackageGraphReport& report) {
             << "      \"name\": " << json_string(package.name) << ",\n"
             << "      \"version\": " << json_string(package.version) << ",\n"
             << "      \"relation\": " << json_string(package_relation_name(package.relation)) << ",\n"
+            << "      \"source\": " << json_string(dependency_kind_name(package.source_kind)) << ",\n"
             << "      \"path\": " << json_string(package.path) << ",\n"
             << "      \"entry\": " << json_string(package.entry) << ",\n"
-            << "      \"content_sha256\": " << json_string(package.content_sha256) << ",\n"
-            << "      \"dependencies\": [";
+            << "      \"content_sha256\": " << json_string(package.content_sha256) << ",\n";
+        
+        // Add registry-specific info if present
+        if (package.source_kind == DependencyKind::Registry) {
+            if (package.registry_alias) {
+                out << "      \"registry_alias\": " << json_string(*package.registry_alias) << ",\n";
+            }
+            if (package.registry_endpoint) {
+                out << "      \"registry_endpoint\": " << json_string(*package.registry_endpoint) << ",\n";
+            }
+            if (package.selected_version) {
+                out << "      \"selected_version\": " << json_string(*package.selected_version) << ",\n";
+            }
+        }
+        
+        out << "      \"dependencies\": [";
         for (std::size_t dependency = 0; dependency < package.dependencies.size(); ++dependency) {
             if (dependency != 0) out << ", ";
             out << json_string(package.dependencies[dependency]);

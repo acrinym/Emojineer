@@ -431,7 +431,7 @@ int main(int argc, char** argv) {
             }
             
             if (registry) {
-                // Registry dependency add
+                // Registry dependency add - transactional
                 // Format: emji add <name> <requirement> --registry <endpoint> [--registry-name <alias>] [directory]
                 if (positional_args.size() < 2 || positional_args.size() > 3) {
                     throw std::runtime_error("add requires <package_name> <requirement> --registry <endpoint> and optional project directory");
@@ -442,7 +442,7 @@ int main(int argc, char** argv) {
                     ? std::filesystem::path(positional_args[2])
                     : std::filesystem::current_path();
                 
-                emojineer::add_project_registry_dependency(root, name, requirement, *registry,
+                emojineer::add_project_registry_dependency_transactional(root, name, requirement, *registry,
                     registry_name.value_or("origin"));
                 std::cout << "✅ added " << name << " [" << requirement << "] from registry " << *registry << '\n';
                 return 0;
