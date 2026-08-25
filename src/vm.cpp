@@ -12,7 +12,51 @@ std::int64_t checked_sub(std::int64_t a,std::int64_t b,std::uint32_t line,auto f
 std::int64_t checked_mul(std::int64_t a,std::int64_t b,std::uint32_t line,auto fail){if(a==0||b==0)return 0;if((a==-1&&b==INT64_MIN)||(b==-1&&a==INT64_MIN))fail(line,"integer overflow: ✖️ overflow");if(a>0){if(b>0){if(a>INT64_MAX/b)fail(line,"integer overflow: ✖️ overflow");}else if(b<INT64_MIN/a)fail(line,"integer overflow: ✖️ overflow");}else{if(b>0){if(a<INT64_MIN/b)fail(line,"integer overflow: ✖️ overflow");}else if(a<INT64_MAX/b)fail(line,"integer overflow: ✖️ overflow");}return a*b;}
 }
 VM::VM(std::istream&i,std::ostream&o,std::uint64_t fuel):input_(i),output_(o),fuel_(fuel){}
-void VM::execute(const Chunk& c){verify_bytecode(c);stack_.clear();frames_.clear();globals_.clear();std::size_t ip=0;std::uint64_t remaining=fuel_;while(ip<c.code.size()){if(remaining==0)runtime_error(c.code[ip].line,"execution fuel exhausted (possible infinite loop)");--remaining;const Instruction ins=c.code[ip++];const auto line=ins.line;switch(ins.op){
+
+std::optional<SourcePosition> VM::get_current_source_position() const {
+    if (!current_chunk_ || ip_ >= current_chunk_->source_map.size()) {
+        return std::nullopt;
+    }
+    const auto& src = current_chunk_->source_map[ip_];
+    return SourcePosition(src.source_path, src.line, src.column);
+}
+
+std::vector<DebugFrame> VM::get_call_stack() const {
+    std::vector<DebugFrame> stack;
+    for (std::size_t i = 0; i < frames_.size(); ++i) {
+        const auto& f = frames_[i];
+        DebugFrame frame;
+        frame.frame_index = i;
+        if (f.function_index < current_chunk_->functions.size()) {
+            frame.function_name = current_chunk_->functions[f.function_index].name;
+        }
+        // Get source position for this frame
+        if (f.return_ip > 0 && f.return_ip < current_chunk_->source_map.size()) {
+            const auto& src = current_chunk_->source_map[f.return_ip - 1];
+            frame.source_position = SourcePosition(src.source_path, src.line, src.column);
+        }
+        // Copy locals and parameters
+        if (f.function_index < current_chunk_->functions.size()) {
+            const auto& fn = current_chunk_->functions[f.function_index];
+            frame.parameters.resize(std::min(fn.arity, f.locals.size()));
+            for (std::size_t p = 0; p < frame.parameters.size(); ++p) {
+                frame.parameters[p] = f.locals[p];
+            }
+            frame.locals.resize(f.locals.size() > fn.arity ? f.locals.size() - fn.arity : 0);
+            for (std::size_t l = fn.arity; l < f.locals.size(); ++l) {
+                frame.locals[l - fn.arity] = f.locals[l];
+            }
+        }
+        stack.push_back(std::move(frame));
+    }
+    return stack;
+}
+
+std::unordered_map<std::string, Value> VM::get_globals() const {
+    return globals_;
+}
+
+void VM::execute(const Chunk& c){verify_bytecode(c);stack_.clear();frames_.clear();globals_.clear();ip_=0;current_chunk_=&c;std::uint64_t remaining=fuel_;while(ip_<c.code.size()){if(remaining==0)runtime_error(c.code[ip_].line,"execution fuel exhausted (possible infinite loop)");--remaining;if(debug_control_){if(!debug_control_->debug_hook()){debug_paused_=true;return;}}const Instruction ins=c.code[ip_++];const auto line=ins.line;switch(ins.op){
 case OpCode::Constant:stack_.push_back(c.constants.at(static_cast<std::size_t>(ins.operand)));break;
 case OpCode::LoadGlobal:{auto n=constant_string(c,ins.operand,line);auto it=globals_.find(n);if(it==globals_.end())runtime_error(line,"undefined emoji variable '"+n+"'");stack_.push_back(it->second);break;}
 case OpCode::StoreGlobal:{auto n=constant_string(c,ins.operand,line);globals_[n]=pop(line);break;}

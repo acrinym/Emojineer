@@ -1,6 +1,7 @@
 #pragma once
 #include "emojineer/bytecode.hpp"
 #include "emojineer/cer.hpp"
+#include "emojineer/vm.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -100,12 +101,91 @@ public:
     virtual std::optional<SourcePosition> get_source_position(std::size_t ip) const = 0;
 };
 
-// VM with debugger support
+// Debug controller that implements VMDebugControl to drive the production VM
+// This replaces the old DebugVM which duplicated VM execution semantics
+class DebugController : public VMDebugControl {
+public:
+    using DebugCallback = std::function<void(const DebugSnapshot&)>;
+    
+    DebugController(VM& vm);
+    ~DebugController() override;
+    
+    // Set debugger callback for pause events
+    void set_debug_callback(DebugCallback callback);
+    
+    // Breakpoint management
+    std::size_t set_breakpoint(const BreakpointLocation& location) override;
+    bool remove_breakpoint(std::size_t id) override;
+    bool enable_breakpoint(std::size_t id, bool enabled) override;
+    std::vector<BreakpointLocation> get_breakpoints() const override;
+    
+    // Execution control
+    void continue_execution() override;
+    void pause_execution() override;
+    void step_into() override;
+    void step_over() override;
+    void step_out() override;
+    
+    // Inspection (read-only, no state mutation)
+    std::optional<DebugSnapshot> get_snapshot() const override;
+    std::optional<Value> evaluate_expression(const std::string& expr) override;
+    
+    // Source information
+    std::optional<std::string> get_source_text(const std::string& path, 
+                                                std::uint32_t start_line,
+                                                std::uint32_t end_line) const override;
+    std::optional<SourcePosition> get_source_position(std::size_t ip) const override;
+    
+    // Check if execution is paused
+    bool is_paused() const { return paused_; }
+    
+    // Check if execution is complete
+    bool is_finished() const { return finished_; }
+    
+    // Get breakable positions from current chunk
+    std::vector<SourcePosition> get_breakable_positions() const;
+    
+    // VMDebugControl implementation
+    bool debug_hook() override;
+    std::size_t current_ip() const override;
+    std::optional<SourcePosition> get_current_source_position() const override;
+    std::vector<DebugFrame> get_call_stack() const override;
+    std::unordered_map<std::string, Value> get_globals() const override;
+    bool is_breakpoint_hit() const override;
+    bool should_pause_for_step() const override;
+    std::size_t get_step_out_target_depth() const override;
+    std::size_t get_step_over_target_ip() const override;
+    
+private:
+    void rebuild_breakpoint_index();
+    void notify_debug_event(DebugEventType type, const std::string& reason);
+    std::optional<SourcePosition> find_breakpoint_position(const BreakpointLocation& bp) const;
+    
+    VM& vm_;
+    DebugCallback debug_callback_;
+    std::vector<BreakpointLocation> breakpoints_;
+    std::unordered_map<std::string, std::vector<std::size_t>> breakpoint_ids_by_source_;
+    std::unordered_map<std::size_t, std::size_t> breakpoint_id_by_ip_;
+    
+    // Execution control state
+    enum class DebugRunMode { Running, SteppingInto, SteppingOver, SteppingOut, Paused };
+    DebugRunMode run_mode_{DebugRunMode::Running};
+    std::size_t step_out_frame_depth_{0};
+    std::size_t step_over_start_ip_{0};
+    
+    bool paused_{false};
+    bool finished_{false};
+    std::string pause_reason_;
+};
+
+// Legacy DebugVM wrapper for backward compatibility - uses DebugController to drive real VM
+// DEPRECATED: New code should use DebugController directly with VM
 class DebugVM {
 public:
     using DebugCallback = std::function<void(const DebugSnapshot&)>;
     
     DebugVM(std::istream& input, std::ostream& output, std::uint64_t fuel = 1'000'000);
+    ~DebugVM();
     
     // Set debugger callback
     void set_debug_callback(DebugCallback callback);
@@ -113,7 +193,7 @@ public:
     // Execute with debugger
     void execute(const Chunk& chunk);
     
-    // Debug control
+    // Debug control - delegates to DebugController
     void add_breakpoint(const BreakpointLocation& bp);
     void remove_breakpoint(std::size_t id);
     void set_breakpoints(const std::vector<BreakpointLocation>& bps);
@@ -143,67 +223,15 @@ public:
     std::optional<SourcePosition> current_position() const;
     
     // Check if execution is complete
-    bool is_finished() const { return finished_; }
+    bool is_finished() const { return controller_ && controller_->is_finished(); }
     
     // Get current instruction pointer
-    std::size_t current_ip() const { return ip_; }
+    std::size_t current_ip() const;
 
 private:
-    // CallFrame for DebugVM (similar to VM::CallFrame)
-    struct CallFrame {
-        std::size_t return_ip{0};
-        std::size_t stack_base{0};
-        std::size_t function_index{0};
-        std::vector<Value> locals;
-    };
-    
-    void check_breakpoint();
-    void notify_debug_event(DebugEventType type, const std::string& reason);
-    
-    // VM-like execution state (but controlled)
-    std::istream& input_;
-    std::ostream& output_;
-    std::uint64_t fuel_;
-    std::vector<Value> stack_;
-    std::vector<CallFrame> frames_;
-    std::unordered_map<std::string, Value> globals_;
-    
-    // Debug state
-    std::size_t ip_{0};
-    const Chunk* current_chunk_{nullptr};
-    std::vector<BreakpointLocation> breakpoints_;
-    std::unordered_map<std::size_t, std::size_t> breakpoint_id_by_ip_;  // ip -> breakpoint index
-    std::set<std::size_t> hit_breakpoints_;
-    
-    // Execution control state
-    enum class DebugRunMode { Running, SteppingInto, SteppingOver, SteppingOut, Paused, Finished };
-    DebugRunMode run_mode_{DebugRunMode::Running};
-    std::size_t step_out_frame_depth_{0};
-    std::size_t step_over_start_ip_{0};
-    
+    std::unique_ptr<VM> vm_;
+    std::unique_ptr<DebugController> controller_;
     bool finished_{false};
-    DebugCallback debug_callback_;
-    
-    // Source mapping cache
-    std::unordered_map<std::size_t, SourceLocation> ip_to_source_;
-    
-    // Frame tracking
-    std::vector<SourceLocation> call_stack_positions_;
-    
-    void execute_instruction();
-    void call_function(std::size_t function_index);
-    void return_from_function();
-    void wait_for_continue();
-    
-    Value pop(std::uint32_t line);
-    const Value& peek(std::uint32_t line) const;
-    bool pop_bool(std::uint32_t line);
-    double pop_number(std::uint32_t line);
-    std::int64_t pop_int64(std::uint32_t line);
-    std::string constant_string(std::int32_t idx, std::uint32_t line) const;
-    CallFrame& frame(std::uint32_t line);
-    const CallFrame& frame(std::uint32_t line) const;
-    [[noreturn]] void runtime_error(const std::string& message) const;
 };
 
 // Helper to create deterministic source path (no absolute roots)
