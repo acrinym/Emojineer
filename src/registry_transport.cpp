@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <limits>
@@ -42,6 +43,16 @@ constexpr std::uintmax_t max_index_bytes = 4 * 1024 * 1024;
 constexpr std::uintmax_t max_artifact_bytes = 128ull * 1024ull * 1024ull;
 constexpr std::string_view registry_magic = "EMJREGISTRY1\n";
 constexpr std::string_view index_magic = "EMJREGPKG1\n";
+
+// emjpub1 protocol constants - versioned authenticated publication wire protocol
+constexpr std::string_view emjpub_protocol_version = "emjpub1";
+constexpr std::string_view emjpub_content_type = "application/emjpub1+json";
+constexpr std::string_view emjpub_artifact_type = "application/emjpkg";
+constexpr std::size_t emjpub_max_request_body = 128 * 1024 * 1024;  // 128MB max artifact
+constexpr std::size_t emjpub_max_response_body = 16 * 1024;          // 16KB max receipt
+constexpr long emjpub_connect_timeout = 10;    // 10 seconds
+constexpr long emjpub_timeout = 300;          // 5 minutes total
+constexpr long emjpub_header_timeout = 30;    // 30 seconds for headers
 
 // Package-scoped interprocess lock for serializing package-index publication
 class PackageLock {
@@ -1154,6 +1165,215 @@ private:
     std::string artifact_sha256_;
     std::string artifact_body_;
     std::size_t response_limit_;
+    std::size_t read_pos_ = 0;
+    
+    // Helper to escape strings for JSON
+    static std::string escape_json(const std::string& s) {
+        std::string result;
+        result.reserve(s.size());
+        for (char c : s) {
+            if (c == '"') result += "\\\"";
+            else if (c == '\\') result += "\\\\";
+            else if (c == '\n') result += "\\n";
+            else if (c == '\r') result += "\\r";
+            else if (c == '\t') result += "\\t";
+            else result += c;
+        }
+        return result;
+    }
+};
+
+// emjpub1 wire protocol client - versioned authenticated publication
+// Uses multipart request to upload metadata + artifact in single request
+// Path: POST /v1/publish
+// Content-Type: multipart/form-data with metadata JSON + artifact binary
+// Response: application/json with PublicationReceipt
+
+class HttpsPublishClientV2 {
+public:
+    HttpsPublishClientV2(const std::string& base_url,
+                          const std::string& auth_token,
+                          const std::string& namespace_id,
+                          const std::string& package_name,
+                          const std::string& version,
+                          const std::string& content_sha256,
+                          const std::string& artifact_sha256,
+                          const std::string& artifact_body,
+                          std::size_t response_limit)
+        : base_url_(base_url)
+        , auth_token_(auth_token)
+        , namespace_id_(namespace_id)
+        , package_name_(package_name)
+        , version_(version)
+        , content_sha256_(content_sha256)
+        , artifact_sha256_(artifact_sha256)
+        , artifact_body_(artifact_body)
+        , response_limit_(response_limit) {}
+
+    PublicationReceipt execute() {
+        static const CURLcode initialized = curl_global_init(CURL_GLOBAL_DEFAULT);
+        if (initialized != CURLE_OK) {
+            throw std::runtime_error("cannot initialize HTTPS registry transport");
+        }
+
+        // Validate artifact size against protocol limit
+        if (artifact_body_.size() > emjpub_max_request_body) {
+            throw std::runtime_error("artifact size exceeds protocol limit of " + 
+                std::to_string(emjpub_max_request_body) + " bytes");
+        }
+
+        // Build multipart form with metadata and artifact
+        std::string boundary = "----EmjineerPubBoundary" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        
+        std::string metadata;
+        metadata.reserve(512);
+        metadata = "--" + boundary + "\r\n";
+        metadata += "Content-Disposition: form-data; name=\"metadata\"\r\n";
+        metadata += "Content-Type: " + std::string(emjpub_content_type) + "\r\n\r\n";
+        metadata += "{";
+        metadata += "\"protocol\":\"" + std::string(emjpub_protocol_version) + "\",";
+        metadata += "\"namespace\":\"" + escape_json(namespace_id_) + "\",";
+        metadata += "\"package\":\"" + escape_json(package_name_) + "\",";
+        metadata += "\"version\":\"" + escape_json(version_) + "\",";
+        metadata += "\"content_sha256\":\"" + content_sha256_ + "\",";
+        metadata += "\"artifact_sha256\":\"" + artifact_sha256_ + "\"";
+        metadata += "}\r\n";
+        
+        std::string artifact_part;
+        artifact_part = "--" + boundary + "\r\n";
+        artifact_part += "Content-Disposition: form-data; name=\"artifact\"; filename=\"" + 
+            package_name_ + "-" + version_ + ".emjpkg\"\r\n";
+        artifact_part += "Content-Type: " + std::string(emjpub_artifact_type) + "\r\n\r\n";
+        
+        std::string closing = "\r\n--" + boundary + "--\r\n";
+        
+        // Total size for Content-Length
+        const std::size_t total_size = metadata.size() + artifact_part.size() + artifact_body_.size() + closing.size();
+        
+        std::string publish_url = base_url_ + "/v1/publish";
+        
+        CURL* handle = curl_easy_init();
+        if (!handle) {
+            throw std::runtime_error("cannot initialize HTTPS registry request");
+        }
+
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, ("Content-Type: multipart/form-data; boundary=" + boundary).c_str());
+        headers = curl_slist_append(headers, ("Authorization: Bearer " + auth_token_).c_str());
+        headers = curl_slist_append(headers, ("X-Emojineer-Namespace: " + namespace_id_).c_str());
+        headers = curl_slist_append(headers, ("X-Emojineer-Protocol: " + std::string(emjpub_protocol_version)).c_str());
+        headers = curl_slist_append(headers, "Accept: application/json");
+        
+        CurlBuffer response{{}, response_limit_, false};
+        
+        // Build combined upload buffer
+        std::string upload_buffer;
+        upload_buffer.reserve(total_size);
+        upload_buffer = metadata;
+        upload_buffer += artifact_part;
+        upload_buffer.append(artifact_body_);
+        upload_buffer += closing;
+        
+        curl_easy_setopt(handle, CURLOPT_URL, publish_url.c_str());
+        curl_easy_setopt(handle, CURLOPT_POST, 1L);
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDS, upload_buffer.c_str());
+        curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, upload_buffer.size());
+        curl_easy_setopt(handle, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(handle, CURLOPT_WRITEFUNCTION, curl_write);
+        curl_easy_setopt(handle, CURLOPT_WRITEDATA, &response);
+        
+        // Security settings with bounded timeouts per emjpub1 contract
+        curl_easy_setopt(handle, CURLOPT_FOLLOWLOCATION, 0L);  // No redirects allowed
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYPEER, 1L);  // Verify TLS peer
+        curl_easy_setopt(handle, CURLOPT_SSL_VERIFYHOST, 2L);  // Verify hostname
+        curl_easy_setopt(handle, CURLOPT_CONNECTTIMEOUT, emjpub_connect_timeout);
+        curl_easy_setopt(handle, CURLOPT_TIMEOUT, emjpub_timeout);
+        curl_easy_setopt(handle, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(handle, CURLOPT_USERAGENT, "Emojineer-emji/0.16");
+        
+#if LIBCURL_VERSION_NUM >= 0x075500
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS_STR, "https");
+#else
+        curl_easy_setopt(handle, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+
+        const CURLcode result = curl_easy_perform(handle);
+        long response_code = 0;
+        curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &response_code);
+        curl_slist_free_all(headers);
+        
+        if (response.exceeded) {
+            curl_easy_cleanup(handle);
+            throw std::runtime_error("publication response exceeds size limit");
+        }
+        if (result != CURLE_OK) {
+            curl_easy_cleanup(handle);
+            // Redact auth token from error messages for security
+            std::string error_msg = curl_easy_strerror(result);
+            throw std::runtime_error("HTTPS publication request failed: " + error_msg);
+        }
+        
+        std::string response_bytes = response.bytes;
+        curl_easy_cleanup(handle);
+        
+        // Check response code - deterministic status/error mapping per emjpub1
+        if (response_code == 401) {
+            throw std::runtime_error("publication authentication failed: invalid or missing credential");
+        }
+        if (response_code == 403) {
+            throw std::runtime_error("publication authorization failed: namespace '" + namespace_id_ + "' not owned by credential");
+        }
+        if (response_code == 409) {
+            throw std::runtime_error("publication conflict: version " + version_ + " already exists with different content");
+        }
+        if (response_code == 413) {
+            throw std::runtime_error("publication payload exceeds server limit");
+        }
+        if (response_code == 400) {
+            throw std::runtime_error("publication request rejected: " + response_bytes);
+        }
+        if (response_code < 200 || response_code >= 300) {
+            throw std::runtime_error("HTTPS publication returned status " + std::to_string(response_code) + ": " + response_bytes);
+        }
+        
+        // Parse receipt from response
+        PublicationReceipt receipt = parse_publication_receipt(response_bytes);
+        
+        // Verify protocol version
+        if (receipt.protocol_version != emjpub_protocol_version) {
+            throw std::runtime_error("protocol version mismatch: expected " + 
+                std::string(emjpub_protocol_version) + " got " + receipt.protocol_version);
+        }
+        
+        return receipt;
+    }
+
+private:
+    std::string base_url_;
+    std::string auth_token_;
+    std::string namespace_id_;
+    std::string package_name_;
+    std::string version_;
+    std::string content_sha256_;
+    std::string artifact_sha256_;
+    std::string artifact_body_;
+    std::size_t response_limit_;
+    
+    // Helper to escape strings for JSON
+    static std::string escape_json(const std::string& s) {
+        std::string result;
+        result.reserve(s.size());
+        for (char c : s) {
+            if (c == '"') result += "\\\"";
+            else if (c == '\\') result += "\\\\";
+            else if (c == '\n') result += "\\n";
+            else if (c == '\r') result += "\\r";
+            else if (c == '\t') result += "\\t";
+            else result += c;
+        }
+        return result;
+    }
 };
 
 #endif // EMOJINEER_HAVE_CURL

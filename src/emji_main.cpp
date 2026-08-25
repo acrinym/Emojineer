@@ -28,7 +28,8 @@ void usage() {
         << "  emji registry-init <directory> --id <registry_id>\n"
         << "  emji registry-info --registry <endpoint>\n"
         << "  emji versions <package_name> --registry <endpoint>\n"
-        << "  emji publish [directory] --registry <endpoint> [--token <cred>] [--namespace <ns>] [--receipt <file>]\n"
+        << "  emji publish [directory] --registry <endpoint> [--namespace <ns>] [--receipt <file>]\n"
+        << "       (use EMOJINEER_TOKEN env var for authentication - never pass token as CLI argument)\n"
         << "  emji fetch <package_name> <requirement> --registry <endpoint> [--cache directory]\n"
         << "  emji add <package_name> <relative_path> [directory]\n"
         << "  emji add <package_name> <requirement> --registry <endpoint> [--registry-name <alias>] [directory]\n"
@@ -100,7 +101,6 @@ PackOptions parse_pack_options(int argc, char** argv) {
 struct PublishOptions {
     std::filesystem::path root = std::filesystem::current_path();
     std::optional<std::string> registry;
-    std::optional<std::string> token;
     std::optional<std::string> namespace_id;
     std::optional<std::filesystem::path> receipt;
 };
@@ -114,12 +114,6 @@ PublishOptions parse_publish_options(int argc, char** argv) {
             if (options.registry) throw std::runtime_error("publish accepts only one --registry endpoint");
             if (++i >= argc) throw std::runtime_error("--registry requires an endpoint");
             options.registry = argv[i];
-            continue;
-        }
-        if (arg == "--token") {
-            if (options.token) throw std::runtime_error("publish accepts only one --token");
-            if (++i >= argc) throw std::runtime_error("--token requires a credential token");
-            options.token = argv[i];
             continue;
         }
         if (arg == "--namespace") {
@@ -413,22 +407,16 @@ int main(int argc, char** argv) {
                           << "artifact-sha256: " << result.record.artifact_sha256 << '\n';
                 return 0;
             } else {
-                // HTTPS authenticated publication - requires credentials
-                std::string token;
-                std::string namespace_id;
-                
-                // Get token from CLI or environment
-                if (options.token) {
-                    token = *options.token;
-                } else {
-                    const auto env_token = emojineer::credential_from_environment();
-                    if (!env_token) {
-                        throw std::runtime_error("HTTPS publication requires --token or EMOJINEER_TOKEN environment variable");
-                    }
-                    token = *env_token;
+                // HTTPS authenticated publication - requires credentials from environment only
+                // Token MUST come from EMOJINEER_TOKEN env var - never from CLI arguments
+                // This prevents token leakage into argv, process listing, and child processes
+                const auto env_token = emojineer::credential_from_environment();
+                if (!env_token) {
+                    throw std::runtime_error("HTTPS publication requires EMOJINEER_TOKEN environment variable");
                 }
                 
-                // Get namespace from CLI
+                // Get namespace from CLI (not a secret, can be CLI arg)
+                std::string namespace_id;
                 if (options.namespace_id) {
                     namespace_id = *options.namespace_id;
                 } else {
@@ -436,15 +424,20 @@ int main(int argc, char** argv) {
                 }
                 
                 // Parse and validate credential
-                const auto credential = emojineer::parse_credential(token, namespace_id);
+                const auto credential = emojineer::parse_credential(*env_token, namespace_id);
                 
                 // Publish with authentication
                 const auto receipt = emojineer::publish_package_to_https_registry(options.root, endpoint, credential);
                 
-                // Save receipt to file if requested
+                // Save receipt to file if requested (or use default path)
                 if (options.receipt) {
                     emojineer::save_receipt_file(*options.receipt, receipt);
                     std::cout << "📄 receipt saved to " << options.receipt->string() << '\n';
+                } else {
+                    // Default receipt path in package directory
+                    auto default_receipt = options.root / ".emojineer-receipt.json";
+                    emojineer::save_receipt_file(default_receipt, receipt);
+                    std::cout << "📄 receipt saved to " << default_receipt.string() << '\n';
                 }
                 
                 std::cout << "✅ published " << manifest.name << '@' << receipt.version << '\n'
