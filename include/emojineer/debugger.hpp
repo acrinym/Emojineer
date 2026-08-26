@@ -17,6 +17,53 @@ namespace emojineer {
 // Forward declaration - VM defined in vm.hpp
 class VM;
 
+// Source resolver - maps deterministic module identity to available source content
+// Keeps checkout-absolute roots out of bytecode/debug identities
+class SourceResolver {
+public:
+    SourceResolver() = default;
+    
+    // Add a source search path (e.g., project root, package directories)
+    void add_search_path(const std::filesystem::path& path);
+    
+    // Set the base path for resolving relative paths
+    void set_base_path(const std::filesystem::path& base);
+    
+    // Resolve a deterministic module identity to an actual file path
+    // Returns empty path if not found
+    std::filesystem::path resolve(const std::string& deterministic_identity) const;
+    
+    // Get source text from deterministic identity
+    std::optional<std::string> get_source_text(const std::string& identity,
+                                                std::uint32_t start_line,
+                                                std::uint32_t end_line) const;
+    
+    // Register source content directly (for materialized packages)
+    void register_source(const std::string& identity, std::string content);
+
+private:
+    std::vector<std::filesystem::path> search_paths_;
+    std::filesystem::path base_path_;
+    std::unordered_map<std::string, std::string> registered_sources_;  // identity -> content
+};
+
+// Breakpoint binding status for diagnostics
+enum class BreakpointStatus {
+    Bound,       // Successfully bound to a source location
+    Unbound,     // No matching source location found
+    Stale,       // Source file has changed since compilation
+    SourceDrift // Source path no longer accessible
+};
+
+// Detailed breakpoint info with binding status
+struct BreakpointInfo {
+    std::size_t id;
+    BreakpointLocation location;
+    BreakpointStatus status;
+    std::optional<std::size_t> bound_ip;  // IP if bound
+    std::string diagnostics;  // Human-readable status info
+};
+
 // Debug controller that implements VMDebugControl to drive the production VM
 // This replaces the old DebugVM which duplicated VM execution semantics
 class DebugController : public VMDebugControl, public DebuggerControl {
@@ -28,6 +75,9 @@ public:
     
     // Set debugger callback for pause events
     void set_debug_callback(DebugCallback callback);
+    
+    // Set source resolver for mapping identities to source
+    void set_source_resolver(std::shared_ptr<SourceResolver> resolver);
     
     // DebuggerControl implementation
     std::size_t set_breakpoint(const BreakpointLocation& location) override;
@@ -55,6 +105,9 @@ public:
     // Get breakable positions from current chunk
     std::vector<SourcePosition> get_breakable_positions() const;
     
+    // Get detailed breakpoint info with binding status
+    std::vector<BreakpointInfo> get_breakpoint_info() const;
+    
     // VMDebugControl implementation
     bool debug_hook() override;
     std::size_t current_ip() const override;
@@ -73,6 +126,7 @@ public:
     
     VM& vm_;
     DebugCallback debug_callback_;
+    std::shared_ptr<SourceResolver> source_resolver_;
     std::vector<BreakpointLocation> breakpoints_;
     std::unordered_map<std::string, std::vector<std::size_t>> breakpoint_ids_by_source_;
     std::unordered_map<std::size_t, std::size_t> breakpoint_id_by_ip_;
@@ -85,6 +139,11 @@ public:
     std::size_t step_over_start_ip_{0};
     std::size_t step_into_start_ip_{0};
     bool step_into_first_{true};
+    
+    // Step state for source-boundary stepping (mutable for const methods)
+    mutable std::optional<SourcePosition> step_start_position_;
+    mutable std::size_t step_start_depth_{0};
+    mutable bool step_initialized_{false};
     
     bool paused_{false};
     bool finished_{false};

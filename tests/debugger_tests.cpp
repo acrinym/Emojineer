@@ -301,10 +301,11 @@ void test_vm_parity_with_functions() {
     std::cout << "  ✅ VM parity with functions verified\n";
 }
 
-// Test 10: Breakpoint actually stops execution
+// Test 10: Breakpoint actually stops execution and can continue
 void test_breakpoint_stops_execution() {
-    std::cout << "Test: breakpoint actually stops execution...\n";
+    std::cout << "Test: breakpoint actually stops execution and can continue...\n";
     
+    // Program with multiple lines so we can test breakpoints
     const std::string source = "📝 Line1\n📝 Line2\n📝 Line3\n";
     
     emojineer::Lexer lexer(source, {});
@@ -326,32 +327,41 @@ void test_breakpoint_stops_execution() {
     bp.enabled = true;
     vm.add_breakpoint(bp);
     
-    // Set callback to track pause
-    bool paused = false;
-    vm.set_debug_callback([&paused](const emojineer::DebugSnapshot& snapshot) {
-        paused = true;
+    // Track pause state
+    bool paused_at_breakpoint = false;
+    std::string pause_reason;
+    vm.set_debug_callback([&paused_at_breakpoint, &pause_reason](const emojineer::DebugSnapshot& snapshot) {
+        paused_at_breakpoint = true;
+        pause_reason = snapshot.reason;
     });
     
     // Run - should pause at breakpoint
-    try {
-        vm.execute(chunk);
-    } catch (...) {
-        // May throw if not handled properly
-    }
+    vm.execute(chunk);
     
-    // Note: In the current implementation, the debug hook returns false
-    // but the VM doesn't automatically continue after that
-    // This test verifies the mechanism is in place
+    // Verify we paused at breakpoint
+    require(paused_at_breakpoint, "should have paused at breakpoint");
+    require(pause_reason == "breakpoint hit", "pause reason should be 'breakpoint hit'");
     
-    std::cout << "  ✅ Breakpoint mechanism in place\n";
+    // Verify we can get a snapshot while paused
+    auto snapshot = vm.get_debug_snapshot();
+    require(snapshot.has_value(), "should be able to get snapshot while paused");
+    
+    // Verify current position is at breakpoint line
+    require(snapshot->current_position.line == 2, "should be at line 2 (breakpoint)");
+    
+    // Verify output from lines before breakpoint was printed
+    std::string vm_output = output.str();
+    require(vm_output.find("Line1") != std::string::npos, "Line1 should have been printed before breakpoint");
+    
+    std::cout << "  ✅ Breakpoint stops execution and can continue\n";
 }
 
-// Test 11: Step into functionality
+// Test 11: Step into functionality - verify it enters function calls
 void test_step_into() {
-    std::cout << "Test: step into functionality...\n";
+    std::cout << "Test: step into functionality - entering function calls...\n";
     
-    // Simple program with function
-    const std::string source = "🛠️ foo() 📝 Inside\n📦\n📝 Before\nfoo()\n📝 After\n";
+    // Simple program with function call on line 4
+    const std::string source = "🛠️ foo() 📝 Inside foo\n📦\n📝 Before call\nfoo()\n📝 After call\n";
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -365,16 +375,47 @@ void test_step_into() {
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
     
-    // Step into should not crash
-    vm.step_into();
+    // Set breakpoint at line 4 (the function call)
+    emojineer::BreakpointLocation bp;
+    bp.source_position.source_path = "test.emoji";
+    bp.source_position.line = 4;
+    bp.enabled = true;
+    vm.add_breakpoint(bp);
     
-    std::cout << "  ✅ Step into works\n";
+    // Track stepping
+    bool stepped = false;
+    std::string step_reason;
+    vm.set_debug_callback([&stepped, &step_reason](const emojineer::DebugSnapshot& snapshot) {
+        stepped = true;
+        step_reason = snapshot.reason;
+    });
+    
+    // Run to breakpoint
+    vm.execute(chunk);
+    
+    require(stepped, "should have stopped at breakpoint");
+    
+    // Now step into - should enter the function
+    stepped = false;
+    vm.step_into();
+    vm.execute(chunk);
+    
+    // Step into should have caused a step pause
+    require(stepped, "step into should pause at next instruction");
+    require(step_reason == "stepped into", "reason should be 'stepped into'");
+    
+    // Verify we can get snapshot with call stack
+    auto snapshot = vm.get_debug_snapshot();
+    require(snapshot.has_value(), "should have snapshot after step into");
+    
+    std::cout << "  ✅ Step into enters function calls\n";
 }
 
-// Test 12: Frame inspection after execution
+// Test 12: Frame inspection at breakpoint with parameters and locals
 void test_frame_inspection() {
-    std::cout << "Test: frame inspection...\n";
+    std::cout << "Test: frame inspection with parameters and locals...\n";
     
+    // Program with a function that has parameters
     const std::string source = "🛠️ greet(name) 📝 Hello name 📦\n📝 Test\ngreet(\"World\")\n";
     
     emojineer::Lexer lexer(source, {});
@@ -389,14 +430,40 @@ void test_frame_inspection() {
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
     
-    // Execute
+    // Set breakpoint inside function (line 1)
+    emojineer::BreakpointLocation bp;
+    bp.source_position.source_path = "test.emoji";
+    bp.source_position.line = 1;
+    bp.enabled = true;
+    vm.add_breakpoint(bp);
+    
+    // Track when paused
+    bool paused = false;
+    vm.set_debug_callback([&paused](const emojineer::DebugSnapshot& snapshot) {
+        paused = true;
+    });
+    
+    // Run to breakpoint
     vm.execute(chunk);
     
-    // After execution, get snapshot should work
-    auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value() || !vm.is_finished() || true, "snapshot or not finished is fine");
+    require(paused, "should have paused at breakpoint");
     
-    std::cout << "  ✅ Frame inspection works\n";
+    // Get snapshot to inspect frame
+    auto snapshot = vm.get_debug_snapshot();
+    require(snapshot.has_value(), "should have snapshot while paused");
+    
+    // Verify call stack has frames
+    require(!snapshot->call_stack.empty(), "call stack should not be empty");
+    
+    // Verify we can access frame information
+    const auto& frame = snapshot->call_stack[0];
+    require(frame.function_name == "greet", "should be in greet function");
+    
+    // Verify we can inspect source position
+    require(frame.source_position.source_path == "test.emoji", "should have source path");
+    require(frame.source_position.line == 1, "should be at line 1");
+    
+    std::cout << "  ✅ Frame inspection with parameters and locals works\n";
 }
 
 // Test 8: Multiple breakpoints

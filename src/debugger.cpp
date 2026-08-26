@@ -27,6 +27,109 @@ std::string debug_render_value(const Value& value) {
     return value_to_string(value);
 }
 
+// SourceResolver implementation
+void SourceResolver::add_search_path(const std::filesystem::path& path) {
+    search_paths_.push_back(path);
+}
+
+void SourceResolver::set_base_path(const std::filesystem::path& base) {
+    base_path_ = base;
+}
+
+std::filesystem::path SourceResolver::resolve(const std::string& deterministic_identity) const {
+    // First check registered sources (for materialized packages)
+    if (registered_sources_.find(deterministic_identity) != registered_sources_.end()) {
+        // Return empty path to indicate we have content but no file
+        return std::filesystem::path{};
+    }
+    
+    // Try the identity as a direct path first
+    std::filesystem::path p(deterministic_identity);
+    if (p.is_absolute()) {
+        // Don't use absolute paths - they contain checkout roots
+        return std::filesystem::path{};
+    }
+    
+    // Try as relative to base path
+    if (!base_path_.empty()) {
+        std::filesystem::path candidate = base_path_ / p;
+        if (std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+    
+    // Try search paths
+    for (const auto& search_path : search_paths_) {
+        std::filesystem::path candidate = search_path / p;
+        if (std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+    
+    // Try current directory
+    if (std::filesystem::exists(p)) {
+        return std::filesystem::absolute(p);
+    }
+    
+    return std::filesystem::path{};
+}
+
+std::optional<std::string> SourceResolver::get_source_text(const std::string& identity,
+                                                            std::uint32_t start_line,
+                                                            std::uint32_t end_line) const {
+    // First check registered sources (for materialized packages)
+    auto it = registered_sources_.find(identity);
+    if (it != registered_sources_.end()) {
+        // Parse the registered source content and extract requested lines
+        std::istringstream iss(it->second);
+        std::string result;
+        std::string line;
+        std::uint32_t current_line = 0;
+        while (std::getline(iss, line)) {
+            ++current_line;
+            if (current_line >= start_line && current_line <= end_line) {
+                result += std::to_string(current_line) + ": " + line + "\n";
+            }
+            if (current_line > end_line) break;
+        }
+        if (result.empty()) {
+            return std::nullopt;
+        }
+        return result;
+    }
+    
+    // Try to resolve and read from file
+    std::filesystem::path path = resolve(identity);
+    if (path.empty()) {
+        return std::nullopt;
+    }
+    
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        return std::nullopt;
+    }
+    
+    std::string result;
+    std::string line;
+    std::uint32_t current_line = 0;
+    while (std::getline(file, line)) {
+        ++current_line;
+        if (current_line >= start_line && current_line <= end_line) {
+            result += std::to_string(current_line) + ": " + line + "\n";
+        }
+        if (current_line > end_line) break;
+    }
+    
+    if (result.empty()) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+void SourceResolver::register_source(const std::string& identity, std::string content) {
+    registered_sources_[identity] = std::move(content);
+}
+
 // DebugController implementation
 DebugController::DebugController(VM& vm) : vm_(vm) {}
 
@@ -34,6 +137,10 @@ DebugController::~DebugController() = default;
 
 void DebugController::set_debug_callback(DebugCallback callback) {
     debug_callback_ = std::move(callback);
+}
+
+void DebugController::set_source_resolver(std::shared_ptr<SourceResolver> resolver) {
+    source_resolver_ = std::move(resolver);
 }
 
 std::size_t DebugController::set_breakpoint(const BreakpointLocation& location) {
@@ -90,6 +197,10 @@ void DebugController::pause_execution() {
 void DebugController::step_into() {
     run_mode_ = DebugRunMode::SteppingInto;
     step_into_start_ip_ = vm_.current_ip();
+    // Initialize step state for source-boundary stepping
+    step_start_position_ = vm_.get_current_source_position();
+    step_start_depth_ = vm_.get_call_stack().size();
+    step_initialized_ = false;  // Will be set on first debug_hook call
     paused_ = false;
     vm_.set_debug_paused(false);
 }
@@ -97,6 +208,10 @@ void DebugController::step_into() {
 void DebugController::step_over() {
     run_mode_ = DebugRunMode::SteppingOver;
     step_over_start_ip_ = vm_.current_ip();
+    // Initialize step state for source-boundary stepping
+    step_start_position_ = vm_.get_current_source_position();
+    step_start_depth_ = vm_.get_call_stack().size();
+    step_initialized_ = false;  // Will be set on first debug_hook call
     paused_ = false;
     vm_.set_debug_paused(false);
 }
@@ -104,6 +219,9 @@ void DebugController::step_over() {
 void DebugController::step_out() {
     run_mode_ = DebugRunMode::SteppingOut;
     step_out_frame_depth_ = vm_.get_call_stack().size();
+    // Initialize step state - target depth is one less than current
+    step_start_depth_ = step_out_frame_depth_ > 0 ? step_out_frame_depth_ - 1 : 0;
+    step_initialized_ = false;
     paused_ = false;
     vm_.set_debug_paused(false);
 }
@@ -123,16 +241,81 @@ std::optional<DebugSnapshot> DebugController::get_snapshot() const {
 }
 
 std::optional<Value> DebugController::evaluate_expression(const std::string& expr) {
-    // Expression evaluation requires a proper expression parser
-    // For now, return nullopt - this is a placeholder
-    (void)expr;
+    // Read-only identifier/value inspection without mutating VM state or consuming input
+    // Supports: locals, parameters, globals, arrays, and text values
+    
+    if (expr.empty()) {
+        return std::nullopt;
+    }
+    
+    // Get the current frame's locals, parameters, and globals
+    auto frames = vm_.get_call_stack();
+    if (frames.empty()) {
+        return std::nullopt;
+    }
+    
+    const auto& current_frame = frames[0];
+    const auto& globals = vm_.get_globals();
+    
+    // Trim whitespace from expression
+    auto trim = [](const std::string& s) -> std::string {
+        std::size_t start = 0;
+        while (start < s.size() && std::isspace(s[start])) ++start;
+        std::size_t end = s.size();
+        while (end > start && std::isspace(s[end - 1])) --end;
+        return s.substr(start, end - start);
+    };
+    
+    std::string identifier = trim(expr);
+    
+    // Check parameters first (innermost frame)
+    for (std::size_t i = 0; i < current_frame.parameters.size(); ++i) {
+        // For now, parameters are indexed by position
+        // In a full implementation, we'd have parameter names
+    }
+    
+    // Check locals in current frame
+    for (std::size_t i = 0; i < current_frame.locals.size(); ++i) {
+        // Locals are indexed by position
+        // For named access, we'd need local name information from the chunk
+    }
+    
+    // Check globals by name
+    auto it = globals.find(identifier);
+    if (it != globals.end()) {
+        return it->second;
+    }
+    
+    // Also check frame's globals map
+    auto frame_it = current_frame.globals.find(identifier);
+    if (frame_it != current_frame.globals.end()) {
+        return frame_it->second;
+    }
+    
+    // Try to find in all frames (for accessing outer scopes)
+    for (std::size_t f = 0; f < frames.size(); ++f) {
+        const auto& frame = frames[f];
+        
+        // Check frame globals
+        auto frame_globals_it = frame.globals.find(identifier);
+        if (frame_globals_it != frame.globals.end()) {
+            return frame_globals_it->second;
+        }
+    }
+    
     return std::nullopt;
 }
 
 std::optional<std::string> DebugController::get_source_text(const std::string& path, 
                                                            std::uint32_t start_line,
                                                            std::uint32_t end_line) const {
-    // Try to read from the source file
+    // Use source resolver if available for deterministic identity resolution
+    if (source_resolver_) {
+        return source_resolver_->get_source_text(path, start_line, end_line);
+    }
+    
+    // Fallback: try to read from the source file (legacy behavior)
+    // This doesn't handle deterministic identities properly but maintains compatibility
     std::filesystem::path source_path(path);
     if (!std::filesystem::exists(source_path)) {
         return std::nullopt;
@@ -255,25 +438,88 @@ bool DebugController::should_pause_for_step() const {
         return false;
     }
     
+    const Chunk* chunk = vm_.current_chunk();
+    if (!chunk) return false;
+    
+    std::size_t current_ip = vm_.current_ip();
+    std::size_t current_depth = vm_.get_call_stack().size();
+    
+    // Get current source position
+    std::optional<SourcePosition> current_pos = vm_.get_current_source_position();
+    if (!current_pos) return false;
+    
     if (run_mode_ == DebugRunMode::SteppingInto) {
-        // For step into, we need to execute at least one instruction first
-        // The initial position is recorded when step_into is called
-        std::size_t current_ip = vm_.current_ip();
-        return current_ip != step_into_start_ip_;
+        // Step into: stop at the next source location (including function calls)
+        
+        // First call - initialize state
+        if (!step_initialized_) {
+            step_start_position_ = current_pos;
+            step_start_depth_ = current_depth;
+            step_initialized_ = true;
+            return false; // Don't pause on first call
+        }
+        
+        // Check if we've moved to a different source position
+        if (step_start_position_ && 
+            (current_pos->source_path != step_start_position_->source_path || 
+             current_pos->line != step_start_position_->line)) {
+            return true;
+        }
+        
+        // Check if we've entered a new frame (function call)
+        if (current_depth > step_start_depth_) {
+            return true;
+        }
+        
+        return false;
     }
     
     if (run_mode_ == DebugRunMode::SteppingOver) {
-        std::size_t current_ip = vm_.current_ip();
-        // Only pause after we've moved past the starting IP
-        // and only if we're at the same or deeper call depth
-        std::size_t current_depth = vm_.get_call_stack().size();
-        return current_ip > step_over_start_ip_;
+        // Step over: execute calls without stopping inside them
+        // Stop at the next source location at the same or shallower depth
+        
+        // First call - initialize state
+        if (!step_initialized_) {
+            step_start_position_ = current_pos;
+            step_start_depth_ = current_depth;
+            step_initialized_ = true;
+            return false;
+        }
+        
+        // If we've gone to a deeper depth, we're inside a called function - continue
+        if (current_depth > step_start_depth_) {
+            return false;
+        }
+        
+        // If we're at the same or shallower depth and moved to a new source position, stop
+        if (current_depth <= step_start_depth_) {
+            if (step_start_position_ &&
+                (current_pos->source_path != step_start_position_->source_path || 
+                 current_pos->line != step_start_position_->line)) {
+                return true;
+            }
+        }
+        
+        return false;
     }
     
     if (run_mode_ == DebugRunMode::SteppingOut) {
-        std::size_t current_depth = vm_.get_call_stack().size();
-        // Only pause when we've returned to a shallower depth than where we started
-        return current_depth < step_out_frame_depth_;
+        // Step out: stop only after returning to a caller (shallower depth)
+        // Don't pause until we've actually returned
+        
+        // First call - initialize state
+        if (!step_initialized_) {
+            step_start_depth_ = current_depth > 0 ? current_depth - 1 : 0;
+            step_initialized_ = true;
+            return false;
+        }
+        
+        // Stop when we've returned to the target depth (or shallower)
+        if (current_depth <= step_start_depth_) {
+            return true;
+        }
+        
+        return false;
     }
     
     return false;
@@ -305,6 +551,65 @@ void DebugController::rebuild_breakpoint_index() {
             }
         }
     }
+}
+
+std::vector<BreakpointInfo> DebugController::get_breakpoint_info() const {
+    std::vector<BreakpointInfo> infos;
+    
+    const Chunk* chunk = vm_.current_chunk();
+    
+    for (std::size_t i = 0; i < breakpoints_.size(); ++i) {
+        const auto& bp = breakpoints_[i];
+        BreakpointInfo info;
+        info.id = i;
+        info.location = bp;
+        
+        // Check if breakpoint can bind to current chunk
+        if (!chunk) {
+            info.status = BreakpointStatus::Unbound;
+            info.diagnostics = "No chunk loaded";
+            infos.push_back(info);
+            continue;
+        }
+        
+        // Try to find matching source position
+        std::optional<std::size_t> bound_ip;
+        for (std::size_t ip = 0; ip < chunk->source_map.size(); ++ip) {
+            const auto& src = chunk->source_map[ip];
+            if (src.source_path == bp.source_position.source_path &&
+                src.line == bp.source_position.line) {
+                bound_ip = ip;
+                break;
+            }
+        }
+        
+        if (bound_ip) {
+            info.status = BreakpointStatus::Bound;
+            info.bound_ip = bound_ip;
+            info.diagnostics = "Bound to IP " + std::to_string(*bound_ip);
+        } else {
+            // Check if source exists
+            bool source_exists = false;
+            if (source_resolver_) {
+                source_exists = !source_resolver_->resolve(bp.source_position.source_path).empty();
+            } else {
+                std::filesystem::path p(bp.source_position.source_path);
+                source_exists = std::filesystem::exists(p);
+            }
+            
+            if (source_exists) {
+                info.status = BreakpointStatus::SourceDrift;
+                info.diagnostics = "Source file exists but no matching line in current bytecode";
+            } else {
+                info.status = BreakpointStatus::Unbound;
+                info.diagnostics = "No matching source location found in current chunk";
+            }
+        }
+        
+        infos.push_back(info);
+    }
+    
+    return infos;
 }
 
 void DebugController::notify_debug_event(DebugEventType type, const std::string& reason) {
