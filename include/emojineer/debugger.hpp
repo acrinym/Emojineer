@@ -134,7 +134,8 @@ public:
     
     // Execution control state
     enum class DebugRunMode { Running, SteppingInto, SteppingOver, SteppingOut, Paused };
-    DebugRunMode run_mode_{DebugRunMode::Running};
+    // Start in Paused mode so user can set breakpoints before execution
+    DebugRunMode run_mode_{DebugRunMode::Paused};
     std::size_t step_out_frame_depth_{0};
     std::size_t step_over_start_ip_{0};
     std::size_t step_into_start_ip_{0};
@@ -145,7 +146,8 @@ public:
     mutable std::size_t step_start_depth_{0};
     mutable bool step_initialized_{false};
     
-    bool paused_{false};
+    // Start paused so user can set breakpoints before execution begins
+    bool paused_{true};
     bool finished_{false};
     std::string pause_reason_;
 };
@@ -169,6 +171,7 @@ public:
     void add_breakpoint(const BreakpointLocation& bp);
     void remove_breakpoint(std::size_t id);
     void set_breakpoints(const std::vector<BreakpointLocation>& bps);
+    std::vector<BreakpointLocation> get_breakpoints() const;
     void rebuild_breakpoint_index();
     
     // Execution control

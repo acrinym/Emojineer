@@ -421,7 +421,8 @@ std::unordered_map<std::string, Value> DebugController::get_globals() const {
 }
 
 bool DebugController::is_breakpoint_hit() const {
-    if (run_mode_ != DebugRunMode::Running) return false;
+    // Check breakpoints in all modes - user breakpoints should be honored even during stepping
+    // However, we don't want to re-hit the same breakpoint immediately - that's handled by step semantics
     
     std::size_t ip = vm_.current_ip();
     auto it = breakpoint_id_by_ip_.find(ip);
@@ -430,7 +431,13 @@ bool DebugController::is_breakpoint_hit() const {
     std::size_t bp_id = it->second;
     if (bp_id >= breakpoints_.size()) return false;
     
-    return breakpoints_[bp_id].enabled;
+    // Only honor enabled breakpoints
+    if (!breakpoints_[bp_id].enabled) return false;
+    
+    // If we're stepping, we need to ensure we don't immediately re-hit the same breakpoint
+    // The step logic in should_pause_for_step will handle the pause after the instruction executes
+    // Here we just check if there's a breakpoint at the current location
+    return true;
 }
 
 bool DebugController::should_pause_for_step() const {
@@ -680,6 +687,10 @@ void DebugVM::set_breakpoints(const std::vector<BreakpointLocation>& bps) {
     }
 }
 
+std::vector<BreakpointLocation> DebugVM::get_breakpoints() const {
+    return controller_->get_breakpoints();
+}
+
 void DebugVM::rebuild_breakpoint_index() {
     // Handled internally by DebugController
 }
@@ -778,13 +789,15 @@ int run_debug_session(const std::filesystem::path& source_file,
         output << snapshot.current_position.line << "\n";
     });
     
-    // Initial execution to first breakpoint/pause
-    debug_vm->execute(chunk);
+    // Don't execute immediately - debugger starts in paused mode so user can set breakpoints first
     
     output << "Emojineer debugger (type 'help' for commands)\n";
     output << "Loaded: " << source_file.string() << "\n";
+    output << "Set breakpoints with 'break <file:line>', then 'continue' to run\n";
     
     bool running = true;
+    std::size_t selected_frame = 0;  // Persistent frame selection
+    
     while (running) {
         // Show current position
         auto pos = debug_vm->current_position();
@@ -900,8 +913,26 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            const auto& frame = snapshot->call_stack[0];
-            output << "Frame #0: " << frame.function_name << "\n";
+            // Accept optional frame index
+            if (parts.size() >= 2) {
+                try {
+                    std::size_t new_frame = std::stoul(parts[1]);
+                    if (new_frame >= snapshot->call_stack.size()) {
+                        output << "Frame #" << new_frame << " out of range (max is " 
+                               << (snapshot->call_stack.size() - 1) << ")\n";
+                        continue;
+                    }
+                    selected_frame = new_frame;
+                } catch (...) {
+                    output << "Invalid frame number\n";
+                    continue;
+                }
+            }
+            if (selected_frame >= snapshot->call_stack.size()) {
+                selected_frame = 0;
+            }
+            const auto& frame = snapshot->call_stack[selected_frame];
+            output << "Frame #" << selected_frame << ": " << frame.function_name << "\n";
             output << "  at " << frame.source_position.source_path << ":" << frame.source_position.line << "\n";
         }
         else if (cmd == "locals") {
@@ -910,8 +941,11 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            const auto& frame = snapshot->call_stack[0];
-            output << "Locals:\n";
+            if (selected_frame >= snapshot->call_stack.size()) {
+                selected_frame = 0;
+            }
+            const auto& frame = snapshot->call_stack[selected_frame];
+            output << "Locals in frame #" << selected_frame << ":\n";
             for (std::size_t i = 0; i < frame.locals.size(); ++i) {
                 output << "  local[" << i << "]: " << emojineer::debug_render_value(frame.locals[i]) << "\n";
             }
@@ -926,7 +960,10 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            const auto& frame = snapshot->call_stack[0];
+            if (selected_frame >= snapshot->call_stack.size()) {
+                selected_frame = 0;
+            }
+            const auto& frame = snapshot->call_stack[selected_frame];
             output << "Globals:\n";
             for (const auto& g : frame.globals) {
                 output << "  " << g.first << ": " << emojineer::debug_render_value(g.second) << "\n";
@@ -937,8 +974,34 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Usage: print <expression>\n";
                 continue;
             }
-            // For now, just show the expression back - full eval would need expression parser
-            output << "Expression evaluation not yet implemented\n";
+            auto snapshot = debug_vm->get_debug_snapshot();
+            if (!snapshot) {
+                output << "Not paused\n";
+                continue;
+            }
+            if (selected_frame >= snapshot->call_stack.size()) {
+                selected_frame = 0;
+            }
+            const auto& frame = snapshot->call_stack[selected_frame];
+            
+            // Simple identifier lookup - check locals, parameters, then globals
+            std::string identifier = parts[1];
+            
+            // Check locals first
+            for (std::size_t i = 0; i < frame.locals.size(); ++i) {
+                output << "  local[" << i << "]: " << emojineer::debug_render_value(frame.locals[i]) << "\n";
+            }
+            // Check parameters
+            for (std::size_t i = 0; i < frame.parameters.size(); ++i) {
+                output << "  param[" << i << "]: " << emojineer::debug_render_value(frame.parameters[i]) << "\n";
+            }
+            // Check globals
+            auto it = frame.globals.find(identifier);
+            if (it != frame.globals.end()) {
+                output << identifier << " = " << emojineer::debug_render_value(it->second) << "\n";
+            } else {
+                output << "Variable '" << identifier << "' not found\n";
+            }
         }
         else if (cmd == "list" || cmd == "l") {
             auto pos = debug_vm->current_position();
@@ -961,15 +1024,17 @@ int run_debug_session(const std::filesystem::path& source_file,
             }
         }
         else if (cmd == "run") {
-            // Restart the debug session
+            // Restart the debug session but preserve breakpoints
+            auto breakpoints = debug_vm->get_breakpoints();
             debug_vm = std::make_unique<emojineer::DebugVM>(input, output);
             debug_vm->set_debug_callback([&output](const emojineer::DebugSnapshot& snapshot) {
                 output << "\n" << snapshot.reason << " at ";
                 output << snapshot.current_position.source_path << ":";
                 output << snapshot.current_position.line << "\n";
             });
-            debug_vm->execute(chunk);
-            output << "Restarted debug session\n";
+            // Restore breakpoints
+            debug_vm->set_breakpoints(breakpoints);
+            output << "Restarted debug session (breakpoints preserved)\n";
         }
         else {
             output << "Unknown command: " << cmd << " (type 'help' for commands)\n";

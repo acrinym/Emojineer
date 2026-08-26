@@ -1,5 +1,6 @@
 #include "emojineer/vm.hpp"
 #include "emojineer/unicode.hpp"
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <istream>
@@ -57,18 +58,40 @@ std::optional<SourcePosition> VM::get_current_source_position() const {
 }
 
 std::vector<DebugFrame> VM::get_call_stack() const {
+    // Build frames in reverse order so frame 0 is innermost (currently executing)
+    // This matches debugger conventions where frame 0 is the current function
     std::vector<DebugFrame> stack;
+    
+    // Determine which frame is currently executing (innermost)
+    // The current instruction pointer tells us which frame we're in
+    std::size_t innermost_idx = frames_.empty() ? 0 : frames_.size() - 1;
+    
     for (std::size_t i = 0; i < frames_.size(); ++i) {
         const auto& f = frames_[i];
         DebugFrame frame;
-        frame.frame_index = i;
+        // Frame 0 is innermost (most recent call), frames increase outward
+        frame.frame_index = frames_.size() - 1 - i;
+        
         if (f.function_index < current_chunk_->functions.size()) {
             frame.function_name = current_chunk_->functions[f.function_index].name;
         }
-        if (f.return_ip > 0 && f.return_ip < current_chunk_->source_map.size()) {
-            const auto& src = current_chunk_->source_map[f.return_ip - 1];
-            frame.source_position = SourcePosition(src.source_path, src.line, src.column);
+        
+        // For the innermost (currently executing) frame, use current IP
+        // For suspended callers, use return IP - 1 (where they will resume)
+        if (i == innermost_idx) {
+            // Current executing frame - use current IP
+            if (ip_ > 0 && ip_ < current_chunk_->source_map.size()) {
+                const auto& src = current_chunk_->source_map[ip_];
+                frame.source_position = SourcePosition(src.source_path, src.line, src.column);
+            }
+        } else {
+            // Suspended caller - use return IP - 1 (where it will resume)
+            if (f.return_ip > 0 && f.return_ip < current_chunk_->source_map.size()) {
+                const auto& src = current_chunk_->source_map[f.return_ip - 1];
+                frame.source_position = SourcePosition(src.source_path, src.line, src.column);
+            }
         }
+        
         if (f.function_index < current_chunk_->functions.size()) {
             const auto& fn = current_chunk_->functions[f.function_index];
             frame.parameters.resize(std::min<std::size_t>(fn.arity, f.locals.size()));
@@ -80,8 +103,20 @@ std::vector<DebugFrame> VM::get_call_stack() const {
                 frame.locals[l - fn.arity] = f.locals[l];
             }
         }
+        
+        // Add globals for each frame (the VM's global state)
+        frame.globals = globals_;
+        
         stack.push_back(std::move(frame));
     }
+    
+    // Reverse so frame 0 is innermost
+    std::reverse(stack.begin(), stack.end());
+    // Re-index to ensure 0 = innermost
+    for (std::size_t i = 0; i < stack.size(); ++i) {
+        stack[i].frame_index = i;
+    }
+    
     return stack;
 }
 
@@ -113,17 +148,22 @@ void VM::run_execution_loop() {
     const Chunk& c = *current_chunk_;
     
     while (ip_ < c.code.size()) {
-        if (remaining_fuel_ == 0)
-            runtime_error(c.code[ip_].line, "execution fuel exhausted (possible infinite loop)");
-        --remaining_fuel_;
-        
+        // Check for breakpoint BEFORE consuming fuel - we want to pause at breakpoint
+        // locations without having already consumed fuel for that instruction
         if (debug_control_) {
-            if (!debug_control_->debug_hook()) {
+            if (debug_control_->is_breakpoint_hit()) {
+                // Don't consume fuel for the instruction we're pausing at
                 debug_paused_ = true;
                 return;
             }
         }
         
+        // Check fuel BEFORE executing instruction (but after breakpoint check)
+        if (remaining_fuel_ == 0)
+            runtime_error(c.code[ip_].line, "execution fuel exhausted (possible infinite loop)");
+        
+        // Execute the instruction first, then consume fuel - this ensures paused
+        // programs don't lose fuel for instructions they haven't actually executed
         const Instruction ins = c.code[ip_++];
         const auto line = ins.line;
         
@@ -400,6 +440,18 @@ void VM::run_execution_loop() {
                 if (!stack_.empty()) runtime_error(line, "VM halted with a non-empty stack");
                 execution_finished_ = true;
                 return;
+        }
+        
+        // Consume fuel AFTER successful instruction execution - this ensures
+        // debug pauses don't consume extra fuel that normal execution wouldn't
+        --remaining_fuel_;
+        
+        // Check for step mode pause AFTER executing instruction
+        if (debug_control_) {
+            if (!debug_control_->debug_hook()) {
+                debug_paused_ = true;
+                return;
+            }
         }
     }
     

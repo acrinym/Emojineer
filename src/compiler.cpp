@@ -12,7 +12,12 @@ Chunk Compiler::compile(const ast::Program& program){
             if(function_indices_.contains(f->name))throw std::runtime_error("duplicate function '"+f->name+"'");
             std::size_t idx=chunk_.functions.size();
             function_indices_[f->name]=idx;
-            chunk_.functions.push_back({f->name,0,static_cast<std::uint32_t>(f->parameters.size()),static_cast<std::uint32_t>(f->parameters.size())});
+            emojineer::FunctionInfo fi;
+            fi.name = f->name;
+            fi.arity = static_cast<std::uint32_t>(f->parameters.size());
+            fi.local_count = fi.arity;  // Will be updated after collecting locals
+            fi.parameter_names = f->parameters;
+            chunk_.functions.push_back(fi);
         }
     }
     for(const auto&s:program.statements){if(!dynamic_cast<const ast::FunctionDecl*>(s.get()))compile_stmt(*s);}
