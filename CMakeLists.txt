@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Emojineer VERSION 0.15.0 LANGUAGES CXX)
+project(Emojineer VERSION 0.16.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -18,6 +18,7 @@ add_library(emojineer_core
     src/package_artifact.cpp
     src/registry.cpp
     src/registry_transport.cpp
+    src/authenticated_publication.cpp
     src/bytecode.cpp
     src/compiler.cpp
     src/vm.cpp
@@ -75,4 +76,7 @@ if(BUILD_TESTING)
  add_executable(emojineer_acceptance_journey_tests tests/acceptance_journey_tests.cpp)
  target_link_libraries(emojineer_acceptance_journey_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_acceptance_journey_tests COMMAND emojineer_acceptance_journey_tests)
+ add_executable(emojineer_authenticated_publication_tests tests/authenticated_publication_tests.cpp)
+ target_link_libraries(emojineer_authenticated_publication_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_authenticated_publication_tests COMMAND emojineer_authenticated_publication_tests)
 endif()
