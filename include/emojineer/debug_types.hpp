@@ -132,6 +132,10 @@ public:
     
     // Get step over target IP
     virtual std::size_t get_step_over_target_ip() const = 0;
+    
+    // Check if debugger should pause BEFORE executing an instruction
+    // Returns true if execution should NOT proceed (paused, breakpoint hit, or step complete)
+    virtual bool should_pause_before_execution() const = 0;
 };
 
 } // namespace emojineer

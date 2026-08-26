@@ -540,6 +540,30 @@ std::size_t DebugController::get_step_over_target_ip() const {
     return step_over_start_ip_;
 }
 
+bool DebugController::should_pause_before_execution() const {
+    // If already paused, stay paused
+    if (paused_) {
+        return true;
+    }
+    
+    // If in paused mode, pause before executing
+    if (run_mode_ == DebugRunMode::Paused) {
+        return true;
+    }
+    
+    // Check for breakpoint hit - but don't re-hit the same breakpoint immediately
+    // after a step operation (handled by step semantics)
+    if (is_breakpoint_hit()) {
+        return true;
+    }
+    
+    // Check if we should pause for step (but only after the instruction has executed,
+    // so this is handled by debug_hook() which is called post-instruction)
+    // This method is for PRE-execution checks only
+    
+    return false;
+}
+
 void DebugController::rebuild_breakpoint_index() {
     breakpoint_id_by_ip_.clear();
     

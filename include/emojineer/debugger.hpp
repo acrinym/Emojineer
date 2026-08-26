@@ -118,6 +118,7 @@ public:
     bool should_pause_for_step() const override;
     std::size_t get_step_out_target_depth() const override;
     std::size_t get_step_over_target_ip() const override;
+    bool should_pause_before_execution() const override;
     
 	private:
     void rebuild_breakpoint_index();

@@ -148,17 +148,17 @@ void VM::run_execution_loop() {
     const Chunk& c = *current_chunk_;
     
     while (ip_ < c.code.size()) {
-        // Check for breakpoint BEFORE consuming fuel - we want to pause at breakpoint
-        // locations without having already consumed fuel for that instruction
+        // Check if debugger wants to pause BEFORE executing this instruction
+        // This ensures we don't execute any instruction when paused, allowing
+        // zero-effect debugger preparation and breakpoint setting before execution
         if (debug_control_) {
-            if (debug_control_->is_breakpoint_hit()) {
-                // Don't consume fuel for the instruction we're pausing at
+            if (debug_control_->should_pause_before_execution()) {
                 debug_paused_ = true;
                 return;
             }
         }
         
-        // Check fuel BEFORE executing instruction (but after breakpoint check)
+        // Check fuel BEFORE executing instruction
         if (remaining_fuel_ == 0)
             runtime_error(c.code[ip_].line, "execution fuel exhausted (possible infinite loop)");
         
