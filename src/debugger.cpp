@@ -233,11 +233,21 @@ std::optional<DebugSnapshot> DebugController::get_snapshot() const {
     
     DebugSnapshot snapshot;
     snapshot.call_stack = vm_.get_call_stack();
-    snapshot.current_frame = 0;
+    // Clamp selected frame to valid range
+    snapshot.current_frame = std::min(selected_frame_, snapshot.call_stack.empty() ? 0 : snapshot.call_stack.size() - 1);
     snapshot.current_position = vm_.get_current_source_position().value_or(SourcePosition());
     snapshot.reason = pause_reason_;
     
     return snapshot;
+}
+
+void DebugController::select_frame(std::size_t frame_index) {
+    auto frames = vm_.get_call_stack();
+    if (frame_index < frames.size()) {
+        selected_frame_ = frame_index;
+    } else if (!frames.empty()) {
+        selected_frame_ = frames.size() - 1;  // Clamp to last frame
+    }
 }
 
 std::optional<Value> DebugController::evaluate_expression(const std::string& expr) {
@@ -254,8 +264,8 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
         return std::nullopt;
     }
     
-    const auto& current_frame = frames[0];
-    const auto& globals = vm_.get_globals();
+    // Clamp selected frame to valid range
+    std::size_t frame_idx = std::min(selected_frame_, frames.size() - 1);
     
     // Trim whitespace from expression
     auto trim = [](const std::string& s) -> std::string {
@@ -268,39 +278,68 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
     
     std::string identifier = trim(expr);
     
-    // Check parameters first (innermost frame)
-    for (std::size_t i = 0; i < current_frame.parameters.size(); ++i) {
-        // For now, parameters are indexed by position
-        // In a full implementation, we'd have parameter names
+    // First, check the selected frame specifically (for frame inspection)
+    if (frame_idx < frames.size()) {
+        const auto& frame = frames[frame_idx];
+        
+        // Check parameters in selected frame by name
+        for (std::size_t i = 0; i < frame.parameter_names.size(); ++i) {
+            if (i < frame.parameters.size() && frame.parameter_names[i] == identifier) {
+                return frame.parameters[i];
+            }
+        }
+        
+        // Check locals in selected frame by name
+        for (std::size_t i = 0; i < frame.local_names.size(); ++i) {
+            if (!frame.local_names[i].empty() && frame.local_names[i] == identifier) {
+                if (i < frame.locals.size()) {
+                    return frame.locals[i];
+                }
+            }
+        }
+        
+        // Check globals in selected frame
+        auto globals_it = frame.globals.find(identifier);
+        if (globals_it != frame.globals.end()) {
+            return globals_it->second;
+        }
     }
     
-    // Check locals in current frame
-    for (std::size_t i = 0; i < current_frame.locals.size(); ++i) {
-        // Locals are indexed by position
-        // For named access, we'd need local name information from the chunk
-    }
-    
-    // Check globals by name
-    auto it = globals.find(identifier);
-    if (it != globals.end()) {
-        return it->second;
-    }
-    
-    // Also check frame's globals map
-    auto frame_it = current_frame.globals.find(identifier);
-    if (frame_it != current_frame.globals.end()) {
-        return frame_it->second;
-    }
-    
-    // Try to find in all frames (for accessing outer scopes)
+    // Then check all frames (from innermost to outermost) for other identifiers
     for (std::size_t f = 0; f < frames.size(); ++f) {
         const auto& frame = frames[f];
         
-        // Check frame globals
-        auto frame_globals_it = frame.globals.find(identifier);
-        if (frame_globals_it != frame.globals.end()) {
-            return frame_globals_it->second;
+        // Skip selected frame (already checked)
+        if (f == frame_idx) continue;
+        
+        // Check parameters in this frame by name
+        for (std::size_t i = 0; i < frame.parameter_names.size(); ++i) {
+            if (i < frame.parameters.size() && frame.parameter_names[i] == identifier) {
+                return frame.parameters[i];
+            }
         }
+        
+        // Check locals in this frame by name
+        for (std::size_t i = 0; i < frame.local_names.size(); ++i) {
+            if (!frame.local_names[i].empty() && frame.local_names[i] == identifier) {
+                if (i < frame.locals.size()) {
+                    return frame.locals[i];
+                }
+            }
+        }
+        
+        // Check globals in this frame
+        auto globals_it = frame.globals.find(identifier);
+        if (globals_it != frame.globals.end()) {
+            return globals_it->second;
+        }
+    }
+    
+    // Also check VM globals directly (in case frame globals is different)
+    const auto& globals = vm_.get_globals();
+    auto it = globals.find(identifier);
+    if (it != globals.end()) {
+        return it->second;
     }
     
     return std::nullopt;
@@ -767,6 +806,14 @@ std::optional<SourcePosition> DebugVM::current_position() const {
 
 std::size_t DebugVM::current_ip() const {
     return vm_->current_ip();
+}
+
+void DebugVM::select_frame(std::size_t frame_index) {
+    controller_->select_frame(frame_index);
+}
+
+std::size_t DebugVM::selected_frame() const {
+    return controller_->selected_frame();
 }
 
 // Interactive debug session implementation

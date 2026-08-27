@@ -59,6 +59,8 @@ struct DebugFrame {
     SourcePosition source_position;
     std::vector<Value> locals;
     std::vector<Value> parameters;
+    std::vector<std::string> local_names;      // Names for locals (same order as locals vector)
+    std::vector<std::string> parameter_names; // Names for parameters (same order as parameters vector)
     std::unordered_map<std::string, Value> globals;
     // Named locals/parameters for debugger inspection (slot -> name mapping)
     std::unordered_map<std::string, Value> named_locals;   // All locals by name

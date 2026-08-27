@@ -98,9 +98,29 @@ std::vector<DebugFrame> VM::get_call_stack() const {
             for (std::size_t p = 0; p < frame.parameters.size(); ++p) {
                 frame.parameters[p] = f.locals[p];
             }
+            // Copy parameter names for debugging
+            frame.parameter_names = fn.parameter_names;
+            // Trim to actual parameter count
+            if (frame.parameter_names.size() > frame.parameters.size()) {
+                frame.parameter_names.resize(frame.parameters.size());
+            }
+            
             frame.locals.resize(f.locals.size() > fn.arity ? f.locals.size() - fn.arity : 0);
             for (std::size_t l = fn.arity; l < f.locals.size(); ++l) {
                 frame.locals[l - fn.arity] = f.locals[l];
+            }
+            
+            // Copy local names for debugging
+            frame.local_names = fn.local_names;
+            // Trim to actual local count (local_names includes parameters too)
+            if (frame.local_names.size() > f.locals.size()) {
+                frame.local_names.resize(f.locals.size());
+            }
+            
+            // Copy parameter names
+            frame.parameter_names = fn.parameter_names;
+            if (frame.parameter_names.size() > frame.parameters.size()) {
+                frame.parameter_names.resize(frame.parameters.size());
             }
             
             // Populate named parameters from FunctionInfo metadata
