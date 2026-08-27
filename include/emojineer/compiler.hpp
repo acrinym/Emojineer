@@ -17,6 +17,7 @@ private:
     void compile_function(const ast::FunctionDecl& fn,std::size_t index);
     void collect_locals(const std::vector<ast::StmtPtr>& block);
     void emit(OpCode op,std::int32_t operand,std::size_t line,std::size_t column = 1);
+    void emit(OpCode op, std::int32_t operand, const ast::SourceRange* source);  // EMJBC v6: use AST source range
     std::int32_t name_constant(const std::string& name);
     void emit_type_assert(std::optional<ast::DeclaredType> type,std::size_t line);
     std::optional<std::int32_t> local_slot(const std::string& name)const;

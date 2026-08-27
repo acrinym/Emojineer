@@ -8,7 +8,23 @@
 namespace emojineer::ast {
 using LiteralValue=std::variant<double,bool,std::string>;
 enum class DeclaredType{Number,String,Bool,Array};
-struct Expr{virtual ~Expr()=default;std::size_t line{1};};using ExprPtr=std::unique_ptr<Expr>;
+
+// Source range for precise source mapping (EMJBC v6)
+struct SourceRange {
+    std::size_t line{1};       // 1-based start line
+    std::size_t column{1};     // 1-based start column
+    std::size_t end_line{1};   // 1-based end line
+    std::size_t end_column{1}; // 1-based end column
+    
+    // Module identity for source mapping (set by ModuleLinker for linked code)
+    std::string module_identity;  // Deterministic identity (no absolute paths)
+};
+
+struct Expr{
+    virtual ~Expr()=default;
+    std::size_t line{1};
+    SourceRange source;  // Full source range for EMJBC v6
+};using ExprPtr=std::unique_ptr<Expr>;
 struct LiteralExpr final:Expr{LiteralValue value;};
 struct VariableExpr final:Expr{std::string name;};
 struct InputExpr final:Expr{};
@@ -20,7 +36,11 @@ struct IndexExpr final:Expr{ExprPtr collection;ExprPtr index;};
 struct LengthExpr final:Expr{ExprPtr value;};
 struct AppendExpr final:Expr{ExprPtr collection;ExprPtr value;};
 struct SetIndexExpr final:Expr{ExprPtr collection;ExprPtr index;ExprPtr value;};
-struct Stmt{virtual ~Stmt()=default;std::size_t line{1};};using StmtPtr=std::unique_ptr<Stmt>;
+struct Stmt{
+    virtual ~Stmt()=default;
+    std::size_t line{1};
+    SourceRange source;  // Full source range for EMJBC v6
+};using StmtPtr=std::unique_ptr<Stmt>;
 struct VarDecl final:Stmt{std::string name;std::optional<DeclaredType> declared_type;ExprPtr initializer;};
 struct Assignment final:Stmt{std::string name;ExprPtr value;};
 struct PrintStmt final:Stmt{ExprPtr expression;};

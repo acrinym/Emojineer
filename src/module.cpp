@@ -405,6 +405,9 @@ public:
                     dynamic_cast<ast::ImportStmt*>(stmt.get()) ||
                     dynamic_cast<ast::ExportStmt*>(stmt.get())) continue;
                 rewrite_stmt(*stmt, unit, nullptr);
+                // Set module identity for source mapping (EMJBC v6)
+                // This ensures each module's bytecode gets its own source identity
+                stmt->source.module_identity = identity;
                 linked.statements.push_back(std::move(stmt));
             }
         }

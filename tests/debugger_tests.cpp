@@ -803,11 +803,14 @@ void test_evaluate_with_params_locals() {
     
     // Execute the complete program in ONE chunk (function def + call together)
     // This is crucial - the call compiler must own the function definition
+    // continue_run() only changes controller state; we need another execute() to actually run to breakpoint
     vm.execute(chunk);
     vm.continue_run();
+    vm.execute(chunk);  // Actually execute to the breakpoint
     
     auto snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot while paused at breakpoint");
+    require(snapshot->current_position.line == 3, "should be paused at line 3 (breakpoint)");
     
     // The snapshot should show we're in the function with parameters and locals
     require(snapshot->call_stack.size() > 0, "should have at least one frame");
