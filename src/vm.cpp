@@ -105,16 +105,16 @@ std::vector<DebugFrame> VM::get_call_stack() const {
                 frame.parameter_names.resize(frame.parameters.size());
             }
             
+            // Trim locals to exclude parameters (frame.locals contains only true locals)
             frame.locals.resize(f.locals.size() > fn.arity ? f.locals.size() - fn.arity : 0);
             for (std::size_t l = fn.arity; l < f.locals.size(); ++l) {
                 frame.locals[l - fn.arity] = f.locals[l];
             }
             
-            // Copy local names for debugging
-            frame.local_names = fn.local_names;
-            // Trim to actual local count (local_names includes parameters too)
-            if (frame.local_names.size() > f.locals.size()) {
-                frame.local_names.resize(f.locals.size());
+            // Copy local names for debugging, offset by arity to match trimmed locals
+            // fn.local_names includes parameters + locals, but frame.locals only has locals
+            for (std::size_t l = fn.arity; l < fn.local_names.size(); ++l) {
+                frame.local_names.push_back(fn.local_names[l]);
             }
             
             // Copy parameter names

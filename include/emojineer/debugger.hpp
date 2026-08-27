@@ -102,8 +102,8 @@ public:
     // Check if execution is complete
     bool is_finished() const { return finished_; }
     
-    // Frame selection for inspection
-    void select_frame(std::size_t frame_index);
+    // Frame selection for inspection - returns false if selection is invalid
+    bool select_frame(std::size_t frame_index);
     std::size_t selected_frame() const { return selected_frame_; }
     
     // Get breakable positions from current chunk

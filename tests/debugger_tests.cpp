@@ -546,8 +546,9 @@ void test_step_into_nested_function() {
     require(snapshot.has_value(), "should have snapshot while paused");
     require(snapshot->current_position.line == 3, "should be at line 3 (function call)");
     
-    // Get the call stack - should have at least one frame (global)
-    auto frames = snapshot->call_stack;
+    // Get the initial call stack depth
+    auto initial_frames = snapshot->call_stack;
+    std::size_t initial_depth = initial_frames.size();
     
     // Step into the function call
     vm.step_into();
@@ -557,8 +558,29 @@ void test_step_into_nested_function() {
     snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_into");
     
-    // The call stack should now have more frames (we entered a function)
-    // Or we should be at a different source position
+    // Assert: call stack should be deeper (we entered a function)
+    auto new_frames = snapshot->call_stack;
+    require(new_frames.size() > initial_depth, "call stack should be deeper after step_into");
+    
+    // Assert: source position should be inside the inner function (line 1)
+    require(snapshot->current_position.line == 1, "should be at line 1 (inside inner function)");
+    require(snapshot->current_position.source_path == "test.emoji", "should be in test.emoji");
+    
+    // Assert: function name should be "inner"
+    require(!new_frames.empty(), "should have at least one frame");
+    require(new_frames[0].function_name == "inner", "innermost frame should be 'inner' function");
+    
+    // Assert: we should be able to see the parameter 'x' in the inner function
+    // The parameter should be accessible via named_parameters or parameter_names
+    bool found_param = false;
+    for (const auto& name : new_frames[0].parameter_names) {
+        if (name == "x") {
+            found_param = true;
+            break;
+        }
+    }
+    require(found_param, "parameter 'x' should be visible in inner function frame");
+    
     std::cout << "  ✅ Step into nested function works\n";
 }
 
@@ -600,6 +622,9 @@ void test_step_over_function() {
     auto snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot while paused at line 4");
     
+    // Get initial depth
+    std::size_t initial_depth = snapshot->call_stack.size();
+    
     // Step over - should execute the function but not stop inside it
     vm.step_over();
     vm.execute(chunk);
@@ -608,8 +633,13 @@ void test_step_over_function() {
     snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_over");
     
-    // Should be at line 5 (the print statement after the function call)
-    // or the function should have completed
+    // Assert: should NOT have paused inside the callee function
+    // The depth should be the same as before (we never entered the function)
+    require(snapshot->call_stack.size() <= initial_depth, "step_over should not enter callee");
+    
+    // Assert: should be at line 5 (the print statement after the function call)
+    require(snapshot->current_position.line == 5, "should be at line 5 after step_over");
+    
     std::cout << "  ✅ Step over function call works\n";
 }
 
@@ -654,6 +684,10 @@ void test_step_out_function() {
     auto snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_into");
     
+    // Record depth inside function
+    std::size_t inside_depth = snapshot->call_stack.size();
+    require(inside_depth > 1, "should be inside function with >1 frame");
+    
     // Step out - should return to caller
     vm.step_out();
     vm.execute(chunk);
@@ -661,6 +695,13 @@ void test_step_out_function() {
     // After step_out, we should be back at line 2 (or line 3)
     snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_out");
+    
+    // Assert: depth should be reduced (returned to caller)
+    require(snapshot->call_stack.size() < inside_depth, "step_out should return to caller frame");
+    
+    // Assert: should be back at line 2 or 3 (caller location)
+    require(snapshot->current_position.line >= 2 && snapshot->current_position.line <= 3, 
+            "should be back at caller line after step_out");
     
     std::cout << "  ✅ Step out of function works\n";
 }

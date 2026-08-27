@@ -235,19 +235,28 @@ std::optional<DebugSnapshot> DebugController::get_snapshot() const {
     snapshot.call_stack = vm_.get_call_stack();
     // Clamp selected frame to valid range
     snapshot.current_frame = std::min(selected_frame_, snapshot.call_stack.empty() ? 0 : snapshot.call_stack.size() - 1);
-    snapshot.current_position = vm_.get_current_source_position().value_or(SourcePosition());
+    
+    // Use selected frame's source_position, not the innermost position
+    if (snapshot.current_frame < snapshot.call_stack.size()) {
+        snapshot.current_position = snapshot.call_stack[snapshot.current_frame].source_position;
+    } else {
+        snapshot.current_position = vm_.get_current_source_position().value_or(SourcePosition());
+    }
     snapshot.reason = pause_reason_;
     
     return snapshot;
 }
 
-void DebugController::select_frame(std::size_t frame_index) {
+bool DebugController::select_frame(std::size_t frame_index) {
     auto frames = vm_.get_call_stack();
-    if (frame_index < frames.size()) {
-        selected_frame_ = frame_index;
-    } else if (!frames.empty()) {
-        selected_frame_ = frames.size() - 1;  // Clamp to last frame
+    if (frames.empty()) {
+        return false;
     }
+    if (frame_index >= frames.size()) {
+        return false;  // Report invalid selection deterministically
+    }
+    selected_frame_ = frame_index;
+    return true;
 }
 
 std::optional<Value> DebugController::evaluate_expression(const std::string& expr) {
@@ -279,8 +288,8 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
     
     std::string identifier = trim(expr);
     
-    // Only check the selected frame - do not search unrelated outer frames
-    // This matches debugger conventions where user selects a frame to inspect
+    // Check the selected frame specifically for locals and parameters
+    // Selected-frame inspection must be scoped to the selected frame
     if (frame_idx < frames.size()) {
         const auto& frame = frames[frame_idx];
         
@@ -295,15 +304,9 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
         if (local_it != frame.named_locals.end()) {
             return local_it->second;
         }
-        
-        // Check globals in selected frame
-        auto globals_it = frame.globals.find(identifier);
-        if (globals_it != frame.globals.end()) {
-            return globals_it->second;
-        }
     }
     
-    // Also check VM globals directly as fallback (in case frame globals is different)
+    // Globals are shared and accessible from any frame - check VM globals directly
     const auto& globals = vm_.get_globals();
     auto it = globals.find(identifier);
     if (it != globals.end()) {
