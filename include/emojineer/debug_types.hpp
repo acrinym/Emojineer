@@ -60,6 +60,9 @@ struct DebugFrame {
     std::vector<Value> locals;
     std::vector<Value> parameters;
     std::unordered_map<std::string, Value> globals;
+    // Named locals/parameters for debugger inspection (slot -> name mapping)
+    std::unordered_map<std::string, Value> named_locals;   // All locals by name
+    std::unordered_map<std::string, Value> named_parameters; // Parameters by name
 };
 
 // Debug state snapshot (read-only, no mutation)

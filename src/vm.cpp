@@ -102,6 +102,16 @@ std::vector<DebugFrame> VM::get_call_stack() const {
             for (std::size_t l = fn.arity; l < f.locals.size(); ++l) {
                 frame.locals[l - fn.arity] = f.locals[l];
             }
+            
+            // Populate named parameters from FunctionInfo metadata
+            for (std::size_t p = 0; p < fn.parameter_names.size() && p < f.locals.size(); ++p) {
+                frame.named_parameters[fn.parameter_names[p]] = f.locals[p];
+            }
+            
+            // Populate named locals from FunctionInfo::local_names (includes parameters + local vars)
+            for (std::size_t slot = 0; slot < fn.local_names.size() && slot < f.locals.size(); ++slot) {
+                frame.named_locals[fn.local_names[slot]] = f.locals[slot];
+            }
         }
         
         // Add globals for each frame (the VM's global state)
