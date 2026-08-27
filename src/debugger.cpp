@@ -253,6 +253,7 @@ void DebugController::select_frame(std::size_t frame_index) {
 std::optional<Value> DebugController::evaluate_expression(const std::string& expr) {
     // Read-only identifier/value inspection without mutating VM state or consuming input
     // Supports: locals, parameters, globals, arrays, and text values
+    // Only searches the selected frame as per contract - user selects a frame
     
     if (expr.empty()) {
         return std::nullopt;
@@ -278,24 +279,21 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
     
     std::string identifier = trim(expr);
     
-    // First, check the selected frame specifically (for frame inspection)
+    // Only check the selected frame - do not search unrelated outer frames
+    // This matches debugger conventions where user selects a frame to inspect
     if (frame_idx < frames.size()) {
         const auto& frame = frames[frame_idx];
         
-        // Check parameters in selected frame by name
-        for (std::size_t i = 0; i < frame.parameter_names.size(); ++i) {
-            if (i < frame.parameters.size() && frame.parameter_names[i] == identifier) {
-                return frame.parameters[i];
-            }
+        // Use named_parameters map directly (populated by VM from FunctionInfo)
+        auto param_it = frame.named_parameters.find(identifier);
+        if (param_it != frame.named_parameters.end()) {
+            return param_it->second;
         }
         
-        // Check locals in selected frame by name
-        for (std::size_t i = 0; i < frame.local_names.size(); ++i) {
-            if (!frame.local_names[i].empty() && frame.local_names[i] == identifier) {
-                if (i < frame.locals.size()) {
-                    return frame.locals[i];
-                }
-            }
+        // Use named_locals map directly (populated by VM from FunctionInfo)
+        auto local_it = frame.named_locals.find(identifier);
+        if (local_it != frame.named_locals.end()) {
+            return local_it->second;
         }
         
         // Check globals in selected frame
@@ -305,37 +303,7 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
         }
     }
     
-    // Then check all frames (from innermost to outermost) for other identifiers
-    for (std::size_t f = 0; f < frames.size(); ++f) {
-        const auto& frame = frames[f];
-        
-        // Skip selected frame (already checked)
-        if (f == frame_idx) continue;
-        
-        // Check parameters in this frame by name
-        for (std::size_t i = 0; i < frame.parameter_names.size(); ++i) {
-            if (i < frame.parameters.size() && frame.parameter_names[i] == identifier) {
-                return frame.parameters[i];
-            }
-        }
-        
-        // Check locals in this frame by name
-        for (std::size_t i = 0; i < frame.local_names.size(); ++i) {
-            if (!frame.local_names[i].empty() && frame.local_names[i] == identifier) {
-                if (i < frame.locals.size()) {
-                    return frame.locals[i];
-                }
-            }
-        }
-        
-        // Check globals in this frame
-        auto globals_it = frame.globals.find(identifier);
-        if (globals_it != frame.globals.end()) {
-            return globals_it->second;
-        }
-    }
-    
-    // Also check VM globals directly (in case frame globals is different)
+    // Also check VM globals directly as fallback (in case frame globals is different)
     const auto& globals = vm_.get_globals();
     auto it = globals.find(identifier);
     if (it != globals.end()) {
@@ -816,6 +784,10 @@ std::size_t DebugVM::selected_frame() const {
     return controller_->selected_frame();
 }
 
+std::optional<Value> DebugVM::evaluate_expression(const std::string& expr) {
+    return controller_->evaluate_expression(expr);
+}
+
 // Interactive debug session implementation
 namespace {
 std::string trim(const std::string& s) {
@@ -867,7 +839,6 @@ int run_debug_session(const std::filesystem::path& source_file,
     output << "Set breakpoints with 'break <file:line>', then 'continue' to run\n";
     
     bool running = true;
-    std::size_t selected_frame = 0;  // Persistent frame selection
     
     while (running) {
         // Show current position
@@ -984,7 +955,7 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            // Accept optional frame index
+            // Accept optional frame index - use controller's frame selection
             if (parts.size() >= 2) {
                 try {
                     std::size_t new_frame = std::stoul(parts[1]);
@@ -993,18 +964,30 @@ int run_debug_session(const std::filesystem::path& source_file,
                                << (snapshot->call_stack.size() - 1) << ")\n";
                         continue;
                     }
-                    selected_frame = new_frame;
+                    debug_vm->select_frame(new_frame);
                 } catch (...) {
                     output << "Invalid frame number\n";
                     continue;
                 }
             }
-            if (selected_frame >= snapshot->call_stack.size()) {
-                selected_frame = 0;
-            }
-            const auto& frame = snapshot->call_stack[selected_frame];
-            output << "Frame #" << selected_frame << ": " << frame.function_name << "\n";
+            // Use controller's selected frame (which clamps automatically)
+            std::size_t current_frame = debug_vm->selected_frame();
+            const auto& frame = snapshot->call_stack[current_frame];
+            output << "Frame #" << current_frame << ": " << frame.function_name << "\n";
             output << "  at " << frame.source_position.source_path << ":" << frame.source_position.line << "\n";
+            // Show parameters and locals for this frame
+            if (!frame.named_parameters.empty()) {
+                output << "  Parameters:\n";
+                for (const auto& p : frame.named_parameters) {
+                    output << "    " << p.first << " = " << emojineer::debug_render_value(p.second) << "\n";
+                }
+            }
+            if (!frame.named_locals.empty()) {
+                output << "  Locals:\n";
+                for (const auto& l : frame.named_locals) {
+                    output << "    " << l.first << " = " << emojineer::debug_render_value(l.second) << "\n";
+                }
+            }
         }
         else if (cmd == "locals") {
             auto snapshot = debug_vm->get_debug_snapshot();
@@ -1012,17 +995,33 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            if (selected_frame >= snapshot->call_stack.size()) {
-                selected_frame = 0;
+            // Use controller's selected frame
+            std::size_t current_frame = debug_vm->selected_frame();
+            if (current_frame >= snapshot->call_stack.size()) {
+                current_frame = 0;
+                debug_vm->select_frame(0);
             }
-            const auto& frame = snapshot->call_stack[selected_frame];
-            output << "Locals in frame #" << selected_frame << ":\n";
-            for (std::size_t i = 0; i < frame.locals.size(); ++i) {
-                output << "  local[" << i << "]: " << emojineer::debug_render_value(frame.locals[i]) << "\n";
+            const auto& frame = snapshot->call_stack[current_frame];
+            output << "Locals in frame #" << current_frame << ":\n";
+            // Show named parameters with real names
+            if (!frame.named_parameters.empty()) {
+                output << "Parameters:\n";
+                for (const auto& p : frame.named_parameters) {
+                    output << "  " << p.first << " = " << emojineer::debug_render_value(p.second) << "\n";
+                }
             }
-            output << "Parameters:\n";
-            for (std::size_t i = 0; i < frame.parameters.size(); ++i) {
-                output << "  param[" << i << "]: " << emojineer::debug_render_value(frame.parameters[i]) << "\n";
+            // Show named locals with real names (excluding parameters which are already shown)
+            if (!frame.named_locals.empty()) {
+                output << "Locals:\n";
+                for (const auto& l : frame.named_locals) {
+                    // Skip parameters (they're in named_parameters too)
+                    if (frame.named_parameters.find(l.first) == frame.named_parameters.end()) {
+                        output << "  " << l.first << " = " << emojineer::debug_render_value(l.second) << "\n";
+                    }
+                }
+            }
+            if (frame.named_parameters.empty() && frame.named_locals.empty()) {
+                output << "  (no locals or parameters)\n";
             }
         }
         else if (cmd == "globals") {
@@ -1031,13 +1030,18 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            if (selected_frame >= snapshot->call_stack.size()) {
-                selected_frame = 0;
+            // Use controller's selected frame
+            std::size_t current_frame = debug_vm->selected_frame();
+            if (current_frame >= snapshot->call_stack.size()) {
+                current_frame = 0;
             }
-            const auto& frame = snapshot->call_stack[selected_frame];
-            output << "Globals:\n";
+            const auto& frame = snapshot->call_stack[current_frame];
+            output << "Globals in frame #" << current_frame << ":\n";
             for (const auto& g : frame.globals) {
-                output << "  " << g.first << ": " << emojineer::debug_render_value(g.second) << "\n";
+                output << "  " << g.first << " = " << emojineer::debug_render_value(g.second) << "\n";
+            }
+            if (frame.globals.empty()) {
+                output << "  (no globals)\n";
             }
         }
         else if (cmd == "print" || cmd == "p") {
@@ -1050,28 +1054,13 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            if (selected_frame >= snapshot->call_stack.size()) {
-                selected_frame = 0;
-            }
-            const auto& frame = snapshot->call_stack[selected_frame];
-            
-            // Simple identifier lookup - check locals, parameters, then globals
+            // Use controller's evaluate_expression which uses selected frame
             std::string identifier = parts[1];
-            
-            // Check locals first
-            for (std::size_t i = 0; i < frame.locals.size(); ++i) {
-                output << "  local[" << i << "]: " << emojineer::debug_render_value(frame.locals[i]) << "\n";
-            }
-            // Check parameters
-            for (std::size_t i = 0; i < frame.parameters.size(); ++i) {
-                output << "  param[" << i << "]: " << emojineer::debug_render_value(frame.parameters[i]) << "\n";
-            }
-            // Check globals
-            auto it = frame.globals.find(identifier);
-            if (it != frame.globals.end()) {
-                output << identifier << " = " << emojineer::debug_render_value(it->second) << "\n";
+            auto value = debug_vm->evaluate_expression(identifier);
+            if (value) {
+                output << identifier << " = " << emojineer::debug_render_value(*value) << "\n";
             } else {
-                output << "Variable '" << identifier << "' not found\n";
+                output << "Variable '" << identifier << "' not found in selected frame\n";
             }
         }
         else if (cmd == "list" || cmd == "l") {

@@ -212,6 +212,9 @@ public:
     void select_frame(std::size_t frame_index);
     std::size_t selected_frame() const;
     
+    // Evaluate expression in selected frame (read-only)
+    std::optional<Value> evaluate_expression(const std::string& expr);
+    
     // Get current instruction pointer
     std::size_t current_ip() const;
 
