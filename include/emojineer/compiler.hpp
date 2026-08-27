@@ -28,5 +28,6 @@ private:
     std::unordered_map<std::string,std::int32_t> locals_;
     std::unordered_map<std::string,std::optional<ast::DeclaredType>> local_types_;
     bool in_function_{false};
+    std::string current_function_name_;  // Current function context for source mapping
 };
 }

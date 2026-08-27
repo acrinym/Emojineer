@@ -12,18 +12,22 @@ namespace emojineer {
 // Forward declaration - VM is defined in vm.hpp
 class VM;
 
-// Source position for debugging
+// Source position for debugging (v6 format - includes range and function context)
 struct SourcePosition {
     std::string source_path;    // Deterministic module identity (no absolute roots)
-    std::uint32_t line;         // 1-based line number
-    std::uint32_t column;       // 1-based column number
+    std::uint32_t line;         // 1-based line number (start line)
+    std::uint32_t column;       // 1-based column number (start column)
+    std::uint32_t end_line;     // 1-based end line number
+    std::uint32_t end_column;   // 1-based end column number
+    std::string function_name;  // Function context (empty for module-level code)
     
     // Constructors for compatibility
     SourcePosition() = default;
     SourcePosition(const SourceLocation& loc) 
-        : source_path(loc.source_path), line(loc.line), column(loc.column) {}
+        : source_path(loc.source_path), line(loc.line), column(loc.column),
+          end_line(loc.end_line), end_column(loc.end_column), function_name(loc.function_name) {}
     SourcePosition(const std::string& path, std::uint32_t l, std::uint32_t c = 1)
-        : source_path(path), line(l), column(c) {}
+        : source_path(path), line(l), column(c), end_line(l), end_column(c), function_name("") {}
     
     bool operator<(const SourcePosition& other) const {
         if (source_path != other.source_path) return source_path < other.source_path;

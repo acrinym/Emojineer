@@ -15,10 +15,14 @@ struct Instruction{OpCode op{OpCode::Halt};std::int32_t operand{0};std::uint32_t
 struct FunctionInfo{std::string name;std::uint32_t entry{0};std::uint32_t arity{0};std::uint32_t local_count{0};std::vector<std::string> parameter_names;std::vector<std::string> local_names;};
 
 // Source position for deterministic bytecode mapping (no absolute roots)
+// EMJBC v6: includes source range (start/end) and function context
 struct SourceLocation{
-    std::string source_path;  // Deterministic module identity
-    std::uint32_t line{1};    // 1-based line number
-    std::uint32_t column{1};  // 1-based column number
+    std::string source_path;     // Deterministic module identity
+    std::uint32_t line{1};       // 1-based line number (start line)
+    std::uint32_t column{1};    // 1-based column number (start column)
+    std::uint32_t end_line{1};   // 1-based end line number
+    std::uint32_t end_column{1}; // 1-based end column number
+    std::string function_name;   // Function context (empty for module-level code)
 };
 
 struct Chunk{

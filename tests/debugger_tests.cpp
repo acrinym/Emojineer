@@ -769,11 +769,18 @@ void test_evaluate_with_params_locals() {
     std::cout << "Test: evaluate expression with parameters and locals...\n";
     
     // Source with function that has parameters AND a local variable
+    // Using proper emoji identifiers:
+    // - 🍎, 🍐 are parameter names (valid identifiers)
+    // - 🍇 is a LOCAL variable (not 🔢 which is a numeric type token)
+    // - 10 and 20 are numeric literals (not 🔟 and 🔟🔟)
+    // - 🏁 is canonical function end marker
     const std::string source = 
         "🛠️ 🚀 🫴 🍎 🫴 🍐 🤲\n"       // Line 1: define 🚀(🍎, 🍐)
-        "🐍 🔢 🟰 🍎 ➕ 🍐\n"           // Line 2: local 🔢 = 🍎 + 🍐 (local variable)
-        "📝 🔢\n"                       // Line 3: print 🔢 (use local)
-        "📦 🍐 📦\n";                    // Line 4: return 🍐
+        "🐍 🍇 🟰 🍎 ➕ 🍐\n"           // Line 2: local 🍇 = 🍎 + 🍐 (valid local identifier)
+        "📝 🍇\n"                       // Line 3: print 🍇 (use local) - BREAKPOINT HERE
+        "📦 🍇\n"                       // Line 4: return 🍇
+        "🏁\n"                          // Line 5: end function
+        "📝 🚀 🫴 10 20 🤲\n";         // Line 6: call 🚀(10, 20)
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -787,34 +794,20 @@ void test_evaluate_with_params_locals() {
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
     
-    // Set breakpoint at line 3 (inside function after local is defined)
+    // Set breakpoint at line 3 (inside function after local is assigned)
     emojineer::BreakpointLocation bp;
     bp.source_position.source_path = "test.emoji";
     bp.source_position.line = 3;
     bp.enabled = true;
     vm.add_breakpoint(bp);
     
-    // Call the function with specific values: 🚀(10, 20)
-    // First, define a call to the function at the module level
-    const std::string call_source = "📝 🚀 🫴 🔟🫴 🔟🔟 🤲\n";  // call 🚀(10, 20)
-    
-    emojineer::Lexer call_lexer(call_source, {});
-    emojineer::Parser call_parser(call_lexer.tokenize());
-    auto call_program = call_parser.parse();
-    
-    emojineer::Compiler call_compiler;
-    call_compiler.set_source_path("call.emoji");
-    auto call_chunk = call_compiler.compile(call_program);
-    
-    // Execute - call the function and stop at breakpoint
-    vm.execute(chunk);  // Define the function
+    // Execute the complete program in ONE chunk (function def + call together)
+    // This is crucial - the call compiler must own the function definition
+    vm.execute(chunk);
     vm.continue_run();
-    vm.execute(call_chunk);  // Call the function
-    vm.continue_run();
-    vm.execute(chunk);  // Continue execution
     
     auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot while paused");
+    require(snapshot.has_value(), "should have snapshot while paused at breakpoint");
     
     // The snapshot should show we're in the function with parameters and locals
     require(snapshot->call_stack.size() > 0, "should have at least one frame");
@@ -822,12 +815,9 @@ void test_evaluate_with_params_locals() {
     // Select the innermost frame (frame 0)
     vm.select_frame(0);
     
-    // The innermost frame should have parameter names and locals
-    const auto& frame = snapshot->call_stack[0];
-    
     // Verify parameters are visible with evaluate_expression
-    // The function was called with 🍎=10, 🍐=20 (🔟 and 🔟🔟)
-    // After 🍎 + 🍐 = 30, local 🔢 should be 30
+    // The function was called with 🍎=10, 🍐=20
+    // After 🍎 + 🍐 = 30, local 🍇 should be 30
     
     // Evaluate the first parameter (🍎)
     auto param1_val = vm.evaluate_expression("🍎");
@@ -837,24 +827,29 @@ void test_evaluate_with_params_locals() {
     auto param2_val = vm.evaluate_expression("🍐");
     require(param2_val.has_value(), "should be able to evaluate parameter 🍐");
     
-    // Evaluate the local variable (🔢)
-    auto local_val = vm.evaluate_expression("🔢");
-    require(local_val.has_value(), "should be able to evaluate local 🔢");
+    // Evaluate the local variable (🍇)
+    auto local_val = vm.evaluate_expression("🍇");
+    require(local_val.has_value(), "should be able to evaluate local 🍇");
     
-    // Verify the values are correct (these are the values passed to the function)
-    // Based on call 🚀(10, 20) - 🍎=10, 🍐=20
-    // 🔢 = 🍎 + 🍐 = 30
-    std::cout << "  Parameter 🍎 = " << emojineer::debug_render_value(*param1_val) << "\n";
-    std::cout << "  Parameter 🍐 = " << emojineer::debug_render_value(*param2_val) << "\n";
-    std::cout << "  Local 🔢 = " << emojineer::debug_render_value(*local_val) << "\n";
+    // EXACT VALUE ASSERTIONS - no more existence-only checks
+    // Based on call 🚀(10, 20) - 🍎=10, 🍐=20, 🍇=🍎+🍐=30
+    require(std::holds_alternative<std::int64_t>(*param1_val), "🍎 should be an integer");
+    require(std::holds_alternative<std::int64_t>(*param2_val), "🍐 should be an integer");
+    require(std::holds_alternative<std::int64_t>(*local_val), "🍇 should be an integer");
     
-    // The key assertions - we should be able to evaluate and get meaningful values
-    // At minimum, the values should exist (even if we can't predict exact numeric representation)
-    require(param1_val.has_value(), "parameter 🍎 should have a value");
-    require(param2_val.has_value(), "parameter 🍐 should have a value");
-    require(local_val.has_value(), "local 🔢 should have a value");
+    auto param1_int = std::get<std::int64_t>(*param1_val);
+    auto param2_int = std::get<std::int64_t>(*param2_val);
+    auto local_int = std::get<std::int64_t>(*local_val);
     
-    std::cout << "  ✅ Evaluate expression with parameters and locals works\n";
+    require(param1_int == 10, "🍎 should equal 10");
+    require(param2_int == 20, "🍐 should equal 20");
+    require(local_int == 30, "🍇 should equal 30 (🍎 + 🍐)");
+    
+    std::cout << "  Parameter 🍎 = " << param1_int << "\n";
+    std::cout << "  Parameter 🍐 = " << param2_int << "\n";
+    std::cout << "  Local 🍇 = " << local_int << " (🍎 + 🍐)\n";
+    
+    std::cout << "  ✅ Evaluate expression with exact parameter and local values works\n";
 }
 
 // Test: Frame selection
