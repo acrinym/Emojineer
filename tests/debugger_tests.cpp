@@ -513,9 +513,9 @@ void test_step_into_nested_function() {
     // Program with function call to test step-into
     // This is valid emoji code with a function that calls another function
     const std::string source = 
-        "🛠️ inner 🫴 x 🤲 📦 x 📦\n"  // Line 1: define inner(x)
-        "🛠️ outer 🫴 y 🤲 📦 y 📦\n"  // Line 2: define outer(y)
-        "📝 inner(📜hello📜)\n";       // Line 3: call inner
+        "🛠️ ⭐ 🫴 🍎 🤲 📦 🍎 📦\n"  // Line 1: define ⭐(🍎)
+        "🛠️ 🌟 🫴 🍐 🤲 📦 🍐 📦\n"  // Line 2: define 🌟(🍐)
+        "📝 ⭐ 🫴 📜hello📜 🤲\n";    // Line 3: call ⭐
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -567,9 +567,11 @@ void test_step_over_function() {
     std::cout << "Test: step over function call...\n";
     
     const std::string source = 
-        "🛠️ add 🫴 a 🫴 b 🤲 📦 a b + 📦\n"  // Line 1: define add(a, b)
-        "📝 add(1, 2)\n"                       // Line 2: call add
-        "📝 📜done📜\n";                        // Line 3: print done
+        "🛠️ ➕ 🫴 🍎 🫴 🍐 🤲\n"  // Line 1: define ➕(🍎, 🍐)
+        "🐍 🍇 🔢 🟰 🍎 ➕ 🍐\n"  // Line 2: local 🍇 = 🍎 + 🍐
+        "📦 🍇\n"                  // Line 3: return 🍇
+        "📝 ➕ 🫴 1 2 🤲\n"                       // Line 4: call ➕
+        "📝 📜done📜\n";                        // Line 5: print done
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -586,7 +588,7 @@ void test_step_over_function() {
     // Set breakpoint at the function call
     emojineer::BreakpointLocation bp;
     bp.source_position.source_path = "test.emoji";
-    bp.source_position.line = 2;
+    bp.source_position.line = 4;
     bp.enabled = true;
     vm.add_breakpoint(bp);
     
@@ -596,17 +598,17 @@ void test_step_over_function() {
     vm.execute(chunk);
     
     auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot while paused at line 2");
+    require(snapshot.has_value(), "should have snapshot while paused at line 4");
     
     // Step over - should execute the function but not stop inside it
     vm.step_over();
     vm.execute(chunk);
     
-    // After step_over, we should be at line 3 (past the function call)
+    // After step_over, we should be at line 5 (past the function call)
     snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_over");
     
-    // Should be at line 3 (the print statement after the function call)
+    // Should be at line 5 (the print statement after the function call)
     // or the function should have completed
     std::cout << "  ✅ Step over function call works\n";
 }
@@ -616,8 +618,8 @@ void test_step_out_function() {
     std::cout << "Test: step out of function...\n";
     
     const std::string source = 
-        "🛠️ inner 🫴 x 🤲 📦 x 📦\n"  // Line 1: define inner(x)
-        "📝 inner(📜test📜)\n"       // Line 2: call inner
+        "🛠️ ⭐ 🫴 🍎 🤲 📦 🍎 📦\n"  // Line 1: define ⭐(🍎)
+        "📝 ⭐ 🫴 📜test📜 🤲\n"       // Line 2: call ⭐
         "📝 📜after📜\n";             // Line 3: print after
     
     emojineer::Lexer lexer(source, {});
@@ -668,9 +670,9 @@ void test_evaluate_with_params_locals() {
     std::cout << "Test: evaluate expression with parameters and locals...\n";
     
     const std::string source = 
-        "🛠️ foo 🫴 x 🫴 y 🤲\n"  // Line 1: define foo(x, y)
-        "📝 x\n"                   // Line 2: print x (use x)
-        "📦 y 📦\n";               // Line 3: return y
+        "🛠️ 🚀 🫴 🍎 🫴 🍐 🤲\n"  // Line 1: define 🚀(🍎, 🍐)
+        "📝 🍎\n"                   // Line 2: print 🍎 (use 🍎)
+        "📦 🍐 📦\n";               // Line 3: return 🍐
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -716,9 +718,9 @@ void test_frame_selection() {
     std::cout << "Test: frame selection...\n";
     
     const std::string source = 
-        "🛠️ inner 🫴 x 🤲 📦 x 📦\n"  // Line 1
-        "🛠️ outer 🫴 y 🤲 📦 y 📦\n"  // Line 2
-        "📝 outer(inner(📜hi📜))\n";    // Line 3
+        "🛠️ ⭐ 🫴 🍎 🤲 📦 🍎 📦\n"  // Line 1
+        "🛠️ 🌟 🫴 🍐 🤲 📦 🍐 📦\n"  // Line 2
+        "📝 🌟 🫴 ⭐ 🫴 📜hi📜 🤲 🤲\n";    // Line 3: call 🌟(⭐(📜hi📜))
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
