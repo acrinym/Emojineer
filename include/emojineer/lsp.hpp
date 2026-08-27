@@ -338,7 +338,7 @@ private:
 
     // Position conversion (UTF-16 <-> UTF-8/grapheme)
     Position utf8ToUtf16(const std::string& text, std::size_t utf8Offset) const;
-    std::size_t utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const;
+    std::optional<std::size_t> utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const;
 
     // Diagnostics
     std::vector<Diagnostic> diagnoseDocument(const OpenDocument& doc);
