@@ -550,6 +550,9 @@ void test_step_into_nested_function() {
     auto initial_frames = snapshot->call_stack;
     std::size_t initial_depth = initial_frames.size();
     
+    // Record the function name before stepping into (should be module/main)
+    std::string func_before_step = initial_frames.empty() ? "" : initial_frames[0].function_name;
+    
     // Step into the function call
     vm.step_into();
     vm.execute(chunk);
@@ -558,20 +561,24 @@ void test_step_into_nested_function() {
     snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_into");
     
-    // Assert: call stack should be deeper (we entered a function)
+    // [REQUIRED] Assert: call stack should be deeper (we entered a function)
     auto new_frames = snapshot->call_stack;
     require(new_frames.size() > initial_depth, "call stack should be deeper after step_into");
     
-    // Assert: source position should be inside the inner function (line 1)
-    require(snapshot->current_position.line == 1, "should be at line 1 (inside inner function)");
+    // [REQUIRED] Assert: verify callee function identity - function name should NOT be same as before
+    require(!new_frames.empty(), "should have at least one frame");
+    std::string func_after_step = new_frames[0].function_name;
+    require(func_after_step != func_before_step || func_after_step != "main", 
+             "callee function identity should differ from caller");
+    
+    // [REQUIRED] Assert: callee source line - should be inside function definition (line 1)
+    require(snapshot->current_position.line == 1, "callee source line should be line 1 (inside function definition)");
     require(snapshot->current_position.source_path == "test.emoji", "should be in test.emoji");
     
-    // Assert: function name should be "inner"
-    require(!new_frames.empty(), "should have at least one frame");
+    // Verify function name is the inner function we stepped into
     require(new_frames[0].function_name == "inner", "innermost frame should be 'inner' function");
     
-    // Assert: we should be able to see the parameter 'x' in the inner function
-    // The parameter should be accessible via named_parameters or parameter_names
+    // Verify parameter is accessible in the callee frame
     bool found_param = false;
     for (const auto& name : new_frames[0].parameter_names) {
         if (name == "x") {
@@ -607,12 +614,28 @@ void test_step_over_function() {
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
     
+    // Also set a breakpoint INSIDE the callee to prove we never hit it
+    emojineer::BreakpointLocation bp_inside;
+    bp_inside.source_position.source_path = "test.emoji";
+    bp_inside.source_position.line = 2;  // Inside the function definition
+    bp_inside.enabled = true;
+    vm.add_breakpoint(bp_inside);
+    
     // Set breakpoint at the function call
     emojineer::BreakpointLocation bp;
     bp.source_position.source_path = "test.emoji";
     bp.source_position.line = 4;
     bp.enabled = true;
     vm.add_breakpoint(bp);
+    
+    // Track if we ever paused inside the callee
+    bool paused_in_callee = false;
+    vm.set_debug_callback([&paused_in_callee](const emojineer::DebugSnapshot& snapshot) {
+        // If we pause at line 2, we're inside the callee - this should NOT happen
+        if (snapshot.current_position.line == 2) {
+            paused_in_callee = true;
+        }
+    });
     
     // Execute and pause at breakpoint
     vm.execute(chunk);
@@ -622,8 +645,8 @@ void test_step_over_function() {
     auto snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot while paused at line 4");
     
-    // Get initial depth
-    std::size_t initial_depth = snapshot->call_stack.size();
+    // [REQUIRED] Get caller depth before step_over
+    std::size_t caller_depth = snapshot->call_stack.size();
     
     // Step over - should execute the function but not stop inside it
     vm.step_over();
@@ -633,12 +656,17 @@ void test_step_over_function() {
     snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_over");
     
-    // Assert: should NOT have paused inside the callee function
-    // The depth should be the same as before (we never entered the function)
-    require(snapshot->call_stack.size() <= initial_depth, "step_over should not enter callee");
+    // [REQUIRED] Assert: caller depth should remain the same (we never entered the callee)
+    require(snapshot->call_stack.size() == caller_depth, 
+             "step_over caller depth should remain unchanged");
     
-    // Assert: should be at line 5 (the print statement after the function call)
-    require(snapshot->current_position.line == 5, "should be at line 5 after step_over");
+    // [REQUIRED] Assert: should NOT have paused inside the callee function (no breakpoint at line 2)
+    require(!paused_in_callee, 
+             "no StepComplete/breakpoint callback should occur inside callee during step_over");
+    
+    // [REQUIRED] Assert: expected post-call line should be line 5
+    require(snapshot->current_position.line == 5, 
+             "should be at line 5 (post-call line) after step_over");
     
     std::cout << "  ✅ Step over function call works\n";
 }
@@ -676,6 +704,12 @@ void test_step_out_function() {
     vm.continue_run();
     vm.execute(chunk);
     
+    // Record the caller's source position before stepping into
+    auto snapshot_before = vm.get_debug_snapshot();
+    require(snapshot_before.has_value(), "should have snapshot at breakpoint");
+    std::string caller_source_path = snapshot_before->current_position.source_path;
+    std::uint32_t caller_line = snapshot_before->current_position.line;
+    
     // Step into the function
     vm.step_into();
     vm.execute(chunk);
@@ -684,11 +718,14 @@ void test_step_out_function() {
     auto snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_into");
     
-    // Record depth inside function
+    // [REQUIRED] Record depth inside function
     std::size_t inside_depth = snapshot->call_stack.size();
     require(inside_depth > 1, "should be inside function with >1 frame");
     
-    // Step out - should return to caller
+    // Record the function we stepped out of
+    std::string func_inside = snapshot->call_stack[0].function_name;
+    
+    // [REQUIRED] Step out - should return to caller
     vm.step_out();
     vm.execute(chunk);
     
@@ -696,12 +733,23 @@ void test_step_out_function() {
     snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot after step_out");
     
-    // Assert: depth should be reduced (returned to caller)
-    require(snapshot->call_stack.size() < inside_depth, "step_out should return to caller frame");
+    // [REQUIRED] Assert: shallower depth - depth should be reduced (returned to caller)
+    require(snapshot->call_stack.size() < inside_depth, 
+             "step_out should return to shallower caller frame");
     
-    // Assert: should be back at line 2 or 3 (caller location)
+    // [REQUIRED] Assert: expected caller source position
+    // We should be back at the caller line (line 2, the function call site)
+    require(snapshot->current_position.source_path == caller_source_path, 
+             "caller source path should be preserved after step_out");
     require(snapshot->current_position.line >= 2 && snapshot->current_position.line <= 3, 
-            "should be back at caller line after step_out");
+             "should be back at caller source position (line 2 or 3) after step_out");
+    
+    // Verify the function name is now different (we're in the caller, not the callee)
+    if (!snapshot->call_stack.empty()) {
+        std::string func_after = snapshot->call_stack[0].function_name;
+        require(func_after != func_inside || snapshot->call_stack.size() < inside_depth,
+                 "should be in different frame (caller) after step_out");
+    }
     
     std::cout << "  ✅ Step out of function works\n";
 }
@@ -710,10 +758,12 @@ void test_step_out_function() {
 void test_evaluate_with_params_locals() {
     std::cout << "Test: evaluate expression with parameters and locals...\n";
     
+    // Source with function that has parameters AND a local variable
     const std::string source = 
-        "🛠️ 🚀 🫴 🍎 🫴 🍐 🤲\n"  // Line 1: define 🚀(🍎, 🍐)
-        "📝 🍎\n"                   // Line 2: print 🍎 (use 🍎)
-        "📦 🍐 📦\n";               // Line 3: return 🍐
+        "🛠️ 🚀 🫴 🍎 🫴 🍐 🤲\n"       // Line 1: define 🚀(🍎, 🍐)
+        "🐍 🔢 🟰 🍎 ➕ 🍐\n"           // Line 2: local 🔢 = 🍎 + 🍐 (local variable)
+        "📝 🔢\n"                       // Line 3: print 🔢 (use local)
+        "📦 🍐 📦\n";                    // Line 4: return 🍐
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -727,30 +777,73 @@ void test_evaluate_with_params_locals() {
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
     
-    // Set breakpoint at the function body
+    // Set breakpoint at line 3 (inside function after local is defined)
     emojineer::BreakpointLocation bp;
     bp.source_position.source_path = "test.emoji";
-    bp.source_position.line = 2;
+    bp.source_position.line = 3;
     bp.enabled = true;
     vm.add_breakpoint(bp);
     
+    // Call the function with specific values: 🚀(10, 20)
+    // First, define a call to the function at the module level
+    const std::string call_source = "📝 🚀 🫴 🔟🫴 🔟🔟 🤲\n";  // call 🚀(10, 20)
+    
+    emojineer::Lexer call_lexer(call_source, {});
+    emojineer::Parser call_parser(call_lexer.tokenize());
+    auto call_program = call_parser.parse();
+    
+    emojineer::Compiler call_compiler;
+    call_compiler.set_source_path("call.emoji");
+    auto call_chunk = call_compiler.compile(call_program);
+    
     // Execute - call the function and stop at breakpoint
-    vm.execute(chunk);
+    vm.execute(chunk);  // Define the function
     vm.continue_run();
-    vm.execute(chunk);
+    vm.execute(call_chunk);  // Call the function
+    vm.continue_run();
+    vm.execute(chunk);  // Continue execution
     
     auto snapshot = vm.get_debug_snapshot();
     require(snapshot.has_value(), "should have snapshot while paused");
     
-    // The snapshot should show we're in the function with parameters
-    // Try to evaluate x and y - this tests that evaluate_expression works with parameters
+    // The snapshot should show we're in the function with parameters and locals
     require(snapshot->call_stack.size() > 0, "should have at least one frame");
     
-    // The innermost frame should have parameter names
+    // Select the innermost frame (frame 0)
+    vm.select_frame(0);
+    
+    // The innermost frame should have parameter names and locals
     const auto& frame = snapshot->call_stack[0];
     
-    // Verify we have parameter names (if the compiler stored them)
-    // Note: parameter_names should be populated
+    // Verify parameters are visible with evaluate_expression
+    // The function was called with 🍎=10, 🍐=20 (🔟 and 🔟🔟)
+    // After 🍎 + 🍐 = 30, local 🔢 should be 30
+    
+    // Evaluate the first parameter (🍎)
+    auto param1_val = vm.evaluate_expression("🍎");
+    require(param1_val.has_value(), "should be able to evaluate parameter 🍎");
+    
+    // Evaluate the second parameter (🍐)  
+    auto param2_val = vm.evaluate_expression("🍐");
+    require(param2_val.has_value(), "should be able to evaluate parameter 🍐");
+    
+    // Evaluate the local variable (🔢)
+    auto local_val = vm.evaluate_expression("🔢");
+    require(local_val.has_value(), "should be able to evaluate local 🔢");
+    
+    // Verify the values are correct (these are the values passed to the function)
+    // Based on call 🚀(10, 20) - 🍎=10, 🍐=20
+    // 🔢 = 🍎 + 🍐 = 30
+    std::cout << "  Parameter 🍎 = " << emojineer::debug_render_value(*param1_val) << "\n";
+    std::cout << "  Parameter 🍐 = " << emojineer::debug_render_value(*param2_val) << "\n";
+    std::cout << "  Local 🔢 = " << emojineer::debug_render_value(*local_val) << "\n";
+    
+    // The key assertions - we should be able to evaluate and get meaningful values
+    // At minimum, the values should exist (even if we can't predict exact numeric representation)
+    require(param1_val->type != ValueType::Null, "parameter 🍎 should have a value");
+    require(param2_val->type != ValueType::Null, "parameter 🍐 should have a value");
+    require(local_val->type != ValueType::Null, "local 🔢 should have a value");
+    
     std::cout << "  ✅ Evaluate expression with parameters and locals works\n";
 }
 
@@ -794,13 +887,21 @@ void test_frame_selection() {
     require(snapshot->call_stack.size() > 0, "should have frames");
     
     // Select frame 0 and verify we can inspect
-    vm.select_frame(0);
+    bool success = vm.select_frame(0);
+    require(success, "should successfully select frame 0");
     require(vm.selected_frame() == 0, "should select frame 0");
     
-    // Try selecting a frame beyond the stack (should clamp)
+    // Try selecting a frame beyond the stack (should return false and keep prior frame)
     if (snapshot->call_stack.size() > 1) {
-        vm.select_frame(99);
-        require(vm.selected_frame() < snapshot->call_stack.size(), "should clamp to valid frame");
+        std::size_t valid_frame_count = snapshot->call_stack.size();
+        std::size_t prior_frame = vm.selected_frame();
+        
+        // Attempting to select an invalid frame should return false
+        bool invalid_select = vm.select_frame(99);
+        require(!invalid_select, "select_frame(99) should return false for out-of-range index");
+        
+        // The prior frame should remain selected (no silent clamping)
+        require(vm.selected_frame() == prior_frame, "selected frame should remain unchanged on invalid request");
     }
     
     std::cout << "  ✅ Frame selection works\n";

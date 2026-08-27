@@ -779,8 +779,8 @@ std::size_t DebugVM::current_ip() const {
     return vm_->current_ip();
 }
 
-void DebugVM::select_frame(std::size_t frame_index) {
-    controller_->select_frame(frame_index);
+bool DebugVM::select_frame(std::size_t frame_index) {
+    return controller_->select_frame(frame_index);
 }
 
 std::size_t DebugVM::selected_frame() const {
