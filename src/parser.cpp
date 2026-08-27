@@ -1,16 +1,22 @@
 #include "emojineer/parser.hpp"
+#include "emojineer/unicode.hpp"
 #include <sstream>
 #include <stdexcept>
 #include <utility>
 
 namespace emojineer {
 
-// Helper to set source range from tokens
+// Helper to get grapheme width of a token's lexeme (for accurate end column)
+static std::size_t token_grapheme_width(const Token& t) {
+    return segment_graphemes(t.lexeme).size();
+}
+
+// Helper to set source range from tokens - fixes end_column to include token width
 static void set_source_range(ast::SourceRange& dest, const Token& start, const Token& end) {
     dest.line = start.line;
     dest.column = start.column;
     dest.end_line = end.line;
-    dest.end_column = end.column;
+    dest.end_column = end.column + token_grapheme_width(end);  // Include full token width
 }
 
 Parser::Parser(std::vector<Token> tokens):tokens_(std::move(tokens)){}
@@ -306,10 +312,11 @@ ast::ExprPtr Parser::unary(){
         e->line=op.line;
         e->source.line = op.line;
         e->source.column = op.column;
+        e->op=op.kind;
+        // Parse child FIRST, then derive end range from it
+        e->right=unary();
         e->source.end_line = e->right->source.end_line;
         e->source.end_column = e->right->source.end_column;
-        e->op=op.kind;
-        e->right=unary();
         return e;
     }
     if(match(TokenKind::Length)){
@@ -318,9 +325,10 @@ ast::ExprPtr Parser::unary(){
         e->line=op.line;
         e->source.line = op.line;
         e->source.column = op.column;
+        // Parse child FIRST, then derive end range from it
+        e->value=unary();
         e->source.end_line = e->value->source.end_line;
         e->source.end_column = e->value->source.end_column;
-        e->value=unary();
         return e;
     }
     return primary();
@@ -334,7 +342,7 @@ ast::ExprPtr Parser::primary(){
         e->source.line = t.line;
         e->source.column = t.column;
         e->source.end_line = t.line;
-        e->source.end_column = t.column + t.lexeme.length();  // Approximate
+        e->source.end_column = t.column + token_grapheme_width(t);
         e->value=std::stod(t.literal);
         return e;
     }
@@ -345,7 +353,7 @@ ast::ExprPtr Parser::primary(){
         e->source.line = t.line;
         e->source.column = t.column;
         e->source.end_line = t.line;
-        e->source.end_column = t.column + t.lexeme.length();
+        e->source.end_column = t.column + token_grapheme_width(t);
         e->value=t.literal;
         return e;
     }
@@ -356,7 +364,7 @@ ast::ExprPtr Parser::primary(){
         e->source.line = t.line;
         e->source.column = t.column;
         e->source.end_line = t.line;
-        e->source.end_column = t.column + t.lexeme.length();
+        e->source.end_column = t.column + token_grapheme_width(t);
         e->value=t.kind==TokenKind::True;
         return e;
     }
@@ -371,9 +379,11 @@ ast::ExprPtr Parser::primary(){
             if(check(TokenKind::Eof)||check(TokenKind::Newline))error(peek(),"expected 🤲 after array elements");
             e->elements.push_back(expression());
         }
+        // Consume GroupEnd FIRST, then use previous() to get the real closing token
+        consume(TokenKind::GroupEnd,"expected 🤲 after array elements");
         const Token close_bracket = previous();
         e->source.end_line = close_bracket.line;
-        e->source.end_column = close_bracket.column + 1;  // 🤲 is one char
+        e->source.end_column = close_bracket.column + token_grapheme_width(close_bracket);
         return e;
     }
     if(match(TokenKind::Index)){
@@ -385,10 +395,11 @@ ast::ExprPtr Parser::primary(){
         e->source.column = op.column;
         e->collection=expression();
         e->index=expression();
+        // Consume GroupEnd FIRST, then use previous() to get the real closing token
+        consume(TokenKind::GroupEnd,"expected 🤲 after 🔎 array and index");
         const Token close_bracket = previous();
         e->source.end_line = close_bracket.line;
-        e->source.end_column = close_bracket.column + 1;
-        consume(TokenKind::GroupEnd,"expected 🤲 after 🔎 array and index");
+        e->source.end_column = close_bracket.column + token_grapheme_width(close_bracket);
         return e;
     }
     if(match(TokenKind::Append)){
@@ -400,10 +411,11 @@ ast::ExprPtr Parser::primary(){
         e->source.column = op.column;
         e->collection=expression();
         e->value=expression();
+        // Consume GroupEnd FIRST, then use previous() to get the real closing token
+        consume(TokenKind::GroupEnd,"expected 🤲 after 📎 array and value");
         const Token close_bracket = previous();
         e->source.end_line = close_bracket.line;
-        e->source.end_column = close_bracket.column + 1;
-        consume(TokenKind::GroupEnd,"expected 🤲 after 📎 array and value");
+        e->source.end_column = close_bracket.column + token_grapheme_width(close_bracket);
         return e;
     }
     if(match(TokenKind::SetIndex)){
@@ -416,10 +428,11 @@ ast::ExprPtr Parser::primary(){
         e->collection=expression();
         e->index=expression();
         e->value=expression();
+        // Consume GroupEnd FIRST, then use previous() to get the real closing token
+        consume(TokenKind::GroupEnd,"expected 🤲 after 🧷 array, index, and value");
         const Token close_bracket = previous();
         e->source.end_line = close_bracket.line;
-        e->source.end_column = close_bracket.column + 1;
-        consume(TokenKind::GroupEnd,"expected 🤲 after 🧷 array, index, and value");
+        e->source.end_column = close_bracket.column + token_grapheme_width(close_bracket);
         return e;
     }
     if(match(TokenKind::Identifier)){
@@ -434,10 +447,11 @@ ast::ExprPtr Parser::primary(){
                 if(check(TokenKind::Eof)||check(TokenKind::Newline))error(peek(),"expected 🤲 after function arguments");
                 call->arguments.push_back(expression());
             }
+            // Consume GroupEnd FIRST, then use previous() to get the real closing token
+            consume(TokenKind::GroupEnd,"expected 🤲 after function arguments");
             const Token close_paren = previous();
             call->source.end_line = close_paren.line;
-            call->source.end_column = close_paren.column + 1;
-            consume(TokenKind::GroupEnd,"expected 🤲 after function arguments");
+            call->source.end_column = close_paren.column + token_grapheme_width(close_paren);
             return call;
         }
         auto e=std::make_unique<ast::VariableExpr>();
@@ -445,7 +459,7 @@ ast::ExprPtr Parser::primary(){
         e->source.line = name.line;
         e->source.column = name.column;
         e->source.end_line = name.line;
-        e->source.end_column = name.column + name.lexeme.length();
+        e->source.end_column = name.column + token_grapheme_width(name);
         e->name=name.canonical;
         return e;
     }
@@ -456,15 +470,16 @@ ast::ExprPtr Parser::primary(){
         e->source.line = t.line;
         e->source.column = t.column;
         e->source.end_line = t.line;
-        e->source.end_column = t.column + t.lexeme.length();
+        e->source.end_column = t.column + token_grapheme_width(t);
         return e;
     }
     if(match(TokenKind::GroupStart)){
         auto e=expression();
+        // Consume GroupEnd FIRST, then use previous() to get the real closing token
+        consume(TokenKind::GroupEnd,"expected 🤲 after grouped expression");
         const Token close_paren = previous();
         e->source.end_line = close_paren.line;
-        e->source.end_column = close_paren.column + 1;
-        consume(TokenKind::GroupEnd,"expected 🤲 after grouped expression");
+        e->source.end_column = close_paren.column + token_grapheme_width(close_paren);
         return e;
     }
     error(peek(),"expected an expression");

@@ -284,6 +284,86 @@ std::string resolve_function(const ModuleUnit& unit, const std::string& name,
                              ": undefined or non-exported emoji function '" + name + "'");
 }
 
+// Recursively stamp module identity on all expressions (for EMJBC v6 source mapping)
+void stamp_expr(ast::Expr& expr, const std::string& identity) {
+    expr.source.module_identity = identity;
+    if (auto* unary = dynamic_cast<ast::UnaryExpr*>(&expr)) {
+        stamp_expr(*unary->right, identity);
+        return;
+    }
+    if (auto* binary = dynamic_cast<ast::BinaryExpr*>(&expr)) {
+        stamp_expr(*binary->left, identity);
+        stamp_expr(*binary->right, identity);
+        return;
+    }
+    if (auto* call = dynamic_cast<ast::CallExpr*>(&expr)) {
+        for (auto& arg : call->arguments) stamp_expr(*arg, identity);
+        return;
+    }
+    if (auto* array = dynamic_cast<ast::ArrayExpr*>(&expr)) {
+        for (auto& elem : array->elements) stamp_expr(*elem, identity);
+        return;
+    }
+    if (auto* index = dynamic_cast<ast::IndexExpr*>(&expr)) {
+        stamp_expr(*index->collection, identity);
+        stamp_expr(*index->index, identity);
+        return;
+    }
+    if (auto* length = dynamic_cast<ast::LengthExpr*>(&expr)) {
+        stamp_expr(*length->value, identity);
+        return;
+    }
+    if (auto* append = dynamic_cast<ast::AppendExpr*>(&expr)) {
+        stamp_expr(*append->collection, identity);
+        stamp_expr(*append->value, identity);
+        return;
+    }
+    if (auto* set = dynamic_cast<ast::SetIndexExpr*>(&expr)) {
+        stamp_expr(*set->collection, identity);
+        stamp_expr(*set->index, identity);
+        stamp_expr(*set->value, identity);
+        return;
+    }
+    // LiteralExpr, VariableExpr, InputExpr have no children
+}
+
+// Recursively stamp module identity on all statements (for EMJBC v6 source mapping)
+void stamp_stmt(ast::Stmt& stmt, const std::string& identity) {
+    stmt.source.module_identity = identity;
+    if (auto* var = dynamic_cast<ast::VarDecl*>(&stmt)) {
+        if (var->initializer) stamp_expr(*var->initializer, identity);
+        return;
+    }
+    if (auto* assignment = dynamic_cast<ast::Assignment*>(&stmt)) {
+        stamp_expr(*assignment->value, identity);
+        return;
+    }
+    if (auto* print = dynamic_cast<ast::PrintStmt*>(&stmt)) {
+        stamp_expr(*print->expression, identity);
+        return;
+    }
+    if (auto* ret = dynamic_cast<ast::ReturnStmt*>(&stmt)) {
+        stamp_expr(*ret->expression, identity);
+        return;
+    }
+    if (auto* branch = dynamic_cast<ast::IfStmt*>(&stmt)) {
+        stamp_expr(*branch->condition, identity);
+        for (auto& child : branch->then_branch) stamp_stmt(*child, identity);
+        for (auto& child : branch->else_branch) stamp_stmt(*child, identity);
+        return;
+    }
+    if (auto* loop = dynamic_cast<ast::WhileStmt*>(&stmt)) {
+        stamp_expr(*loop->condition, identity);
+        for (auto& child : loop->body) stamp_stmt(*child, identity);
+        return;
+    }
+    if (auto* fn = dynamic_cast<ast::FunctionDecl*>(&stmt)) {
+        for (auto& child : fn->body) stamp_stmt(*child, identity);
+        return;
+    }
+    // ModuleDecl, ImportStmt, ExportStmt have no nested source to stamp
+}
+
 void rewrite_stmt(ast::Stmt& stmt, ModuleUnit& unit,
                   const std::unordered_set<std::string>* locals) {
     const bool in_function = locals != nullptr;
@@ -405,9 +485,9 @@ public:
                     dynamic_cast<ast::ImportStmt*>(stmt.get()) ||
                     dynamic_cast<ast::ExportStmt*>(stmt.get())) continue;
                 rewrite_stmt(*stmt, unit, nullptr);
-                // Set module identity for source mapping (EMJBC v6)
-                // This ensures each module's bytecode gets its own source identity
-                stmt->source.module_identity = identity;
+                // Recursively stamp module identity for source mapping (EMJBC v6)
+                // This ensures nested expressions and function bodies also get the correct identity
+                stamp_stmt(*stmt, identity);
                 linked.statements.push_back(std::move(stmt));
             }
         }
