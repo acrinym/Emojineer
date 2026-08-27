@@ -452,16 +452,100 @@ void LanguageServer::closeDocument(const std::string& uri) {
     openDocuments_.erase(uri);
 }
 
-// Helper to count UTF-16 code units for a UTF-8 code point
-static std::uint32_t countUtf16Units(unsigned char byte) {
-    if ((byte & 0x80) == 0) return 1;       // ASCII
-    if ((byte & 0xE0) == 0xC0) return 1;    // 2-byte sequence, 1 UTF-16 unit
-    if ((byte & 0xF0) == 0xE0) return 1;    // 3-byte sequence, 1 UTF-16 unit (BMP)
-    if ((byte & 0xF8) == 0xF0) return 2;    // 4-byte sequence, 2 UTF-16 units (surrogate pair)
-    return 1;
+// Helper: validated UTF-8 decoder - decodes a single code point from UTF-8
+// Returns true if successful, advances pos to after the decoded sequence
+// Returns false if invalid UTF-8, advances pos by 1 byte
+static bool decodeUtf8CodePoint(const std::string& text, std::size_t& pos, char32_t& codePoint) {
+    if (pos >= text.size()) return false;
+    
+    unsigned char byte = static_cast<unsigned char>(text[pos]);
+    
+    // Single byte (ASCII)
+    if ((byte & 0x80) == 0) {
+        codePoint = byte;
+        pos += 1;
+        return true;
+    }
+    
+    // Determine sequence length from first byte
+    int seqLen = 0;
+    char32_t cp = 0;
+    
+    if ((byte & 0xE0) == 0xC0) {
+        seqLen = 2;
+        cp = byte & 0x1F;
+    } else if ((byte & 0xF0) == 0xE0) {
+        seqLen = 3;
+        cp = byte & 0x0F;
+    } else if ((byte & 0xF8) == 0xF0) {
+        seqLen = 4;
+        cp = byte & 0x07;
+    } else {
+        // Invalid leading byte
+        pos += 1;
+        return false;
+    }
+    
+    // Check we have enough bytes
+    if (pos + seqLen > text.size()) {
+        // Incomplete sequence
+        pos += 1;
+        return false;
+    }
+    
+    // Decode continuation bytes
+    for (int i = 1; i < seqLen; i++) {
+        unsigned char cb = static_cast<unsigned char>(text[pos + i]);
+        if ((cb & 0xC0) != 0x80) {
+            // Not a continuation byte - invalid UTF-8
+            pos += 1;
+            return false;
+        }
+        cp = (cp << 6) | (cb & 0x3F);
+    }
+    
+    // Validate code point
+    if (cp > 0x10FFFF) {
+        // Out of Unicode range
+        pos += 1;
+        return false;
+    }
+    if (cp >= 0xD800 && cp <= 0xDFFF) {
+        // Surrogates invalid in UTF-8
+        pos += 1;
+        return false;
+    }
+    
+    // Reject overlong encodings - each sequence length has a minimum code point
+    if (seqLen == 2 && cp < 0x80) {
+        pos += 1;
+        return false;   // 2-byte must encode >= U+0080
+    }
+    if (seqLen == 3 && cp < 0x800) {
+        pos += 1;
+        return false;  // 3-byte must encode >= U+0800
+    }
+    if (seqLen == 4 && cp < 0x10000) {
+        pos += 1;
+        return false; // 4-byte must encode >= U+10000
+    }
+    
+    codePoint = cp;
+    pos += seqLen;
+    return true;
+}
+
+// Helper: count UTF-16 code units for a Unicode code point
+// This counts based on the actual code point value, not the UTF-8 encoding
+static std::uint32_t countUtf16UnitsForCodePoint(char32_t cp) {
+    if (cp < 0x10000) return 1;  // BMP fits in one UTF-16 unit
+    if (cp <= 0x10FFFF) return 2;  // Supplementary plane needs surrogate pair
+    return 1;  // Invalid, but return something reasonable
 }
 
 // Convert UTF-8 byte index to UTF-16 position (line, column)
+// This properly handles UTF-8 sequences as atomic units and counts UTF-16
+// code units per Unicode scalar value.
 Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Offset) const {
     Position pos;
     std::size_t utf8Pos = 0;
@@ -471,38 +555,45 @@ Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Of
     utf8Offset = std::min(utf8Offset, text.size());
     
     while (utf8Pos < utf8Offset) {
+        // Handle CRLF: check for \r\n sequence
+        if (utf8Pos + 1 < text.size() && 
+            text[utf8Pos] == '\r' && text[utf8Pos + 1] == '\n') {
+            // Check if CRLF fits within the requested offset
+            if (utf8Pos + 2 <= utf8Offset) {
+                pos.line++;
+                utf16Col = 0;
+                utf8Pos += 2;
+            } else {
+                // Partial CRLF - stop at offset without counting
+                utf8Pos = utf8Offset;
+            }
+            continue;
+        }
+        
         unsigned char byte = static_cast<unsigned char>(text[utf8Pos]);
         
         if (byte == '\n') {
             pos.line++;
             utf16Col = 0;
+            utf8Pos++;
+        } else if (byte == '\r') {
+            // CR not followed by LF - treat as line ending
+            pos.line++;
+            utf16Col = 0;
+            utf8Pos++;
         } else {
-            // Count UTF-16 code units for this character
-            utf16Col += countUtf16Units(byte);
-            
-            // Skip continuation bytes
-            if ((byte & 0xC0) == 0x80) {
-                // Continuation byte, already counted
+            // Decode UTF-8 code point using validated decoder
+            char32_t codePoint = 0;
+            std::size_t oldPos = utf8Pos;
+            if (decodeUtf8CodePoint(text, utf8Pos, codePoint)) {
+                // Successfully decoded - count UTF-16 units for this scalar value
+                utf16Col += countUtf16UnitsForCodePoint(codePoint);
             } else {
-                // Determine sequence length
-                int seqLen = 0;
-                if ((byte & 0x80) == 0) seqLen = 1;
-                else if ((byte & 0xE0) == 0xC0) seqLen = 2;
-                else if ((byte & 0xF0) == 0xE0) seqLen = 3;
-                else if ((byte & 0xF8) == 0xF0) seqLen = 4;
-                
-                // For supplementary plane (4-byte sequences), count as 2 UTF-16 units
-                if (seqLen == 4) {
-                    utf16Col++; // Add extra unit for surrogate pair
-                }
-                
-                // Skip continuation bytes
-                for (int i = 1; i < seqLen && utf8Pos + i < utf8Offset; i++) {
-                    // continuation bytes don't add to utf8Pos separately
-                }
+                // Invalid UTF-8 - treat as single byte
+                utf8Pos = oldPos + 1;
+                utf16Col += 1;
             }
         }
-        utf8Pos++;
     }
     
     pos.character = utf16Col;
@@ -510,17 +601,63 @@ Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Of
 }
 
 // Convert UTF-16 position to UTF-8 byte offset
-std::size_t LanguageServer::utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const {
+// Returns std::nullopt for invalid positions (e.g., mid-surrogate)
+// Valid UTF-16 positions are 0-based code unit indices.
+std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const {
     std::uint32_t currentLine = 0;
     std::uint32_t currentCol = 0;
     std::size_t utf8Offset = 0;
     
+    // First, count total lines to validate line number
+    // Line endings: \r\n (windows), \n (unix), \r (old mac)
+    std::uint32_t totalLines = 0;
+    std::size_t i = 0;
+    while (i < text.size()) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') {
+            totalLines++;
+            i += 2;
+        } else if (text[i] == '\n') {
+            totalLines++;
+            i++;
+        } else if (text[i] == '\r') {
+            totalLines++;
+            i++;
+        } else {
+            i++;
+        }
+    }
+    totalLines++;  // Account for last line
+    
+    // Reject out-of-range line number
+    if (line >= totalLines) {
+        return std::nullopt;
+    }
+    
     while (utf8Offset < text.size()) {
+        // Handle CRLF: check for \r\n sequence
+        if (utf8Offset + 1 < text.size() && 
+            text[utf8Offset] == '\r' && text[utf8Offset + 1] == '\n') {
+            if (currentLine == line) {
+                return utf8Offset;
+            }
+            currentLine++;
+            currentCol = 0;
+            utf8Offset += 2;
+            continue;
+        }
+        
         unsigned char byte = static_cast<unsigned char>(text[utf8Offset]);
         
         if (byte == '\n') {
             if (currentLine == line) {
-                // At end of target line
+                return utf8Offset;
+            }
+            currentLine++;
+            currentCol = 0;
+            utf8Offset++;
+            continue;
+        } else if (byte == '\r') {
+            if (currentLine == line) {
                 return utf8Offset;
             }
             currentLine++;
@@ -530,32 +667,55 @@ std::size_t LanguageServer::utf16ToUtf8(const std::string& text, std::uint32_t l
         }
         
         if (currentLine == line) {
-            // Count UTF-16 code units
-            std::uint32_t units = countUtf16Units(byte);
-            
-            // For 4-byte sequences (supplementary plane), count as 2 units
-            if ((byte & 0xF8) == 0xF0) {
-                units = 2;
+            // Decode UTF-8 code point to get its UTF-16 length
+            char32_t codePoint = 0;
+            std::size_t oldPos = utf8Offset;
+            if (decodeUtf8CodePoint(text, utf8Offset, codePoint)) {
+                std::uint32_t units = countUtf16UnitsForCodePoint(codePoint);
+                
+                // For characters needing 2 UTF-16 units (surrogate pairs), 
+                // reject positions in the middle (e.g., position 1 of a 2-unit character)
+                if (units == 2) {
+                    if (currentCol < utf16Col && utf16Col < currentCol + units) {
+                        return std::nullopt;  // Invalid: in middle of surrogate pair
+                    }
+                }
+                
+                // Check if we've reached or passed the target column
+                if (currentCol + units <= utf16Col) {
+                    if (currentCol + units == utf16Col) {
+                        // Position is exactly at end of this character
+                        return utf8Offset;
+                    }
+                    currentCol += units;
+                } else {
+                    // Position falls within this character
+                    return oldPos;
+                }
+            } else {
+                // Invalid UTF-8, skip one byte
+                utf8Offset = oldPos + 1;
+                if (currentCol >= utf16Col) {
+                    return oldPos;
+                }
+                currentCol += 1;
             }
-            
-            if (currentCol + units > utf16Col) {
-                // Found the position
-                return utf8Offset;
+        } else {
+            // Not on target line, just skip characters
+            char32_t codePoint = 0;
+            std::size_t oldPos = utf8Offset;
+            if (!decodeUtf8CodePoint(text, utf8Offset, codePoint)) {
+                utf8Offset = oldPos + 1;
             }
-            currentCol += units;
         }
-        
-        // Determine sequence length and skip
-        int seqLen = 1;
-        if ((byte & 0x80) == 0) seqLen = 1;
-        else if ((byte & 0xE0) == 0xC0) seqLen = 2;
-        else if ((byte & 0xF0) == 0xE0) seqLen = 3;
-        else if ((byte & 0xF8) == 0xF0) seqLen = 4;
-        
-        utf8Offset += seqLen;
     }
     
-    return utf8Offset;
+    // At end of text
+    if (currentLine == line && currentCol <= utf16Col) {
+        return utf8Offset;
+    }
+    
+    return std::nullopt;
 }
 
 std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc) {
@@ -944,6 +1104,35 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
 
 std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& uri, const Position& pos) {
     return {};
+}
+
+JsonValue LanguageServer::handleReferences(const JsonValue& params) {
+    auto posObj = getJsonObject(params, "position");
+    std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
+    std::uint32_t char_ = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
+    
+    auto refs = findReferences("", Position{line, char_});
+    
+    auto result = json::makeArray();
+    for (const auto& ref : refs) {
+        auto loc = json::makeObject();
+        json::objectSet(loc, "uri", JsonValue(ref.uri));
+        
+        auto range = json::makeObject();
+        auto start = json::makeObject();
+        json::objectSet(start, "line", JsonValue(static_cast<double>(ref.range.start.line)));
+        json::objectSet(start, "character", JsonValue(static_cast<double>(ref.range.start.character)));
+        auto end = json::makeObject();
+        json::objectSet(end, "line", JsonValue(static_cast<double>(ref.range.end.line)));
+        json::objectSet(end, "character", JsonValue(static_cast<double>(ref.range.end.character)));
+        json::objectSet(range, "start", start);
+        json::objectSet(range, "end", end);
+        json::objectSet(loc, "range", range);
+        
+        json::arrayPushBack(result, loc);
+    }
+    
+    return result;
 }
 
 JsonValue LanguageServer::handleDocumentSymbol(const JsonValue& params) {
