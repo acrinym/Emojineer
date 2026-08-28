@@ -1004,28 +1004,50 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc
         }
         
         // Try to extract the token that caused the error from the message
-        // This helps provide better range information
+        std::string tokenName;
+        std::size_t tokenNameStart = errorMsg.find("near '");
+        if (tokenNameStart != std::string::npos) {
+            tokenNameStart += 6; // Skip "near '"
+            auto tokenNameEnd = errorMsg.find("'", tokenNameStart);
+            if (tokenNameEnd != std::string::npos) {
+                tokenName = errorMsg.substr(tokenNameStart, tokenNameEnd - tokenNameStart);
+            }
+        }
+        
         Position startPos;
         startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
         startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
         
         // Try to find a token at or near this position for better range
+        Position endPos = startPos;
         try {
-            Lexer lexer(doc.text, registry_);
-            auto tokens = lexer.tokenize();
+            Lexer lex(doc.text, registry_);
+            auto tokens = lex.tokenize();
             for (const auto& token : tokens) {
-                if (token.line == line) {
-                    // Found a token on the error line - use its position
-                    startPos.character = static_cast<std::uint32_t>(token.column > 0 ? token.column - 1 : 0);
-                    // Estimate end based on lexeme length
+                // If we have a token name from the error, find that specific token
+                if (!tokenName.empty() && token.lexeme == tokenName) {
+                    // Use exact token position and compute UTF-16 range
+                    std::size_t startByte = token.column > 0 ? token.column - 1 : 0;
+                    std::size_t endByte = startByte + token.lexeme.size();
+                    startPos = utf8ToUtf16(doc.text, startByte);
+                    endPos = utf8ToUtf16(doc.text, endByte);
+                    break;
+                }
+                // Otherwise, find a token on the error line
+                else if (token.line == line) {
+                    std::size_t startByte = token.column > 0 ? token.column - 1 : 0;
+                    std::size_t endByte = startByte + token.lexeme.size();
+                    startPos = utf8ToUtf16(doc.text, startByte);
+                    endPos = utf8ToUtf16(doc.text, endByte);
                     break;
                 }
             }
         } catch (...) {}
         
-        // Estimate end position - use a reasonable default or token length
-        Position endPos = startPos;
-        endPos.character = startPos.character + 10; // Default span of 10 characters
+        // If still using default positions, at least use UTF-16 aware single-character span
+        if (endPos.character == startPos.character) {
+            endPos.character = startPos.character + 1; // Single character span
+        }
         
         Diagnostic diag;
         diag.range = {startPos, endPos};
@@ -1113,41 +1135,55 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
                 }
             }
             
-            // If we have token name but no line info, try to find it in the source
-            if (line == 1 && !tokenName.empty()) {
-                try {
-                    // Parse the document to get tokens
-                    Lexer lexer(doc.text, registry_);
-                    auto tokens = lexer.tokenize();
-                    
-                    // Look for a token matching the error
+            // Try to find a token at or near this position for better range
+            Position startPos;
+            Position endPos;
+            
+            try {
+                Lexer lex(doc.text, registry_);
+                auto tokens = lex.tokenize();
+                
+                // First try to find the specific token from the error
+                if (!tokenName.empty()) {
                     for (const auto& tok : tokens) {
-                        if (tok.lexeme == tokenName || 
-                            tok.canonical == tokenName ||
-                            tok.lexeme.find(tokenName) != std::string::npos) {
-                            // Found a matching token - use its position
-                            line = tok.line;
-                            column = tok.column;
+                        if (tok.lexeme == tokenName || tok.canonical == tokenName) {
+                            // Use exact token position and compute UTF-16 range
+                            std::size_t startByte = tok.column > 0 ? tok.column - 1 : 0;
+                            std::size_t endByte = startByte + tok.lexeme.size();
+                            startPos = utf8ToUtf16(doc.text, startByte);
+                            endPos = utf8ToUtf16(doc.text, endByte);
                             break;
                         }
                     }
-                } catch (...) {
-                    // If parsing fails, fall back to defaults
                 }
+                
+                // If no token found yet, try to find a token on the error line
+                if (endPos.character == 0 && endPos.line == 0) {
+                    for (const auto& tok : tokens) {
+                        if (tok.line == line) {
+                            std::size_t startByte = tok.column > 0 ? tok.column - 1 : 0;
+                            std::size_t endByte = startByte + tok.lexeme.size();
+                            startPos = utf8ToUtf16(doc.text, startByte);
+                            endPos = utf8ToUtf16(doc.text, endByte);
+                            break;
+                        }
+                    }
+                }
+            } catch (...) {
+                // Fall back to basic position calculation
             }
             
-            Position startPos;
-            startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
-            startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
-            
-            // Estimate end position using UTF-16 aware length
-            Position endPos = startPos;
-            if (!tokenName.empty()) {
-                // Calculate UTF-16 length of the token for accurate range
-                endPos.character = startPos.character + static_cast<std::uint32_t>(countUtf16Units(tokenName));
-            } else {
-                // Use a small default span when no token info available
-                endPos.character = startPos.character + 1;
+            // If still using default positions, compute from line/column
+            if (endPos.character == 0 && endPos.line == 0) {
+                startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
+                startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
+                
+                // Use UTF-16 aware token length if available
+                if (!tokenName.empty()) {
+                    endPos.character = startPos.character + static_cast<std::uint32_t>(countUtf16Units(tokenName));
+                } else {
+                    endPos.character = startPos.character + 1; // Single character span
+                }
             }
             
             Diagnostic diag;
@@ -1264,7 +1300,8 @@ JsonValue LanguageServer::handleInitialize(const JsonValue& params) {
     json::objectSet(caps, "documentSymbolProvider", JsonValue(true));
     json::objectSet(caps, "workspaceSymbolProvider", JsonValue(true));
     json::objectSet(caps, "documentFormattingProvider", JsonValue(true));
-    json::objectSet(caps, "documentRangeFormattingProvider", JsonValue(true));
+    // Range formatting is not supported - the canonical formatter works on full documents only
+    json::objectSet(caps, "documentRangeFormattingProvider", JsonValue(false));
     
     json::objectSet(result, "capabilities", caps);
     
@@ -1414,31 +1451,36 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
     if (!doc) return std::nullopt;
     
     try {
+        // Convert the LSP UTF-16 position to UTF-8 byte offset
+        auto utf8OffsetOpt = utf16ToUtf8(doc->text, pos.line, pos.character);
+        if (!utf8OffsetOpt) return std::nullopt;
+        std::size_t utf8Offset = *utf8OffsetOpt;
+        
         Lexer lexer(doc->text, registry_);
         auto tokens = lexer.tokenize();
         
         // Find the token at the exact requested position
-        // Use token's line/column to determine position
+        // Token columns are 1-indexed byte positions in the UTF-8 source
         for (const auto& token : tokens) {
             if (token.kind == TokenKind::Eof) continue;
             
             // Check if this token contains the requested position
-            // token.line is 1-indexed, token.column is 1-indexed
-            // We need to check if the position falls within this token's range
+            // token.line is 1-indexed, token.column is 1-indexed byte position
             if (token.line == pos.line + 1) {
-                // token.column is 1-indexed, convert to 0-indexed for comparison
-                std::size_t tokenStartCol = token.column > 0 ? token.column - 1 : 0;
-                std::size_t tokenEndCol = tokenStartCol + token.lexeme.size();
+                // token.column is 1-indexed, convert to 0-indexed UTF-8 byte offset
+                std::size_t tokenStartByte = token.column > 0 ? token.column - 1 : 0;
+                // Token end is start + byte length of lexeme
+                std::size_t tokenEndByte = tokenStartByte + token.lexeme.size();
                 
-                // Convert UTF-16 character position to UTF-8 column approximation
-                // For simplicity, we assume the UTF-16 column roughly maps to UTF-8 column for non-supplementary-plane chars
-                std::size_t utf8Column = pos.character;
-                
-                // Check if requested position is within this token's range
-                // Position is inclusive at start, exclusive at end
-                if (utf8Column >= tokenStartCol && utf8Column < tokenEndCol) {
+                // Check if requested UTF-8 byte offset falls within this token's byte range
+                if (utf8Offset >= tokenStartByte && utf8Offset < tokenEndByte) {
                     Hover hover;
                     hover.contents = MarkupContent{"markdown", ""};
+                    
+                    // Calculate exact token range in UTF-16 for the hover response
+                    Position startPos = utf8ToUtf16(doc->text, tokenStartByte);
+                    Position endPos = utf8ToUtf16(doc->text, tokenEndByte);
+                    hover.range = Range{startPos, endPos};
                     
                     const auto& defs = registry_.definitions();
                     for (const auto& def : defs) {
@@ -1643,35 +1685,8 @@ JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    // Convert UTF-16 position to UTF-8 byte offset
-    auto utf8OffsetOpt = utf16ToUtf8(doc->text, line, utf16Char);
-    std::size_t utf8Offset = utf8OffsetOpt.value_or(0);
-    
-    // Find the column (byte offset within the line) by scanning from line start
-    std::size_t lineStart = 0;
-    std::size_t currentLineNum = 0;
-    for (std::size_t i = 0; i < doc->text.size(); ++i) {
-        if (currentLineNum == line) {
-            lineStart = i;
-            break;
-        }
-        // Handle CRLF: check for \r\n sequence
-        if (i + 1 < doc->text.size() && doc->text[i] == '\r' && doc->text[i + 1] == '\n') {
-            currentLineNum++;
-            i++; // Skip the \n as well
-        } else if (doc->text[i] == '\n') {
-            currentLineNum++;
-        } else if (doc->text[i] == '\r') {
-            currentLineNum++;
-        }
-    }
-    
-    std::uint32_t column = 0;
-    if (utf8Offset > lineStart) {
-        column = static_cast<std::uint32_t>(utf8Offset - lineStart);
-    }
-    
-    auto defs = findDefinitions(uri, Position{line, column});
+    // Pass UTF-16 position directly to findDefinitions - it handles the conversion
+    auto defs = findDefinitions(uri, Position{line, utf16Char});
     
     auto result = json::makeArray();
     for (const auto& def : defs) {
@@ -1702,6 +1717,11 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
     if (!doc) return results;
     
     try {
+        // Convert the LSP UTF-16 position to UTF-8 byte offset
+        auto utf8OffsetOpt = utf16ToUtf8(doc->text, pos.line, pos.character);
+        if (!utf8OffsetOpt) return results;
+        std::size_t utf8Offset = *utf8OffsetOpt;
+        
         Lexer lexer(doc->text, registry_);
         auto tokens = lexer.tokenize();
         // Preserve tokens for iteration before moving to parser
@@ -1709,17 +1729,20 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
         Parser parser(std::move(tokens));
         auto program = parser.parse();
         
-        // Find the token at the given position
+        // Find the token at the given position using exact UTF-8 byte offset
         const Token* tokenAtPos = nullptr;
         for (const auto& token : tokensCopy) {
             if (token.kind == TokenKind::Eof) continue;
             
             // Check if this token is at the requested position
-            // Position is 0-indexed in LSP
+            // token.line is 1-indexed, token.column is 1-indexed byte position
             if (token.line == pos.line + 1) {
-                // Simple column matching - this is approximate
-                if (token.column <= pos.character + 1 && 
-                    token.column + token.lexeme.size() >= pos.character + 1) {
+                // Convert token column to 0-indexed byte offset
+                std::size_t tokenStartByte = token.column > 0 ? token.column - 1 : 0;
+                std::size_t tokenEndByte = tokenStartByte + token.lexeme.size();
+                
+                // Check if the UTF-8 byte offset falls within this token's byte range
+                if (utf8Offset >= tokenStartByte && utf8Offset < tokenEndByte) {
                     tokenAtPos = &token;
                     break;
                 }
@@ -1727,6 +1750,15 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
         }
         
         if (!tokenAtPos) return results;
+        
+        // Helper to convert token position to UTF-16 range
+        auto tokenToUtf16Range = [this, &doc](const Token& tok) -> Range {
+            std::size_t startByte = tok.column > 0 ? tok.column - 1 : 0;
+            std::size_t endByte = startByte + tok.lexeme.size();
+            Position start = utf8ToUtf16(doc->text, startByte);
+            Position end = utf8ToUtf16(doc->text, endByte);
+            return Range{start, end};
+        };
         
         // Now search for the definition of this identifier
         // In Emojineer, definitions come before uses, so we search backwards in the program
@@ -1739,16 +1771,18 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
             if (typeInfo == typeid(ast::VarDecl)) {
                 auto* varDecl = dynamic_cast<ast::VarDecl*>(stmt.get());
                 if (varDecl && varDecl->name == tokenAtPos->lexeme) {
-                    SymbolLocation loc;
-                    loc.uri = uri;
-                    loc.name = varDecl->name;
-                    loc.symbolKind = "variable";
-                    loc.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
-                    loc.range.start.character = 0;
-                    loc.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
-                    loc.range.end.character = static_cast<std::uint32_t>(varDecl->name.length());
-                    results.push_back(loc);
-                    return results;
+                    // Find the token for this declaration
+                    for (const auto& tok : tokensCopy) {
+                        if (tok.lexeme == varDecl->name) {
+                            SymbolLocation loc;
+                            loc.uri = uri;
+                            loc.name = varDecl->name;
+                            loc.symbolKind = "variable";
+                            loc.range = tokenToUtf16Range(tok);
+                            results.push_back(loc);
+                            return results;
+                        }
+                    }
                 }
             }
             
@@ -1756,16 +1790,36 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
             if (typeInfo == typeid(ast::FunctionDecl)) {
                 auto* funcDecl = dynamic_cast<ast::FunctionDecl*>(stmt.get());
                 if (funcDecl && funcDecl->name == tokenAtPos->lexeme) {
-                    SymbolLocation loc;
-                    loc.uri = uri;
-                    loc.name = funcDecl->name;
-                    loc.symbolKind = "function";
-                    loc.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
-                    loc.range.start.character = 0;
-                    loc.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
-                    loc.range.end.character = static_cast<std::uint32_t>(funcDecl->name.length());
-                    results.push_back(loc);
-                    return results;
+                    // Find the token for this declaration
+                    for (const auto& tok : tokensCopy) {
+                        if (tok.lexeme == funcDecl->name) {
+                            SymbolLocation loc;
+                            loc.uri = uri;
+                            loc.name = funcDecl->name;
+                            loc.symbolKind = "function";
+                            loc.range = tokenToUtf16Range(tok);
+                            results.push_back(loc);
+                            return results;
+                        }
+                    }
+                }
+            }
+            
+            // Check for module declarations
+            if (typeInfo == typeid(ast::ModuleDecl)) {
+                auto* modDecl = dynamic_cast<ast::ModuleDecl*>(stmt.get());
+                if (modDecl && modDecl->name == tokenAtPos->lexeme) {
+                    for (const auto& tok : tokensCopy) {
+                        if (tok.lexeme == modDecl->name) {
+                            SymbolLocation loc;
+                            loc.uri = uri;
+                            loc.name = modDecl->name;
+                            loc.symbolKind = "module";
+                            loc.range = tokenToUtf16Range(tok);
+                            results.push_back(loc);
+                            return results;
+                        }
+                    }
                 }
             }
         }
@@ -1793,6 +1847,15 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
         Lexer lexer(doc->text, registry_);
         auto tokens = lexer.tokenize();
         
+        // Helper to convert token position to UTF-16 range
+        auto tokenToUtf16Range = [this, &doc](const Token& tok) -> Range {
+            std::size_t startByte = tok.column > 0 ? tok.column - 1 : 0;
+            std::size_t endByte = startByte + tok.lexeme.size();
+            Position start = utf8ToUtf16(doc->text, startByte);
+            Position end = utf8ToUtf16(doc->text, endByte);
+            return Range{start, end};
+        };
+        
         // Find all uses of this symbol
         for (const auto& token : tokens) {
             if (token.kind == TokenKind::Eof) continue;
@@ -1813,10 +1876,8 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
                     loc.uri = uri;
                     loc.name = token.lexeme;
                     loc.symbolKind = defs[0].symbolKind;
-                    loc.range.start.line = static_cast<std::uint32_t>(token.line - 1);
-                    loc.range.start.character = static_cast<std::uint32_t>(token.column > 0 ? token.column - 1 : 0);
-                    loc.range.end.line = static_cast<std::uint32_t>(token.line - 1);
-                    loc.range.end.character = loc.range.start.character + static_cast<std::uint32_t>(token.lexeme.length());
+                    // Use exact UTF-16 range conversion
+                    loc.range = tokenToUtf16Range(token);
                     results.push_back(loc);
                 }
             }
@@ -1841,35 +1902,8 @@ JsonValue LanguageServer::handleReferences(const JsonValue& params) {
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    // Convert UTF-16 position to UTF-8 byte offset
-    auto utf8OffsetOpt = utf16ToUtf8(doc->text, line, utf16Char);
-    std::size_t utf8Offset = utf8OffsetOpt.value_or(0);
-    
-    // Find the column (byte offset within the line) by scanning from line start
-    std::size_t lineStart = 0;
-    std::size_t currentLineNum = 0;
-    for (std::size_t i = 0; i < doc->text.size(); ++i) {
-        if (currentLineNum == line) {
-            lineStart = i;
-            break;
-        }
-        // Handle CRLF: check for \r\n sequence
-        if (i + 1 < doc->text.size() && doc->text[i] == '\r' && doc->text[i + 1] == '\n') {
-            currentLineNum++;
-            i++; // Skip the \n as well
-        } else if (doc->text[i] == '\n') {
-            currentLineNum++;
-        } else if (doc->text[i] == '\r') {
-            currentLineNum++;
-        }
-    }
-    
-    std::uint32_t column = 0;
-    if (utf8Offset > lineStart) {
-        column = static_cast<std::uint32_t>(utf8Offset - lineStart);
-    }
-    
-    auto refs = findReferences(uri, Position{line, column});
+    // Pass UTF-16 position directly to findReferences - it handles the conversion
+    auto refs = findReferences(uri, Position{line, utf16Char});
     
     auto result = json::makeArray();
     for (const auto& ref : refs) {
@@ -2143,7 +2177,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
 }
 
 JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
-    // Extract the text document
+    // Extract the text document URI from textDocument field
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(textDoc);
     
@@ -2159,6 +2193,7 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
         auto edit = json::makeObject();
         
         // Full range from start to actual end of document
+        // Handle LF, CRLF, and lone-CR correctly
         auto range = json::makeObject();
         auto start = json::makeObject();
         json::objectSet(start, "line", JsonValue(0.0));
@@ -2166,25 +2201,34 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
         
         auto end = json::makeObject();
         
-        // Calculate actual end position: find last line and its length
+        // Calculate actual end position: find last line and handle line endings
+        // Handle \r\n (Windows), \n (Unix), \r (old Mac)
         std::size_t lastLine = 0;
         std::size_t lastLineStart = 0;
         for (std::size_t i = 0; i < doc->text.size(); i++) {
-            if (doc->text[i] == '\n') {
+            if (doc->text[i] == '\r' && i + 1 < doc->text.size() && doc->text[i + 1] == '\n') {
+                // CRLF - count as one line ending
+                lastLine++;
+                lastLineStart = i + 2;
+                i++; // Skip the \n
+            } else if (doc->text[i] == '\n') {
+                lastLine++;
+                lastLineStart = i + 1;
+            } else if (doc->text[i] == '\r') {
+                // Lone CR
                 lastLine++;
                 lastLineStart = i + 1;
             }
         }
         
-        // Calculate character position at end (UTF-16 column)
+        // Calculate UTF-16 position at end of document
         // If document is empty, end is at 0,0
         if (doc->text.empty()) {
             json::objectSet(end, "line", JsonValue(0.0));
             json::objectSet(end, "character", JsonValue(0.0));
         } else {
             json::objectSet(end, "line", JsonValue(static_cast<double>(lastLine)));
-            // Calculate UTF-16 position at end of document
-            std::string lastLineContent = doc->text.substr(lastLineStart);
+            // Use exact UTF-16 conversion for end position
             Position endPos = utf8ToUtf16(doc->text, doc->text.size());
             json::objectSet(end, "character", JsonValue(static_cast<double>(endPos.character)));
         }
@@ -2203,23 +2247,8 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
 }
 
 JsonValue LanguageServer::handleRangeFormatting(const JsonValue& params) {
-    // Extract the text document and range
-    auto textDoc = getJsonObject(params, "textDocument");
-    std::string uri = getJsonString(textDoc);
-    
-    auto doc = getDocument(uri);
-    if (!doc) return JsonValue(nullptr);
-    
-    // Check if range is provided
-    auto rangeObj = getJsonObject(params, "range");
-    if (rangeObj.isNull()) {
-        // No range provided, fall back to full document formatting
-        return handleFormatting(params);
-    }
-    
-    // Range formatting is not fully supported - return null to advertise this
-    // The canonical formatter works on the full document only
-    // Clients should use full document formatting instead
+    // Range formatting is not supported - the canonical formatter works on full documents only
+    // Return null to indicate this capability is not available
     return JsonValue(nullptr);
 }
 
