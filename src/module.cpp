@@ -3,9 +3,9 @@
 #include "emojineer/ast.hpp"
 #include "emojineer/compiler.hpp"
 #include "emojineer/lexer.hpp"
-#include "emojineer/lsp.hpp"
 #include "emojineer/package.hpp"
 #include "emojineer/parser.hpp"
+#include "emojineer/source_diagnostic.hpp"
 #include "emojineer/stdlib.hpp"
 
 #include <algorithm>
@@ -66,6 +66,13 @@ ast::Program parse_text(const std::string& source,
         Lexer lexer(source, registry);
         Parser parser(lexer.tokenize());
         return parser.parse();
+    } catch (const SourceLocationException& sle) {
+        // Preserve typed source errors, attaching the module identity as the source path
+        // if not already set
+        if (sle.sourcePath.empty()) {
+            throw SourceLocationException(sle.message, std::filesystem::path(identity), sle.line, sle.column, sle.tokenLexeme);
+        }
+        throw;
     } catch (const std::exception& error) {
         throw std::runtime_error("module '" + identity + "': " + error.what());
     }
@@ -149,7 +156,7 @@ void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
         if (dynamic_cast<const ast::ModuleDecl*>(stmt.get()) ||
             dynamic_cast<const ast::ImportStmt*>(stmt.get()) ||
             dynamic_cast<const ast::ExportStmt*>(stmt.get())) {
-            throw lsp::SourceLocationException("🧩, 🔗, and 📤 are top-level only", 
+            throw SourceLocationException("🧩, 🔗, and 📤 are top-level only", 
                                              {}, stmt->line, 1);
         }
         if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
@@ -511,24 +518,24 @@ private:
                                                const ImportSpec& spec) const {
         const std::filesystem::path requested(spec.requested);
         if (requested.empty() || requested.is_absolute()) {
-            throw lsp::SourceLocationException("🔗 import path must be non-empty and relative",
+            throw SourceLocationException("🔗 import path must be non-empty and relative",
                                              {}, spec.line, 1);
         }
         if (spec.requested.find('\\') != std::string::npos) {
-            throw lsp::SourceLocationException("🔗 import paths must use portable forward slashes",
+            throw SourceLocationException("🔗 import paths must use portable forward slashes",
                                              {}, spec.line, 1);
         }
         if (requested.extension() != ".emoji") {
-            throw lsp::SourceLocationException("🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>",
+            throw SourceLocationException("🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>",
                                              {}, spec.line, 1);
         }
         const auto candidate = importer.path.parent_path() / requested;
         if (!std::filesystem::exists(candidate)) {
-            throw lsp::SourceLocationException("imported module '" + spec.requested + "' does not exist",
+            throw SourceLocationException("imported module '" + spec.requested + "' does not exist",
                                              {}, spec.line, 1, spec.requested);
         }
         if (!std::filesystem::is_regular_file(candidate)) {
-            throw lsp::SourceLocationException("imported module '" + spec.requested + "' is not a regular file",
+            throw SourceLocationException("imported module '" + spec.requested + "' is not a regular file",
                                              {}, spec.line, 1, spec.requested);
         }
         const auto canonical = std::filesystem::canonical(candidate);

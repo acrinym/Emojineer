@@ -985,8 +985,15 @@ Range LanguageServer::tokenToRange(const std::string& sourceText, const Token& t
     
     // If we didn't find the line, token is past end of text
     if (currentLine < token.line) {
-        // Token line is beyond text - return position at text end
-        range.start.line = static_cast<std::uint32_t>(sourceText.size());
+        // Token line is beyond text - return position at last line end
+        // Count the actual number of lines in the text
+        std::size_t lineCount = 1;  // At minimum there's line 1
+        for (std::size_t i = 0; i < sourceText.size(); ++i) {
+            if (sourceText[i] == '\n') {
+                ++lineCount;
+            }
+        }
+        range.start.line = static_cast<std::uint32_t>(lineCount - 1);
         range.start.character = 0;
         range.end = range.start;
         return range;
@@ -1031,23 +1038,7 @@ Range LanguageServer::tokenToRange(const std::string& sourceText, const Token& t
     // For multiline tokens (like strings), we need special handling
     if (token.lexeme.find('\n') != std::string::npos || 
         token.lexeme.find('\r') != std::string::npos) {
-        // Multiline token - calculate based on lexeme content
-        // Find start position in source
-        std::size_t tokenStartByte = lineStart;
-        
-        // Count UTF-8 bytes to get to the token start column
-        std::size_t byteOffset = 0;
-        graphemeIndex = 0;
-        for (const auto& g : graphemes) {
-            if (graphemeIndex >= token.column - 1) {
-                break;
-            }
-            byteOffset += g.display.size();
-            ++graphemeIndex;
-        }
-        tokenStartByte += byteOffset;
-        
-        // Now traverse the lexeme to find end position
+        // Multiline token - calculate end position by traversing the lexeme
         // Count lines and UTF-16 columns in the lexeme
         std::uint32_t endLine = range.start.line;
         std::uint32_t endColumn = range.start.character;
@@ -1058,10 +1049,7 @@ Range LanguageServer::tokenToRange(const std::string& sourceText, const Token& t
                 ++endLine;
                 endColumn = 0;
             } else if (g.display == "\r") {
-                // Handle both lone CR and CR+LF
-                if (g.display.size() == 2 && g.display[1] == '\n') {
-                    // This is CRLF - already handled by grapheme
-                }
+                // Lone CR - count as one line ending
                 ++endLine;
                 endColumn = 0;
             } else {
@@ -1177,6 +1165,29 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
             diag.message = sle.message;
             diag.source = "emojineer";
             
+            // Determine the source text for the diagnostic
+            // If sourcePath is set, the error is from an imported module
+            std::string sourceText = doc.text;
+            
+            if (!sle.sourcePath.empty()) {
+                // Error is from an imported module - get source from that path
+                std::string importedUri = pathToUri(sle.sourcePath);
+                
+                // Try to get the source from open documents first, then fall back to disk
+                auto it = openDocuments_.find(importedUri);
+                if (it != openDocuments_.end()) {
+                    sourceText = it->second.text;
+                } else if (std::filesystem::exists(sle.sourcePath)) {
+                    // Fall back to reading from disk
+                    try {
+                        sourceText = readFile(sle.sourcePath);
+                    } catch (...) {
+                        // If we can't read the file, fall back to entry document
+                        sourceText = doc.text;
+                    }
+                }
+            }
+            
             // Create a synthetic token from the exception info for canonical range conversion
             Token errorToken;
             errorToken.kind = TokenKind::Identifier;
@@ -1184,8 +1195,8 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
             errorToken.column = sle.column;
             errorToken.lexeme = sle.tokenLexeme;
             
-            // Use canonical helper to convert to UTF-16 range
-            diag.range = tokenToRange(doc.text, errorToken);
+            // Use canonical helper to convert to UTF-16 range against the correct source
+            diag.range = tokenToRange(sourceText, errorToken);
             
             diagnostics.push_back(diag);
         } catch (const std::exception& e) {

@@ -1,5 +1,5 @@
 #include "emojineer/parser.hpp"
-#include "emojineer/lsp.hpp"
+#include "emojineer/source_diagnostic.hpp"
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -38,5 +38,5 @@ if(match(TokenKind::Input)){auto e=std::make_unique<ast::InputExpr>();e->line=pr
 if(match(TokenKind::GroupStart)){auto e=expression();consume(TokenKind::GroupEnd,"expected 🤲 after grouped expression");return e;}
 error(peek(),"expected an expression");}
 static const Token& eof_token(){static Token eof{TokenKind::Eof,"","","",0,0};return eof;}
-bool Parser::match(TokenKind kind){if(!check(kind))return false;advance();return true;}bool Parser::check(TokenKind kind)const{return peek().kind==kind;}const Token& Parser::advance(){if(!check(TokenKind::Eof)&&current_<tokens_.size())++current_;return previous();}const Token& Parser::previous()const{if(current_==0||current_>tokens_.size())return eof_token();return tokens_[current_-1];}const Token& Parser::peek()const{if(current_>=tokens_.size())return eof_token();return tokens_[current_];}const Token& Parser::consume(TokenKind kind,const std::string& message){if(check(kind))return advance();error(peek(),message);}void Parser::consume_line_end(){if(match(TokenKind::Newline)||check(TokenKind::Eof))return;error(peek(),"expected end of line");}void Parser::skip_newlines(){while(match(TokenKind::Newline)){} }[[noreturn]]void Parser::error(const Token& token,const std::string& message)const{std::ostringstream out;out<<message;if(!token.lexeme.empty())out<<" near '"<<token.lexeme<<"'";throw lsp::SourceLocationException(out.str(),{},token.line,token.column,token.lexeme);}
+bool Parser::match(TokenKind kind){if(!check(kind))return false;advance();return true;}bool Parser::check(TokenKind kind)const{return peek().kind==kind;}const Token& Parser::advance(){if(!check(TokenKind::Eof)&&current_<tokens_.size())++current_;return previous();}const Token& Parser::previous()const{if(current_==0||current_>tokens_.size())return eof_token();return tokens_[current_-1];}const Token& Parser::peek()const{if(current_>=tokens_.size())return eof_token();return tokens_[current_];}const Token& Parser::consume(TokenKind kind,const std::string& message){if(check(kind))return advance();error(peek(),message);}void Parser::consume_line_end(){if(match(TokenKind::Newline)||check(TokenKind::Eof))return;error(peek(),"expected end of line");}void Parser::skip_newlines(){while(match(TokenKind::Newline)){} }[[noreturn]]void Parser::error(const Token& token,const std::string& message)const{std::ostringstream out;out<<message;if(!token.lexeme.empty())out<<" near '"<<token.lexeme<<"'";throw SourceLocationException(out.str(),{},token.line,token.column,token.lexeme);}
 }

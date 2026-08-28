@@ -3,6 +3,7 @@
 #include "emojineer/cer.hpp"
 #include "emojineer/module.hpp"
 #include "emojineer/project.hpp"
+#include "emojineer/source_diagnostic.hpp"
 
 #include <any>
 #include <cstdint>
@@ -293,26 +294,9 @@ struct SymbolLocation {
     std::string symbolKind;  // "function", "variable", "module", etc.
 };
 
-// Source location exception - carries typed source position info
-// Used for structured diagnostics instead of parsing e.what()
-struct SourceLocationException : public std::exception {
-    std::string message;
-    std::filesystem::path sourcePath;
-    std::size_t line;      // 1-based grapheme line
-    std::size_t column;    // 1-based grapheme column
-    std::string tokenLexeme;  // Optional: the token that caused the error
-    
-    SourceLocationException(const std::string& msg,
-                           std::filesystem::path path = "",
-                           std::size_t ln = 1,
-                           std::size_t col = 1,
-                           const std::string& lexeme = "")
-        : message(msg), sourcePath(std::move(path)), line(ln), column(col), tokenLexeme(lexeme) {}
-    
-    const char* what() const noexcept override {
-        return message.c_str();
-    }
-};
+// Backward compatibility alias - SourceLocationException is now in source_diagnostic.hpp
+// This allows existing code that uses lsp::SourceLocationException to continue working
+using SourceLocationException = ::emojineer::SourceLocationException;
 
 // LSP server main class
 class LanguageServer {
