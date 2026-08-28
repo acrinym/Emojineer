@@ -26,6 +26,7 @@ add_library(emojineer_core
     src/repl.cpp
     src/source_tools.cpp
     src/project.cpp
+    src/lsp.cpp
 )
 target_include_directories(emojineer_core PUBLIC include)
 target_link_libraries(emojineer_core PUBLIC ICU::uc ICU::i18n)
@@ -38,7 +39,7 @@ add_executable(emojineer src/main.cpp)
 target_link_libraries(emojineer PRIVATE emojineer_core)
 add_executable(emji src/emji_main.cpp)
 target_link_libraries(emji PRIVATE emojineer_core)
-add_executable(emojineer-lsp src/lsp_main.cpp src/lsp.cpp)
+add_executable(emojineer-lsp src/lsp_main.cpp)
 target_link_libraries(emojineer-lsp PRIVATE emojineer_core)
 include(CTest)
 if(BUILD_TESTING)
