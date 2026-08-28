@@ -1418,7 +1418,7 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
 JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
     // Extract the text document URI from params
     auto textDoc = getJsonObject(params, "textDocument");
-    std::string uri = getJsonString(textDoc);
+    std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
     
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
@@ -1591,7 +1591,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
 JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
     // Extract the text document URI
     auto textDoc = getJsonObject(params, "textDocument");
-    std::string uri = getJsonString(textDoc);
+    std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
     
     auto doc = getDocument(uri);
     if (!doc) return json::makeArray();
@@ -1661,12 +1661,14 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
     try {
         Lexer lexer(doc->text, registry_);
         auto tokens = lexer.tokenize();
+        // Preserve tokens for iteration before moving to parser
+        std::vector<Token> tokensCopy = tokens;
         Parser parser(std::move(tokens));
         auto program = parser.parse();
         
         // Find the token at the given position
         const Token* tokenAtPos = nullptr;
-        for (const auto& token : tokens) {
+        for (const auto& token : tokensCopy) {
             if (token.kind == TokenKind::Eof) continue;
             
             // Check if this token is at the requested position
@@ -1787,7 +1789,7 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
 JsonValue LanguageServer::handleReferences(const JsonValue& params) {
     // Extract the text document URI
     auto textDoc = getJsonObject(params, "textDocument");
-    std::string uri = getJsonString(textDoc);
+    std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
     
     auto doc = getDocument(uri);
     if (!doc) return json::makeArray();
@@ -1851,7 +1853,7 @@ JsonValue LanguageServer::handleReferences(const JsonValue& params) {
 JsonValue LanguageServer::handleDocumentSymbol(const JsonValue& params) {
     // Extract the text document URI
     auto textDoc = getJsonObject(params, "textDocument");
-    std::string uri = getJsonString(textDoc);
+    std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
     
     auto symbols = getDocumentSymbols(uri);
     
