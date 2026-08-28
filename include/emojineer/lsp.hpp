@@ -1,6 +1,7 @@
 #pragma once
 
 #include "emojineer/cer.hpp"
+#include "emojineer/module.hpp"
 #include "emojineer/project.hpp"
 
 #include <any>
@@ -292,52 +293,6 @@ struct SymbolLocation {
     std::string symbolKind;  // "function", "variable", "module", etc.
 };
 
-// SourceProvider: abstraction for source text access (overlay or filesystem)
-class SourceProvider {
-public:
-    virtual ~SourceProvider() = default;
-    
-    // Get source text for a given URI
-    // Returns std::nullopt if source cannot be provided
-    virtual std::optional<std::string> getSource(const std::string& uri) const = 0;
-    
-    // Check if source exists (for overlay or filesystem)
-    virtual bool hasSource(const std::string& uri) const = 0;
-    
-    // Get the filesystem path for a URI (if applicable)
-    virtual std::optional<std::filesystem::path> getPath(const std::string& uri) const = 0;
-};
-
-// OverlaySourceProvider: provides source from in-memory document overlays
-class OverlaySourceProvider : public SourceProvider {
-public:
-    explicit OverlaySourceProvider(const std::unordered_map<std::string, OpenDocument>* documents)
-        : documents_(documents) {}
-    
-    std::optional<std::string> getSource(const std::string& uri) const override {
-        auto it = documents_->find(uri);
-        if (it != documents_->end()) {
-            return it->second.text;
-        }
-        return std::nullopt;
-    }
-    
-    bool hasSource(const std::string& uri) const override {
-        return documents_->find(uri) != documents_->end();
-    }
-    
-    std::optional<std::filesystem::path> getPath(const std::string& uri) const override {
-        auto it = documents_->find(uri);
-        if (it != documents_->end() && !it->second.path.empty()) {
-            return it->second.path;
-        }
-        return std::nullopt;
-    }
-
-private:
-    const std::unordered_map<std::string, OpenDocument>* documents_;
-};
-
 // LSP server main class
 class LanguageServer {
 public:
@@ -395,7 +350,8 @@ private:
     void publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics);
     
     // Create a SourceProvider that checks open documents first
-    SourceProvider createSourceProvider() const;
+    // Uses ::emojineer::SourceProvider (the callback type from module.hpp)
+    ::emojineer::SourceProvider createSourceProvider() const;
 
     // Workspace management
     void discoverWorkspace(const std::filesystem::path& root);

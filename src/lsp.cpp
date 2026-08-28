@@ -1019,7 +1019,7 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc
     return diagnostics;
 }
 
-SourceProvider LanguageServer::createSourceProvider() const {
+::emojineer::SourceProvider LanguageServer::createSourceProvider() const {
     // Create a source provider that checks open documents first before reading from disk
     return [this](const std::filesystem::path& path) -> std::optional<std::string> {
         // Convert path to URI and check if document is open
