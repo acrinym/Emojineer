@@ -83,23 +83,54 @@ std::string parseJsonString(const std::string& json, std::size_t& pos) {
                 case 'f': result += '\f'; break;
                 case '/': result += '/'; break;
                 case 'u':
-                    // Handle \uXXXX escapes
-                    if (pos + 4 < json.size()) {
+                    // Handle \uXXXX escapes - must have exactly 4 hex digits
+                    if (pos + 4 >= json.size()) {
+                        throw std::runtime_error("incomplete \\u escape");
+                    }
+                    // Validate all 4 characters are hex digits
+                    for (int i = 1; i <= 4; i++) {
+                        char c = json[pos + i];
+                        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                            throw std::runtime_error("invalid \\u escape: expected 4 hex digits");
+                        }
+                    }
+                    {
                         std::string hex = json.substr(pos + 1, 4);
                         char32_t codePoint = static_cast<char32_t>(std::stoul(hex, nullptr, 16));
                         pos += 4;
+                        
+                        // Validate: code point must not be a surrogate
+                        if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+                            throw std::runtime_error("invalid Unicode surrogate in \\u escape");
+                        }
                         
                         // Check for surrogate pair
                         if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
                             // High surrogate, expect \uXXXX low surrogate
                             if (pos + 6 < json.size() && json[pos + 1] == '\\' && json[pos + 2] == 'u') {
+                                // Validate low surrogate hex
+                                for (int i = 3; i <= 6; i++) {
+                                    char c = json[pos + i];
+                                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                                        throw std::runtime_error("invalid low surrogate escape");
+                                    }
+                                }
                                 std::string lowHex = json.substr(pos + 3, 4);
                                 char32_t lowSurrogate = static_cast<char32_t>(std::stoul(lowHex, nullptr, 16));
                                 if (lowSurrogate >= 0xDC00 && lowSurrogate <= 0xDFFF) {
                                     codePoint = decodeSurrogatePair(static_cast<char16_t>(codePoint), static_cast<char16_t>(lowSurrogate));
                                     pos += 6;
+                                } else {
+                                    throw std::runtime_error("high surrogate without valid low surrogate");
                                 }
+                            } else {
+                                throw std::runtime_error("high surrogate without low surrogate");
                             }
+                        }
+                        
+                        // Validate final code point is in valid Unicode range
+                        if (codePoint > 0x10FFFF) {
+                            throw std::runtime_error("invalid Unicode code point > U+10FFFF");
                         }
                         
                         // Encode as UTF-8
@@ -234,7 +265,15 @@ JsonValue parseJsonValue(const std::string& json, std::size_t& pos) {
 
 JsonValue parseJson(const std::string& json) {
     std::size_t pos = 0;
-    return parseJsonValue(json, pos);
+    JsonValue result = parseJsonValue(json, pos);
+    
+    // Check for trailing content - reject JSON with data after the parsed value
+    skipWhitespace(json, pos);
+    if (pos < json.size()) {
+        throw std::runtime_error("trailing content after JSON value");
+    }
+    
+    return result;
 }
 
 // JSON serialization
@@ -256,27 +295,113 @@ static void encodeUnicodeEscape(std::ostringstream& out, char32_t cp) {
 }
 
 // Helper to escape a JSON string value
+// Properly handles UTF-8: decodes code points before escaping
 static void escapeJsonString(const std::string& s, std::ostringstream& out) {
-    for (char c : s) {
-        unsigned char uc = static_cast<unsigned char>(c);
-        switch (c) {
-            case '"': out << "\\\""; break;
-            case '\\': out << "\\\\"; break;
-            case '\n': out << "\\n"; break;
-            case '\r': out << "\\r"; break;
-            case '\t': out << "\\t"; break;
-            case '\b': out << "\\b"; break;
-            case '\f': out << "\\f"; break;
-            case '/': out << "\\/"; break;
-            default:
-                // Escape control characters (0x00-0x1F) and non-ASCII as \uXXXX
-                if (uc < 0x20 || uc >= 0x80) {
-                    encodeUnicodeEscape(out, static_cast<char32_t>(uc));
-                } else {
-                    out << c;
-                }
-                break;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        unsigned char uc = static_cast<unsigned char>(s[i]);
+        
+        // Handle ASCII control characters
+        if (uc < 0x20) {
+            switch (uc) {
+                case '\n': out << "\\n"; break;
+                case '\r': out << "\\r"; break;
+                case '\t': out << "\\t"; break;
+                case '\b': out << "\\b"; break;
+                case '\f': out << "\\f"; break;
+                default: encodeUnicodeEscape(out, uc); break;
+            }
+            i++;
+            continue;
         }
+        
+        // Handle ASCII printable characters (0x20-0x7E)
+        if (uc < 0x80) {
+            switch (uc) {
+                case '"': out << "\\\""; break;
+                case '\\': out << "\\\\"; break;
+                case '/': out << "\\/"; break;
+                default: out << static_cast<char>(uc); break;
+            }
+            i++;
+            continue;
+        }
+        
+        // Handle multi-byte UTF-8 sequences
+        // Decode the UTF-8 code point
+        char32_t codePoint = 0;
+        std::size_t seqLen = 0;
+        
+        if ((uc & 0xE0) == 0xC0) {
+            // 2-byte sequence
+            if (i + 1 >= s.size()) {
+                // Invalid: truncated sequence, escape as byte
+                encodeUnicodeEscape(out, uc);
+                i++;
+                continue;
+            }
+            unsigned char uc2 = static_cast<unsigned char>(s[i + 1]);
+            if ((uc2 & 0xC0) != 0x80) {
+                // Invalid continuation byte
+                encodeUnicodeEscape(out, uc);
+                i++;
+                continue;
+            }
+            codePoint = ((uc & 0x1F) << 6) | (uc2 & 0x3F);
+            seqLen = 2;
+        } else if ((uc & 0xF0) == 0xE0) {
+            // 3-byte sequence
+            if (i + 2 >= s.size()) {
+                encodeUnicodeEscape(out, uc);
+                i++;
+                continue;
+            }
+            unsigned char uc2 = static_cast<unsigned char>(s[i + 1]);
+            unsigned char uc3 = static_cast<unsigned char>(s[i + 2]);
+            if ((uc2 & 0xC0) != 0x80 || (uc3 & 0xC0) != 0x80) {
+                encodeUnicodeEscape(out, uc);
+                i++;
+                continue;
+            }
+            codePoint = ((uc & 0x0F) << 12) | ((uc2 & 0x3F) << 6) | (uc3 & 0x3F);
+            seqLen = 3;
+        } else if ((uc & 0xF8) == 0xF0) {
+            // 4-byte sequence (supplementary plane)
+            if (i + 3 >= s.size()) {
+                encodeUnicodeEscape(out, uc);
+                i++;
+                continue;
+            }
+            unsigned char uc2 = static_cast<unsigned char>(s[i + 1]);
+            unsigned char uc3 = static_cast<unsigned char>(s[i + 2]);
+            unsigned char uc4 = static_cast<unsigned char>(s[i + 3]);
+            if ((uc2 & 0xC0) != 0x80 || (uc3 & 0xC0) != 0x80 || (uc4 & 0xC0) != 0x80) {
+                encodeUnicodeEscape(out, uc);
+                i++;
+                continue;
+            }
+            codePoint = ((uc & 0x07) << 18) | ((uc2 & 0x3F) << 12) | ((uc3 & 0x3F) << 6) | (uc4 & 0x3F);
+            seqLen = 4;
+        } else {
+            // Invalid lead byte, escape as byte
+            encodeUnicodeEscape(out, uc);
+            i++;
+            continue;
+        }
+        
+        // Validate code point is valid Unicode scalar
+        if (codePoint > 0x10FFFF || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {
+            // Invalid Unicode, escape as bytes
+            for (std::size_t j = 0; j < seqLen && i + j < s.size(); j++) {
+                encodeUnicodeEscape(out, static_cast<char32_t>(static_cast<unsigned char>(s[i + j])));
+            }
+            i += seqLen;
+            continue;
+        }
+        
+        // Valid code point - encode properly
+        encodeUnicodeEscape(out, codePoint);
+        i += seqLen;
     }
 }
 
