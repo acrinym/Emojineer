@@ -24,7 +24,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
       - name: Apply reviewed package repairs
-        run: python3 .github/scripts/train17_package_repair.py
+        run: |
+          python3 .github/scripts/train17_package_repair.py
+          python3 .github/scripts/train17_package_linkage_repair.py
       - name: Verify patch shape
         run: |
           git diff --check
