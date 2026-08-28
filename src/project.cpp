@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <iterator>
 #include <regex>
 #include <set>
@@ -21,6 +22,18 @@
 #include <unordered_set>
 
 namespace emojineer {
+
+// Forward declarations
+struct ProjectManifest;
+struct ResolvedRegistryDependency;
+std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
+    const ProjectManifest& manifest,
+    const std::filesystem::path& store_root,
+    const std::filesystem::path& project_root,
+    bool offline,
+    std::unordered_map<std::string, ResolvedRegistryDependency>& resolved,
+    std::unordered_set<std::string>& resolving);
+
 namespace {
 
 std::string read_text(const std::filesystem::path& path) {
@@ -191,7 +204,7 @@ void validate_manifest(const ProjectManifest& manifest) {
             if (dependency.requirement.empty()) {
                 throw std::runtime_error("dependency '" + dependency.name + "' requirement cannot be empty");
             }
-            if (!registry_aliases.contains(dependency.registry_alias)) {
+            if (registry_aliases.find(dependency.registry_alias) == registry_aliases.end()) {
                 throw std::runtime_error("dependency '" + dependency.name + "' references unknown registry '" +
                                          dependency.registry_alias + "'");
             }
@@ -317,7 +330,7 @@ std::vector<ProjectRegistry> sorted_registries(const ProjectManifest& manifest) 
     return registries;
 }
 
-std::string canonical_manifest_text(const ProjectManifest& manifest) {
+std::string canonical_manifest_text(const ProjectManifest& manifest, bool include_registries) {
     validate_manifest(manifest);
     std::ostringstream out;
     out << "[package]\n"
@@ -325,12 +338,14 @@ std::string canonical_manifest_text(const ProjectManifest& manifest) {
         << "version = \"" << manifest.version << "\"\n"
         << "entry = \"" << manifest.entry.generic_string() << "\"\n";
 
-    // Output registries section
-    const auto registries = sorted_registries(manifest);
-    if (!registries.empty()) {
-        out << "\n[registries]\n";
-        for (const auto& registry : registries) {
-            out << registry.alias << " = \"" << registry.endpoint << "\"\n";
+    // Output registries section (only for project manifests, not for package artifacts)
+    if (include_registries) {
+        const auto registries = sorted_registries(manifest);
+        if (!registries.empty()) {
+            out << "\n[registries]\n";
+            for (const auto& registry : registries) {
+                out << registry.alias << " = \"" << registry.endpoint << "\"\n";
+            }
         }
     }
 
@@ -376,8 +391,15 @@ std::string canonical_project_lock(const std::filesystem::path& root,
                                    const ProjectManifest& manifest) {
     validate_manifest(manifest);
     
+    // Resolve registry dependencies for canonical lock production
+    auto store_root = package_store_root(root);
+    std::unordered_map<std::string, ResolvedRegistryDependency> resolved;
+    std::unordered_set<std::string> resolving;
+    auto resolved_deps = resolve_registry_dependencies_impl(manifest, store_root, root, false, resolved, resolving);
+    
     // Convert to lock format 3 and output canonical text
-    auto lock = manifest_to_lock(root, manifest);
+    // Use the same producer as sync_project for consistent lock production
+    auto lock = manifest_to_lock_with_resolved_deps(root, manifest, resolved_deps);
     return canonical_lock_text(lock);
 }
 
@@ -444,6 +466,14 @@ void write_project_lock(const std::filesystem::path& root, const ProjectManifest
     write_text(root / "emojineer.lock", canonical_project_lock(root, manifest));
 }
 
+void write_project_lock_with_resolved_deps(
+    const std::filesystem::path& root,
+    const ProjectManifest& manifest,
+    const std::vector<ResolvedRegistryDependency>& resolved_registry_deps) {
+    auto lock = manifest_to_lock_with_resolved_deps(root, manifest, resolved_registry_deps);
+    write_text(root / "emojineer.lock", canonical_lock_text(lock));
+}
+
 void add_project_dependency(const std::filesystem::path& root,
                             const std::string& name,
                             const std::filesystem::path& path) {
@@ -475,8 +505,10 @@ void remove_project_dependency(const std::filesystem::path& root,
                                const std::string& name) {
     auto manifest = load_project_manifest(root / "emojineer.toml");
     const auto before = manifest.dependencies.size();
-    std::erase_if(manifest.dependencies,
-                  [&](const ProjectDependency& dependency) { return dependency.name == name; });
+    manifest.dependencies.erase(
+        std::remove_if(manifest.dependencies.begin(), manifest.dependencies.end(),
+                      [&](const ProjectDependency& dependency) { return dependency.name == name; }),
+        manifest.dependencies.end());
     if (manifest.dependencies.size() == before) {
         throw std::runtime_error("dependency '" + name + "' is not declared");
     }
@@ -560,6 +592,7 @@ void sync_project(const std::filesystem::path& root, bool offline) {
 std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
     const ProjectManifest& manifest,
     const std::filesystem::path& store_root,
+    const std::filesystem::path& project_root,
     bool offline,
     std::unordered_map<std::string, ResolvedRegistryDependency>& resolved,
     std::unordered_set<std::string>& resolving);
@@ -568,10 +601,11 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
 std::vector<ResolvedRegistryDependency> resolve_registry_dependencies(
     const ProjectManifest& manifest,
     const std::filesystem::path& store_root,
+    const std::filesystem::path& project_root,
     bool offline) {
     std::unordered_map<std::string, ResolvedRegistryDependency> resolved;
     std::unordered_set<std::string> resolving;
-    return resolve_registry_dependencies_impl(manifest, store_root, offline, resolved, resolving);
+    return resolve_registry_dependencies_impl(manifest, store_root, project_root, offline, resolved, resolving);
 }
 
 // Convert manifest to lock format 3
@@ -622,6 +656,76 @@ ProjectLock manifest_to_lock(const std::filesystem::path& root,
     return lock;
 }
 
+// Convert manifest to lock format 3 using pre-resolved registry dependencies
+// This avoids re-fetching from registry during lock writing
+ProjectLock manifest_to_lock_with_resolved_deps(
+    const std::filesystem::path& root,
+    const ProjectManifest& manifest,
+    const std::vector<ResolvedRegistryDependency>& resolved_registry_deps) {
+    ProjectLock lock;
+    lock.version = "3";
+    lock.manifest_hash = project_manifest_hash(manifest);
+    
+    // Add registries
+    for (const auto& reg : manifest.registries) {
+        auto endpoint = parse_registry_endpoint(reg.endpoint);
+        lock.registries.push_back({
+            reg.alias,
+            registry_identity(endpoint),
+            reg.endpoint
+        });
+    }
+    
+    // Resolve package graph for path dependencies
+    auto canonical_root = std::filesystem::canonical(root);
+    auto graph = resolve_package_graph(canonical_root, manifest);
+    
+    // First add path dependencies from the graph
+    for (const auto& pkg : graph.packages) {
+        if (pkg.name == graph.root_name) continue;
+        if (pkg.source_kind != DependencyKind::Path) continue;
+        
+        LockDependency dep;
+        dep.name = pkg.name;
+        dep.version = pkg.version;
+        dep.source = LockSourceKind::Path;
+        dep.path = relative_package_path(canonical_root, pkg.root);
+        dep.content_sha256 = pkg.content_sha256;
+        dep.dependencies = pkg.dependencies;
+        lock.dependencies.push_back(dep);
+    }
+    
+    // Then add ALL resolved registry dependencies (including transitive)
+    // This ensures the lock has complete registry metadata for offline operation
+    for (const auto& resolved : resolved_registry_deps) {
+        // Skip if already added as a path dependency
+        if (graph.find(resolved.name)) continue;
+        
+        LockDependency dep;
+        dep.name = resolved.name;
+        dep.version = resolved.version;
+        dep.source = LockSourceKind::Registry;
+        
+        // Registry metadata
+        dep.registry_alias = resolved.registry_alias;
+        dep.registry_id = resolved.registry_id;
+        dep.registry_endpoint = resolved.registry_endpoint;
+        dep.requirement = resolved.requirement;
+        dep.artifact_sha256 = resolved.artifact_sha256;
+        dep.store_path = resolved.store_path;
+        dep.content_sha256 = resolved.content_sha256;
+        
+        // Extract dependency names from the resolved dependency's dependencies
+        for (const auto& nested_dep : resolved.dependencies) {
+            dep.dependencies.push_back(nested_dep.name);
+        }
+        
+        lock.dependencies.push_back(dep);
+    }
+    
+    return lock;
+}
+
 // Helper to compute registry key from alias
 std::string registry_key(const std::string& alias) {
     // Simple key derivation - replace non-alphanumeric with underscores
@@ -640,6 +744,7 @@ std::string registry_key(const std::string& alias) {
 std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
     const ProjectManifest& manifest,
     const std::filesystem::path& store_root,
+    const std::filesystem::path& project_root,
     bool offline,
     std::unordered_map<std::string, ResolvedRegistryDependency>& resolved,
     std::unordered_set<std::string>& resolving) {
@@ -657,58 +762,198 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
         }
         
         // Detect cycles
-        if (resolving.contains(dep.name)) {
+        if (resolving.find(dep.name) != resolving.end()) {
             throw std::runtime_error("cyclic registry dependency detected: " + dep.name);
         }
         resolving.insert(dep.name);
         
-        // Find the registry endpoint
-        std::string endpoint_str;
-        for (const auto& reg : manifest.registries) {
-            if (reg.alias == dep.registry_alias) {
-                endpoint_str = reg.endpoint;
-                break;
-            }
-        }
-        if (endpoint_str.empty()) {
-            throw std::runtime_error("registry '" + dep.registry_alias + "' not found for dependency '" + dep.name + "'");
-        }
+        bool resolved_from_lock = false;
         
-        auto endpoint = parse_registry_endpoint(endpoint_str);
-        auto resolved_dep = resolve_single_registry_dependency(endpoint, dep.name, dep.requirement);
-        
-        // Store the resolved dependency
-        resolved[key] = resolved_dep;
-        result.push_back(resolved_dep);
-        
-        // Recursively resolve the dependencies of this package
-        // Parse the embedded manifest from the artifact
-        try {
-            auto artifact = load_package_artifact(resolved_dep.store_path / default_package_artifact_filename(resolved_dep.name, resolved_dep.version));
-            auto embedded_manifest = load_project_manifest(resolved_dep.store_path / "emojineer.toml");
-            
-            // Check for path dependencies in registry packages - reject them
-            for (const auto& embedded_dep : embedded_manifest.dependencies) {
-                if (embedded_dep.kind == DependencyKind::Path) {
-                    throw std::runtime_error("registry package '" + resolved_dep.name + "'@'" + resolved_dep.version + 
-                                             "' contains path dependency '" + embedded_dep.name + "' which cannot be resolved by consumers");
+        // In offline mode, try to load from existing lock file
+        if (offline) {
+            // Use project_root for lock file path
+            auto lock_path = project_root / "emojineer.lock";
+            if (std::filesystem::exists(lock_path)) {
+                try {
+                    auto lock = load_project_lock(lock_path);
+                    for (const auto& lock_dep : lock.dependencies) {
+                        if (lock_dep.name == dep.name && lock_dep.source == LockSourceKind::Registry) {
+                            // Found in lock - construct resolved dependency from lock data
+                            ResolvedRegistryDependency resolved_dep;
+                            resolved_dep.name = lock_dep.name;
+                            resolved_dep.version = lock_dep.version;
+                            resolved_dep.registry_alias = lock_dep.registry_alias.value_or("");
+                            resolved_dep.registry_id = lock_dep.registry_id.value_or("");
+                            resolved_dep.registry_endpoint = lock_dep.registry_endpoint.value_or("");
+                            resolved_dep.requirement = lock_dep.requirement.value_or("");
+                            resolved_dep.artifact_sha256 = lock_dep.artifact_sha256.value_or("");
+                            resolved_dep.content_sha256 = lock_dep.content_sha256.value_or("");
+                            resolved_dep.store_path = lock_dep.store_path.value_or(std::filesystem::path());
+                            
+                            // Load dependencies from embedded manifest if available
+                            // Corrupted manifest failures must propagate in BOTH online and offline modes
+                            if (std::filesystem::exists(resolved_dep.store_path / "emojineer.toml")) {
+                                auto embedded_manifest = load_project_manifest(resolved_dep.store_path / "emojineer.toml");
+                                resolved_dep.dependencies = embedded_manifest.dependencies;
+                            }
+                            
+                            resolved[key] = resolved_dep;
+                            result.push_back(resolved_dep);
+                            
+                            // Recursively resolve dependencies from lock
+                            ProjectManifest synthetic_manifest;
+                            synthetic_manifest.dependencies = resolved_dep.dependencies;
+                            auto nested = resolve_registry_dependencies_impl(synthetic_manifest, store_root, project_root, offline, resolved, resolving);
+                            result.insert(result.end(), nested.begin(), nested.end());
+                            
+                            resolved_from_lock = true;
+                            break;
+                        }
+                    }
+                } catch (...) {
+                    // Lock load failed, will try online resolution
                 }
             }
-            
-            // Recursively resolve embedded dependencies
-            // Create a synthetic manifest with the embedded package's registries and dependencies
-            ProjectManifest synthetic_manifest = embedded_manifest;
-            // Map registry aliases from embedded package to actual endpoints
-            for (auto& reg : synthetic_manifest.registries) {
-                // For now, embedded packages use the same registry endpoints
-                // In a full implementation, we would need to track registry identity
+            if (!resolved_from_lock) {
+                resolving.erase(dep.name);
+                throw std::runtime_error("offline mode requires existing lock file for dependency " + dep.name);
+            }
+        }
+        
+        if (!resolved_from_lock) {
+            // Online resolution path
+            // Find the registry endpoint
+            std::string endpoint_str;
+            for (const auto& reg : manifest.registries) {
+                if (reg.alias == dep.registry_alias) {
+                    endpoint_str = reg.endpoint;
+                    break;
+                }
+            }
+            if (endpoint_str.empty()) {
+                resolving.erase(dep.name);
+                throw std::runtime_error("registry '" + dep.registry_alias + "' not found for dependency '" + dep.name + "'");
             }
             
-            auto nested = resolve_registry_dependencies_impl(synthetic_manifest, store_root, offline, resolved, resolving);
-            result.insert(result.end(), nested.begin(), nested.end());
-        } catch (const std::exception& e) {
-            // If we can't load the artifact, skip nested resolution
-            // This can happen in offline mode
+            RegistryEndpoint endpoint = parse_registry_endpoint(endpoint_str);
+            // Pass store_root and registry_alias to get canonical project store paths
+            ResolvedRegistryDependency resolved_dep = resolve_single_registry_dependency(endpoint, dep.name, dep.requirement, store_root, dep.registry_alias);
+            
+            // Store the resolved dependency
+            resolved[key] = resolved_dep;
+            result.push_back(resolved_dep);
+            
+            // Recursively resolve the dependencies of this package
+            // Parse the embedded manifest from the artifact (in memory, not from disk)
+            try {
+                auto artifact_filename = default_package_artifact_filename(resolved_dep.name, resolved_dep.version);
+                auto artifact_path = resolved_dep.store_path / artifact_filename;
+                auto artifact = load_package_artifact(artifact_path);
+                
+                // Parse embedded manifest from artifact's manifest field (in memory)
+                std::istringstream embedded_stream(artifact.manifest);
+                ProjectManifest embedded_manifest;
+                enum class Section { None, Package, Registries, Dependencies };
+                Section section = Section::None;
+                bool have_name = false;
+                bool have_version = false;
+                bool have_entry = false;
+                std::string line;
+                std::size_t line_number = 0;
+                while (std::getline(embedded_stream, line)) {
+                    ++line_number;
+                    const std::string text = trim(line);
+                    if (text.empty() || text.front() == '#') continue;
+                    if (text.front() == '[') {
+                        if (text == "[package]") {
+                            section = Section::Package;
+                            continue;
+                        }
+                        if (text == "[registries]") {
+                            section = Section::Registries;
+                            continue;
+                        }
+                        if (text == "[dependencies]") {
+                            section = Section::Dependencies;
+                            continue;
+                        }
+                        section = Section::None;
+                        continue;
+                    }
+                    const auto equal = text.find('=');
+                    if (equal == std::string::npos) {
+                        continue; // Skip invalid lines
+                    }
+                    const std::string key = trim(text.substr(0, equal));
+                    const std::string value = parse_quoted(text.substr(equal + 1), line_number);
+
+                    if (section == Section::Package) {
+                        if (key == "name") {
+                            embedded_manifest.name = value;
+                        } else if (key == "version") {
+                            embedded_manifest.version = value;
+                        } else if (key == "entry") {
+                            embedded_manifest.entry = std::filesystem::path(value);
+                        }
+                    } else if (section == Section::Registries) {
+                        embedded_manifest.registries.push_back({key, value});
+                    } else if (section == Section::Dependencies) {
+                        // Parse dependency value format: registry:alias:requirement
+                        // Non-registry: values are path dependencies
+                        std::string registry_alias;
+                        std::string requirement;
+                        DependencyKind kind;
+                        if (value.find("registry:") == 0) {
+                            auto remainder = value.substr(9);
+                            auto colon_pos = remainder.find(':');
+                            if (colon_pos != std::string::npos) {
+                                registry_alias = remainder.substr(0, colon_pos);
+                                requirement = remainder.substr(colon_pos + 1);
+                            } else {
+                                registry_alias = remainder;
+                                requirement = "*";
+                            }
+                            kind = DependencyKind::Registry;
+                        } else {
+                            // Non-registry: embedded dependency values are path dependencies
+                            registry_alias = "";
+                            requirement = "";
+                            kind = DependencyKind::Path;
+                        }
+                        embedded_manifest.dependencies.push_back({key, kind, {}, registry_alias, requirement});
+                    }
+                }
+                
+                // Populate dependencies from embedded manifest for lock serialization
+                resolved_dep.dependencies = embedded_manifest.dependencies;
+                
+                // Structural validation: Check for path dependencies in registry packages - reject them
+                // This MUST propagate in BOTH online and offline modes - do NOT move inside try/catch
+                for (const auto& embedded_dep : embedded_manifest.dependencies) {
+                    if (embedded_dep.kind == DependencyKind::Path) {
+                        resolving.erase(dep.name);
+                        throw std::runtime_error("registry package '" + resolved_dep.name + "'@'" + resolved_dep.version + 
+                                                 "' contains path dependency '" + embedded_dep.name + "' which cannot be resolved by consumers");
+                    }
+                }
+                
+                // Recursively resolve embedded dependencies
+                // Create a synthetic manifest with the parent project's registries and embedded package's dependencies
+                // This is needed because the embedded artifact doesn't include registry definitions
+                ProjectManifest synthetic_manifest;
+                synthetic_manifest.dependencies = embedded_manifest.dependencies;
+                // Use parent manifest's registries for resolving transitive deps
+                synthetic_manifest.registries = manifest.registries;
+                
+                auto nested = resolve_registry_dependencies_impl(synthetic_manifest, store_root, project_root, offline, resolved, resolving);
+                result.insert(result.end(), nested.begin(), nested.end());
+            } catch (...) {
+                // Artifact loading failures must propagate in BOTH online and offline modes.
+                // Structural validation failures, path-dependency rejection, corruption, hash mismatch,
+                // malformed artifact/manifest, and declared locked dependency failures are all critical
+                // and must NOT be silently swallowed in offline mode.
+                throw;
+            }
         }
         
         resolving.erase(dep.name);
@@ -731,7 +976,7 @@ void sync_project(const std::filesystem::path& root,
     // Resolve registry dependencies
     std::unordered_map<std::string, ResolvedRegistryDependency> resolved;
     std::unordered_set<std::string> resolving;
-    auto resolved_deps = resolve_registry_dependencies_impl(manifest, store_root, offline, resolved, resolving);
+    auto resolved_deps = resolve_registry_dependencies_impl(manifest, store_root, root, offline, resolved, resolving);
     
     // Materialize packages
     for (const auto& dep : resolved_deps) {
@@ -746,14 +991,20 @@ void sync_project(const std::filesystem::path& root,
                     throw std::runtime_error("artifact SHA-256 mismatch for " + dep.name + "@" + dep.version);
                 }
                 
-                // Check if already materialized
+                // Check if already materialized - look for emojineer.toml inside
                 auto pkg_path = store_root / registry_key(dep.registry_alias) / dep.name / dep.version / dep.artifact_sha256;
-                if (!std::filesystem::exists(pkg_path)) {
+                auto manifest_path = pkg_path / "emojineer.toml";
+                if (!std::filesystem::exists(manifest_path)) {
                     // Materialize the package
                     std::filesystem::create_directories(pkg_path);
                     
-                    // Write manifest
-                    write_text(pkg_path / "emojineer.toml", artifact.manifest);
+                    // Write manifest - preserve [dependencies] section for transitive dependency traversal
+                    std::string manifest_text = artifact.manifest;
+                    // Ensure we have at least a minimal [package] section
+                    if (manifest_text.find("[package]") == std::string::npos) {
+                        manifest_text = "[package]\nname = \"" + artifact.name + "\"\nversion = \"" + artifact.version + "\"\nentry = \"\"\n\n" + manifest_text;
+                    }
+                    write_text(manifest_path, manifest_text);
                     
                     // Write source files
                     for (const auto& file : artifact.files) {
@@ -764,20 +1015,20 @@ void sync_project(const std::filesystem::path& root,
                 }
             }
         } catch (const std::exception& e) {
-            if (offline) {
-                // In offline mode, we can't fetch, but we can try to use cached
-                // Just log the error and continue
-            } else {
-                throw;
-            }
+            // Materialization failures must propagate in BOTH online and offline modes.
+            // Corruption, hash mismatch, malformed artifact/manifest failures are critical
+            // and must NOT be silently swallowed in offline mode.
+            throw;
         }
     }
     
     // Resolve the full package graph including materialized packages
     (void)resolve_package_graph(root, manifest);
     
-    // Write lock format 3
-    write_project_lock(root, manifest);
+    // Write lock format 3 using the pre-resolved registry dependencies
+    // This ensures the lock contains all transitive registry dependencies
+    // and their metadata (registry identity, exact version, artifact hashes, store paths)
+    write_project_lock_with_resolved_deps(root, manifest, resolved_deps);
 }
 
 // Lock format 3 canonical text
@@ -786,16 +1037,30 @@ std::string canonical_lock_text(const ProjectLock& lock) {
     out << "lock_version = 3\n"
         << "manifest_hash = \"" << lock.manifest_hash << "\"\n";
     
-    // Output registries
-    for (const auto& reg : lock.registries) {
+    // Sort registries by alias for deterministic output
+    std::vector<LockRegistry> sorted_regs = lock.registries;
+    std::sort(sorted_regs.begin(), sorted_regs.end(),
+              [](const LockRegistry& a, const LockRegistry& b) {
+                  return a.alias < b.alias;
+              });
+    
+    // Sort dependencies by name for deterministic output
+    std::vector<LockDependency> sorted_deps = lock.dependencies;
+    std::sort(sorted_deps.begin(), sorted_deps.end(),
+              [](const LockDependency& a, const LockDependency& b) {
+                  return a.name < b.name;
+              });
+    
+    // Output registries (sorted by alias)
+    for (const auto& reg : sorted_regs) {
         out << "\n[[registry]]\n"
             << "alias = \"" << reg.alias << "\"\n"
             << "id = \"" << reg.id << "\"\n"
             << "endpoint = \"" << reg.endpoint << "\"\n";
     }
     
-    // Output dependencies
-    for (const auto& dep : lock.dependencies) {
+    // Output dependencies (sorted by name for deterministic output)
+    for (const auto& dep : sorted_deps) {
         out << "\n[[dependency]]\n"
             << "source = \"" << (dep.source == LockSourceKind::Path ? "path" : "registry") << "\"\n"
             << "name = \"" << dep.name << "\"\n"
@@ -901,17 +1166,24 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
 bool is_lock_stale(const std::filesystem::path& root, const ProjectManifest& manifest,
                    const ProjectLock& lock) {
     auto current_hash = project_manifest_hash(manifest);
-    if (current_hash != lock.manifest_hash) return true;
+    if (current_hash != lock.manifest_hash) {
+        return true;
+    }
     
     // Check if all locked dependencies still exist
     for (const auto& dep : lock.dependencies) {
         if (dep.source == LockSourceKind::Path) {
-            if (dep.path && !std::filesystem::exists(root / *dep.path)) {
-                return true;
+            if (dep.path) {
+                auto full_path = root / *dep.path;
+                if (!std::filesystem::exists(full_path)) {
+                    return true;
+                }
             }
         } else {
-            if (dep.store_path && !std::filesystem::exists(*dep.store_path)) {
-                return true;
+            if (dep.store_path) {
+                if (!std::filesystem::exists(*dep.store_path)) {
+                    return true;
+                }
             }
         }
     }
@@ -959,8 +1231,21 @@ bool is_materialized_package_valid(const std::filesystem::path& package_path,
     auto manifest_path = package_path / "emojineer.toml";
     if (!std::filesystem::exists(manifest_path)) return false;
     
-    // For now, we don't recompute SHA-256 of materialized content
-    // The verification happens at fetch time via artifact SHA-256
+    // Load the manifest to compute the content hash
+    try {
+        auto manifest = load_project_manifest(manifest_path);
+        
+        // Recompute the hash of materialized content and verify it matches expected
+        // This ensures the package hasn't been corrupted or modified since materialization
+        auto computed_sha256 = compute_registry_package_hash(package_path, manifest);
+        if (computed_sha256 != expected_sha256) {
+            return false;
+        }
+    } catch (...) {
+        // If we can't load the manifest or compute the hash, consider it invalid
+        return false;
+    }
+    
     return true;
 }
 
@@ -971,28 +1256,38 @@ void verify_or_repair_materialization(const std::filesystem::path& root,
     
     for (const auto& dep : lock.dependencies) {
         if (dep.source != LockSourceKind::Registry) continue;
-        if (!dep.store_path || !dep.artifact_sha256) continue;
+        if (!dep.store_path) continue;
         
         auto pkg_path = *dep.store_path;
-        if (!is_materialized_package_valid(pkg_path, *dep.artifact_sha256)) {
-            // Package is corrupt or missing - try to repair from cache
-            auto cache_path = cache_root.empty() 
-                ? default_registry_cache_root() / dep.name / dep.version / *dep.artifact_sha256
-                : cache_root / dep.name / dep.version / *dep.artifact_sha256;
-            
-            if (std::filesystem::exists(cache_path)) {
-                // Re-materialize from cache
-                auto artifact = load_package_artifact(cache_path);
-                materialize_package(store_root,
-                                   registry_key(dep.registry_alias ? *dep.registry_alias : "origin"),
-                                   dep.name,
-                                   dep.version,
-                                   *dep.artifact_sha256,
-                                   {},
-                                   artifact.manifest);
-            } else {
-                throw std::runtime_error("cannot repair missing package " + dep.name + "@" + dep.version + 
-                                         " - run 'emji sync' to restore");
+        
+        // Use content_sha256 to verify materialized package content
+        // If content_sha256 is not available, skip verification
+        if (dep.content_sha256) {
+            if (!is_materialized_package_valid(pkg_path, *dep.content_sha256)) {
+                // Package is corrupt or missing - try to repair from cache
+                if (dep.artifact_sha256) {
+                    auto cache_path = cache_root.empty() 
+                        ? default_registry_cache_root() / dep.name / dep.version / *dep.artifact_sha256
+                        : cache_root / dep.name / dep.version / *dep.artifact_sha256;
+                    
+                    if (std::filesystem::exists(cache_path)) {
+                        // Re-materialize from cache
+                        auto artifact = load_package_artifact(cache_path);
+                        materialize_package(store_root,
+                                           registry_key(dep.registry_alias ? *dep.registry_alias : "origin"),
+                                           dep.name,
+                                           dep.version,
+                                           *dep.artifact_sha256,
+                                           {},
+                                           artifact.manifest);
+                    } else {
+                        throw std::runtime_error("cannot repair missing package " + dep.name + "@" + dep.version + 
+                                                 " - run 'emji sync' to restore");
+                    }
+                } else {
+                    throw std::runtime_error("cannot repair missing package " + dep.name + "@" + dep.version + 
+                                             " - no artifact available");
+                }
             }
         }
     }
@@ -1002,7 +1297,9 @@ void verify_or_repair_materialization(const std::filesystem::path& root,
 ResolvedRegistryDependency resolve_single_registry_dependency(
     const RegistryEndpoint& endpoint,
     const std::string& name,
-    std::string_view requirement) {
+    std::string_view requirement,
+    const std::filesystem::path& store_root,
+    const std::string& registry_alias) {
     
     // Load package index
     auto index = load_registry_package_index(endpoint, name);
@@ -1031,21 +1328,81 @@ ResolvedRegistryDependency resolve_single_registry_dependency(
     // Fetch the package
     auto fetch_result = fetch_registry_package(endpoint, name, selected_version, {});
     
-    // Determine store path
-    auto store_root = default_registry_cache_root();
-    auto store_path = store_root / index.registry_id / name / record.version / record.artifact_sha256;
+    // Determine store path using the provided store_root and registry_alias
+    // This is the canonical project store path, not the cache path
+    auto store_path = store_root / registry_key(registry_alias) / name / record.version / record.artifact_sha256;
+    
+    // Copy artifact from cache to store_path for materialization
+    // The sync_project materialization code expects the artifact at store_path
+    auto artifact_filename = default_package_artifact_filename(name, selected_version);
+    auto dest_artifact_path = store_path / artifact_filename;
+    if (!std::filesystem::exists(dest_artifact_path)) {
+        std::filesystem::create_directories(store_path);
+        std::filesystem::copy_file(fetch_result.cache_path, dest_artifact_path);
+    }
+    
+    // Parse embedded manifest from artifact to get dependencies
+    std::vector<ProjectDependency> embedded_deps;
+    try {
+        std::istringstream manifest_stream(fetch_result.artifact.manifest);
+        ProjectManifest embedded_manifest;
+        enum class Section { None, Package, Registries, Dependencies };
+        Section section = Section::None;
+        std::string line;
+        while (std::getline(manifest_stream, line)) {
+            const std::string text = trim(line);
+            if (text.empty() || text.front() == '#') continue;
+            if (text.front() == '[') {
+                if (text == "[dependencies]") {
+                    section = Section::Dependencies;
+                } else {
+                    section = Section::None;
+                }
+                continue;
+            }
+            if (section != Section::Dependencies) continue;
+            const auto equal = text.find('=');
+            if (equal == std::string::npos) continue;
+            const std::string key = trim(text.substr(0, equal));
+            const std::string value = parse_quoted(text.substr(equal + 1), 0);
+            
+            // Parse dependency value format: registry:alias:requirement
+            // or just requirement (for direct deps without registry prefix)
+            std::string registry_alias;
+            std::string requirement;
+            if (value.find("registry:") == 0) {
+                // Format: registry:alias:requirement
+                auto remainder = value.substr(9); // Remove "registry:"
+                auto colon_pos = remainder.find(':');
+                if (colon_pos != std::string::npos) {
+                    registry_alias = remainder.substr(0, colon_pos);
+                    requirement = remainder.substr(colon_pos + 1);
+                } else {
+                    registry_alias = remainder;
+                    requirement = "*";
+                }
+            } else {
+                // Direct dependency without registry prefix
+                registry_alias = "";
+                requirement = value;
+            }
+            embedded_deps.push_back({key, DependencyKind::Registry, {}, registry_alias, requirement});
+        }
+    } catch (...) {
+        // If we can't parse the embedded manifest, that's okay - dependencies will be empty
+    }
     
     return {
         name,
         record.version,
-        "",  // registry_alias - will be filled by caller
+        registry_alias,  // Fill in the registry alias
         index.registry_id,
         endpoint.canonical,
         std::string(requirement),
         record.content_sha256,
         record.artifact_sha256,
         store_path,
-        {}  // dependencies - will be filled by parsing embedded manifest
+        embedded_deps
     };
 }
 

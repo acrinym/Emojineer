@@ -170,9 +170,22 @@ void validate_canonical_manifest(const PackageArtifact& artifact) {
             throw std::runtime_error("package artifact dependency manifest line is not canonical");
         }
         const std::string name(line.substr(0, separator));
-        const std::string path(line.substr(separator + 4, line.size() - separator - 5));
+        const std::string value(line.substr(separator + 4, line.size() - separator - 5));
         validate_name(name);
-        validate_dependency_path(path, name);
+        
+        // Registry dependencies have format "registry:alias:requirement" and don't need path validation
+        if (value.rfind("registry:", 0) == 0) {
+            // Validate registry dependency format: registry:alias:requirement
+            // Must have at least one more colon after "registry:"
+            const auto second_colon = value.find(':', 9);
+            if (second_colon == std::string::npos || second_colon == value.size() - 1) {
+                throw std::runtime_error("package artifact dependency '" + name + "' has invalid registry format");
+            }
+        } else {
+            // Path dependency needs path validation
+            validate_dependency_path(value, name);
+        }
+        
         if (name == artifact.name) throw std::runtime_error("package artifact may not depend on itself");
         if (!names.insert(name).second || (!previous_name.empty() && name <= previous_name)) {
             throw std::runtime_error("package artifact dependency manifest is not canonically ordered");
@@ -262,7 +275,7 @@ std::string build_package_artifact_bytes(const std::filesystem::path& raw_root) 
     if (std::none_of(files.begin(), files.end(), [&](const auto& file) { return file.path == entry; })) {
         throw std::runtime_error("package artifact entry source is not package-owned or does not exist: " + entry);
     }
-    const auto canonical_manifest = canonical_manifest_text(manifest);
+    const auto canonical_manifest = canonical_manifest_text(manifest, false);
     const auto computed_content = content_identity(canonical_manifest, files);
     if (computed_content != resolved->content_sha256) {
         throw std::runtime_error("package artifact content identity diverges from PackageGraph");
