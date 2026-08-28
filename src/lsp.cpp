@@ -17,6 +17,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <typeinfo>
+#include <unordered_set>
 
 namespace emojineer {
 namespace lsp {
@@ -722,6 +723,23 @@ static std::uint32_t countUtf16UnitsForCodePoint(char32_t cp) {
     return 1;  // Invalid, but return something reasonable
 }
 
+// Count total UTF-16 code units in a UTF-8 string
+static std::size_t countUtf16Units(const std::string& utf8Str) {
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while (pos < utf8Str.size()) {
+        char32_t cp = 0;
+        if (decodeUtf8CodePoint(utf8Str, pos, cp)) {
+            count += countUtf16UnitsForCodePoint(cp);
+        } else {
+            // Invalid UTF-8, count as one unit
+            count += 1;
+            pos += 1;
+        }
+    }
+    return count;
+}
+
 // Convert UTF-8 byte index to UTF-16 position (line, column)
 // This properly handles UTF-8 sequences as atomic units and counts UTF-16
 // code units per Unicode scalar value.
@@ -1084,9 +1102,9 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
                 } catch (...) {}
             }
             
-            // Try to find token/emoji info
-            std::size_t emojiPos = errorMsg.find('\'');
+            // Try to find token/emoji info from quotes in error message
             std::string tokenName;
+            std::size_t emojiPos = errorMsg.find('\'');
             if (emojiPos != std::string::npos) {
                 auto endEmojiPos = errorMsg.find('\'', emojiPos + 1);
                 if (endEmojiPos != std::string::npos) {
@@ -1094,13 +1112,42 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
                 }
             }
             
+            // If we have token name but no line info, try to find it in the source
+            if (line == 1 && !tokenName.empty()) {
+                try {
+                    // Parse the document to get tokens
+                    Lexer lexer(doc.text, registry_);
+                    auto tokens = lexer.tokenize();
+                    
+                    // Look for a token matching the error
+                    for (const auto& tok : tokens) {
+                        if (tok.lexeme == tokenName || 
+                            tok.canonical == tokenName ||
+                            tok.lexeme.find(tokenName) != std::string::npos) {
+                            // Found a matching token - use its position
+                            line = tok.line;
+                            column = tok.column;
+                            break;
+                        }
+                    }
+                } catch (...) {
+                    // If parsing fails, fall back to defaults
+                }
+            }
+            
             Position startPos;
             startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
             startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
             
-            // Estimate end position
+            // Estimate end position using UTF-16 aware length
             Position endPos = startPos;
-            endPos.character = startPos.character + (tokenName.empty() ? 10 : tokenName.length());
+            if (!tokenName.empty()) {
+                // Calculate UTF-16 length of the token for accurate range
+                endPos.character = startPos.character + static_cast<std::uint32_t>(countUtf16Units(tokenName));
+            } else {
+                // Use a small default span when no token info available
+                endPos.character = startPos.character + 1;
+            }
             
             Diagnostic diag;
             diag.range = {startPos, endPos};
@@ -1447,49 +1494,36 @@ JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
 std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& uri, const Position& pos) {
     std::vector<CompletionItem> completions;
     
-    // Language keywords
-    const std::vector<std::pair<std::string, std::string>> keywords = {
-        {"🧑‍💻", "variable declaration"},
-        {"📤", "export statement"},
-        {"🔗", "import statement"},
-        {"🧩", "module declaration"},
-        {"📦", "return statement"},
-        {"🤔", "if statement"},
-        {"🙅", "else statement"},
-        {"🔁", "while loop"},
-        {"🛠️", "function declaration"},
-        {"📥", "input expression"},
-        {"📝", "print statement"},
-        {"🔢", "number type"},
-        {"✅", "boolean true"},
-        {"❌", "boolean false"},
-    };
+    // Use registry_.definitions() as the core/custom authority for keywords
+    // Deduplicate by label to avoid duplicates
+    std::unordered_set<std::string> seenLabels;
     
-    for (const auto& [emoji, desc] : keywords) {
+    // Core and custom CER tokens from registry
+    for (const auto& def : registry_.definitions()) {
+        // Use glyph as label
+        std::string label = def.glyph;
+        
+        // Skip if already seen (deduplication)
+        if (!seenLabels.insert(label).second) {
+            continue;
+        }
+        
         CompletionItem item;
-        item.label = emoji;
-        item.detail = desc;
-        completions.push_back(item);
-    }
-    
-    // Core emoji (non-custom) from CER
-    for (const auto& def : registry_.definitions()) {
-        if (!def.custom) {
-            CompletionItem item;
-            item.label = def.alias;
+        item.label = label;
+        
+        // Use alias (if available) and description as detail
+        if (!def.alias.empty()) {
+            item.detail = def.alias + ": " + def.description;
+        } else {
             item.detail = def.description;
-            completions.push_back(item);
         }
-    }
-    
-    // Custom CER tokens
-    for (const auto& def : registry_.definitions()) {
+        
+        // Mark custom definitions
         if (def.custom) {
-            CompletionItem item;
-            item.label = def.alias;
-            item.detail = "Custom CER: " + def.description;
-            completions.push_back(item);
+            item.detail = "Custom " + item.detail;
         }
+        
+        completions.push_back(item);
     }
     
     // Standard library modules
@@ -1575,12 +1609,20 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         }
         
         // Materialized direct registry packages from lock file
-        if (lock_) {
-            for (const auto& pkg : lock_->packages) {
-                CompletionItem item;
-                item.label = "pkg:" + pkg.name + "/";
-                item.detail = "materialized package";
-                completions.push_back(item);
+        // Filter to only show direct manifest dependencies (not transitive)
+        if (lock_ && manifest_) {
+            std::unordered_set<std::string> directDeps;
+            for (const auto& dep : manifest_->dependencies) {
+                directDeps.insert(dep.name);
+            }
+            for (const auto& pkg : lock_->dependencies) {
+                // Only include if it's a direct manifest dependency
+                if (directDeps.count(pkg.name)) {
+                    CompletionItem item;
+                    item.label = "pkg:" + pkg.name + "/";
+                    item.detail = "direct package (materialized)";
+                    completions.push_back(item);
+                }
             }
         }
     }
@@ -1929,34 +1971,40 @@ std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string
             sym.range.start.line = static_cast<std::uint32_t>(line - 1);
             sym.range.start.character = 0;
             sym.range.end.line = static_cast<std::uint32_t>(line - 1);
-            sym.range.end.character = 80; // Approximate
-            sym.selectionRange = sym.range;
             
-            // Use dynamic_cast to get actual names
+            // Use dynamic_cast to get actual names and compute accurate range
             if (auto* funcDecl = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
                 sym.name = funcDecl->name;
+                sym.range.end.character = static_cast<std::uint32_t>(countUtf16Units(funcDecl->name));
                 sym.kind = static_cast<int>(SymbolKind::Function);
                 sym.detail = "function declaration";
             } else if (auto* varDecl = dynamic_cast<ast::VarDecl*>(stmt.get())) {
                 sym.name = varDecl->name;
+                sym.range.end.character = static_cast<std::uint32_t>(countUtf16Units(varDecl->name));
                 sym.kind = static_cast<int>(SymbolKind::Variable);
                 sym.detail = "variable declaration";
             } else if (auto* modDecl = dynamic_cast<ast::ModuleDecl*>(stmt.get())) {
                 sym.name = modDecl->name;
+                sym.range.end.character = static_cast<std::uint32_t>(countUtf16Units(modDecl->name));
                 sym.kind = static_cast<int>(SymbolKind::Module);
                 sym.detail = "module declaration";
             } else if (auto* importStmt = dynamic_cast<ast::ImportStmt*>(stmt.get())) {
-                sym.name = importStmt->specifier;
+                sym.name = importStmt->path;
+                sym.range.end.character = static_cast<std::uint32_t>(countUtf16Units(importStmt->path));
                 sym.kind = static_cast<int>(SymbolKind::Module);
                 sym.detail = "import statement";
             } else if (auto* exportStmt = dynamic_cast<ast::ExportStmt*>(stmt.get())) {
-                sym.name = exportStmt->specifier;
+                sym.name = exportStmt->name;
+                sym.range.end.character = static_cast<std::uint32_t>(countUtf16Units(exportStmt->name));
                 sym.kind = static_cast<int>(SymbolKind::Module);
                 sym.detail = "export statement";
             } else {
                 // Skip other statement types
                 continue;
             }
+            
+            // Set selection range to match the symbol range
+            sym.selectionRange = sym.range;
             
             symbols.push_back(sym);
         }
@@ -2052,23 +2100,27 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                         info.location.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
                         info.location.range.start.character = 0;
                         info.location.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
-                        info.location.range.end.character = 80;
                         
-                        // Use dynamic_cast to get actual names
+                        // Use dynamic_cast to get actual names and compute accurate range
                         if (auto* funcDecl = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
                             info.name = funcDecl->name;
+                            info.location.range.end.character = static_cast<std::uint32_t>(countUtf16Units(funcDecl->name));
                             info.kind = static_cast<int>(SymbolKind::Function);
                         } else if (auto* varDecl = dynamic_cast<ast::VarDecl*>(stmt.get())) {
                             info.name = varDecl->name;
+                            info.location.range.end.character = static_cast<std::uint32_t>(countUtf16Units(varDecl->name));
                             info.kind = static_cast<int>(SymbolKind::Variable);
                         } else if (auto* modDecl = dynamic_cast<ast::ModuleDecl*>(stmt.get())) {
                             info.name = modDecl->name;
+                            info.location.range.end.character = static_cast<std::uint32_t>(countUtf16Units(modDecl->name));
                             info.kind = static_cast<int>(SymbolKind::Module);
                         } else if (auto* importStmt = dynamic_cast<ast::ImportStmt*>(stmt.get())) {
-                            info.name = importStmt->specifier;
+                            info.name = importStmt->path;
+                            info.location.range.end.character = static_cast<std::uint32_t>(countUtf16Units(importStmt->path));
                             info.kind = static_cast<int>(SymbolKind::Module);
                         } else if (auto* exportStmt = dynamic_cast<ast::ExportStmt*>(stmt.get())) {
-                            info.name = exportStmt->specifier;
+                            info.name = exportStmt->name;
+                            info.location.range.end.character = static_cast<std::uint32_t>(countUtf16Units(exportStmt->name));
                             info.kind = static_cast<int>(SymbolKind::Module);
                         } else {
                             continue;
@@ -2155,7 +2207,7 @@ JsonValue LanguageServer::handleRangeFormatting(const JsonValue& params) {
     std::string uri = getJsonString(textDoc);
     
     auto doc = getDocument(uri);
-    if (!doc) return json::makeArray();
+    if (!doc) return JsonValue(nullptr);
     
     // Check if range is provided
     auto rangeObj = getJsonObject(params, "range");
@@ -2164,11 +2216,10 @@ JsonValue LanguageServer::handleRangeFormatting(const JsonValue& params) {
         return handleFormatting(params);
     }
     
-    // Currently, we only support full document formatting
-    // Range formatting would require the formatter to support partial formatting
-    // Since the canonical formatter works on the full document, we fall back to full doc
-    // TODO: Implement true range formatting using formatter's internal APIs
-    return handleFormatting(params);
+    // Range formatting is not fully supported - return null to advertise this
+    // The canonical formatter works on the full document only
+    // Clients should use full document formatting instead
+    return JsonValue(nullptr);
 }
 
 JsonValue LanguageServer::handleRequest(const std::string& method, const JsonValue& params) {
