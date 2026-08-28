@@ -14,6 +14,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -587,14 +588,24 @@ void LanguageServer::openDocument(const std::string& uri, const std::string& tex
     
     // Use compile-based diagnostics if workspace is available
     if (workspaceRoot_) {
-        doc.diagnostics = diagnoseDocumentWithCompile(doc);
+        auto result = diagnoseDocumentWithCompile(doc);
+        // Store primary document diagnostics in the document
+        auto it = result.diagnosticsByUri.find(uri);
+        if (it != result.diagnosticsByUri.end()) {
+            doc.diagnostics = std::move(it->second);
+        }
+        // Update the stored document with diagnostics
+        openDocuments_[uri] = doc;
+        // Publish diagnostics for all URIs
+        for (auto& [diagUri, diags] : result.diagnosticsByUri) {
+            publishDiagnostics(diagUri, diags);
+        }
     } else {
         doc.diagnostics = diagnoseDocument(doc);
+        // Update the stored document with diagnostics
+        openDocuments_[uri] = doc;
+        publishDiagnostics(uri, doc.diagnostics);
     }
-    
-    // Update the stored document with diagnostics
-    openDocuments_[uri] = doc;
-    publishDiagnostics(uri, doc.diagnostics);
 }
 
 void LanguageServer::updateDocument(const std::string& uri, const std::string& text, int version) {
@@ -610,11 +621,20 @@ void LanguageServer::updateDocument(const std::string& uri, const std::string& t
         
         // Use compile-based diagnostics if workspace is available
         if (workspaceRoot_) {
-            it->second.diagnostics = diagnoseDocumentWithCompile(it->second);
+            auto result = diagnoseDocumentWithCompile(it->second);
+            // Store primary document diagnostics in the document
+            auto resultIt = result.diagnosticsByUri.find(uri);
+            if (resultIt != result.diagnosticsByUri.end()) {
+                it->second.diagnostics = std::move(resultIt->second);
+            }
+            // Publish diagnostics for all URIs
+            for (auto& [diagUri, diags] : result.diagnosticsByUri) {
+                publishDiagnostics(diagUri, diags);
+            }
         } else {
             it->second.diagnostics = diagnoseDocument(it->second);
+            publishDiagnostics(uri, it->second.diagnostics);
         }
-        publishDiagnostics(uri, it->second.diagnostics);
     }
 }
 
@@ -1140,10 +1160,17 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc
     };
 }
 
-std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDocument& doc) {
-    std::vector<Diagnostic> diagnostics;
+// Result type for diagnoseDocumentWithCompile - groups diagnostics by URI
+struct DiagnosticResult {
+    std::string primaryUri;  // URI to publish primary diagnostics under (entry document)
+    std::map<std::string, std::vector<Diagnostic>> diagnosticsByUri;  // URI -> diagnostics
+};
+
+DiagnosticResult LanguageServer::diagnoseDocumentWithCompile(const OpenDocument& doc) {
+    DiagnosticResult result;
+    result.primaryUri = doc.uri;
     
-    if (doc.text.empty()) return diagnostics;
+    if (doc.text.empty()) return result;
     
     // If we have a workspace root, use compile_file with the source provider
     // to get proper module/package graph diagnostics
@@ -1168,13 +1195,14 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
             // Determine the source text for the diagnostic
             // If sourcePath is set, the error is from an imported module
             std::string sourceText = doc.text;
+            std::string targetUri = doc.uri;  // Default to entry document URI
             
             if (!sle.sourcePath.empty()) {
                 // Error is from an imported module - get source from that path
-                std::string importedUri = pathToUri(sle.sourcePath);
+                targetUri = pathToUri(sle.sourcePath);
                 
                 // Try to get the source from open documents first, then fall back to disk
-                auto it = openDocuments_.find(importedUri);
+                auto it = openDocuments_.find(targetUri);
                 if (it != openDocuments_.end()) {
                     sourceText = it->second.text;
                 } else if (std::filesystem::exists(sle.sourcePath)) {
@@ -1184,6 +1212,7 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
                     } catch (...) {
                         // If we can't read the file, fall back to entry document
                         sourceText = doc.text;
+                        targetUri = doc.uri;
                     }
                 }
             }
@@ -1198,7 +1227,17 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
             // Use canonical helper to convert to UTF-16 range against the correct source
             diag.range = tokenToRange(sourceText, errorToken);
             
-            diagnostics.push_back(diag);
+            // Add to the correct URI group
+            result.diagnosticsByUri[targetUri].push_back(diag);
+            
+            // If this is an imported source error, also add empty diagnostics to entry
+            // to trigger the notification (the actual error is under imported URI)
+            if (targetUri != doc.uri) {
+                // Primary URI gets empty diagnostics (error is under imported URI)
+                result.diagnosticsByUri[doc.uri];
+            } else {
+                result.primaryUri = doc.uri;
+            }
         } catch (const std::exception& e) {
             // Generic non-source exception - emit safe document-level diagnostic
             Diagnostic diag;
@@ -1206,14 +1245,15 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
             diag.severity = 1;  // Error
             diag.message = e.what();
             diag.source = "emojineer";
-            diagnostics.push_back(diag);
+            result.diagnosticsByUri[doc.uri].push_back(diag);
         }
     } else {
         // No workspace root - fall back to simple diagnostics
-        return diagnoseDocument(doc);
+        auto diags = diagnoseDocument(doc);
+        result.diagnosticsByUri[doc.uri] = std::move(diags);
     }
     
-    return diagnostics;
+    return result;
 }
 
 void LanguageServer::publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics) {

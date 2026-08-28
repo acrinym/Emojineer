@@ -61,16 +61,17 @@ std::string read_text(const std::filesystem::path& path) {
 
 ast::Program parse_text(const std::string& source,
                         const CustomEmojiRegistry& registry,
-                        const std::string& identity) {
+                        const std::string& identity,
+                        const std::filesystem::path& sourcePath = {}) {
     try {
         Lexer lexer(source, registry);
         Parser parser(lexer.tokenize());
         return parser.parse();
     } catch (const SourceLocationException& sle) {
-        // Preserve typed source errors, attaching the module identity as the source path
-        // if not already set
+        // Preserve typed source errors, attaching the sourceIdentity and real sourcePath separately.
+        // sourcePath should be an actual filesystem path, identity is the module identity (e.g., "pkg:foo/src/main.emoji")
         if (sle.sourcePath.empty()) {
-            throw SourceLocationException(sle.message, std::filesystem::path(identity), sle.line, sle.column, sle.tokenLexeme);
+            throw SourceLocationException(sle.message, sourcePath, identity, sle.line, sle.column, sle.tokenLexeme);
         }
         throw;
     } catch (const std::exception& error) {
@@ -88,11 +89,11 @@ ast::Program parse_source(const std::filesystem::path& path,
     if (source_provider) {
         auto overlay = source_provider(path);
         if (overlay) {
-            return parse_text(*overlay, registry, identity);
+            return parse_text(*overlay, registry, identity, path);
         }
     }
     // Fall back to reading from disk
-    return parse_text(read_text(path), registry, identity);
+    return parse_text(read_text(path), registry, identity, path);
 }
 
 bool has_module_syntax_stmt(const ast::Stmt& stmt) {
