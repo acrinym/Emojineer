@@ -1469,11 +1469,11 @@ std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string
                 sym.detail = "module declaration";
             } else if (typeInfo == typeid(ast::IfStmt)) {
                 sym.name = "if";
-                sym.kind = static_cast<int>(SymbolKind::Statement);
+                sym.kind = static_cast<int>(SymbolKind::Variable);
                 sym.detail = "if statement";
             } else if (typeInfo == typeid(ast::WhileStmt)) {
                 sym.name = "while";
-                sym.kind = static_cast<int>(SymbolKind::Statement);
+                sym.kind = static_cast<int>(SymbolKind::Variable);
                 sym.detail = "while statement";
             } else {
                 // Skip other statement types
@@ -1502,22 +1502,22 @@ JsonValue LanguageServer::handleWorkspaceSymbol(const JsonValue& params) {
         if (sym.kind) json::objectSet(symJson, "kind", JsonValue(static_cast<double>(*sym.kind)));
         
         auto location = json::makeObject();
-        json::objectSet(location, "uri", JsonValue(sym.uri));
+        json::objectSet(location, "uri", JsonValue(sym.location.uri));
         
         auto range = json::makeObject();
         auto start = json::makeObject();
-        json::objectSet(start, "line", JsonValue(static_cast<double>(sym.range.start.line)));
-        json::objectSet(start, "character", JsonValue(static_cast<double>(sym.range.start.character)));
+        json::objectSet(start, "line", JsonValue(static_cast<double>(sym.location.range.start.line)));
+        json::objectSet(start, "character", JsonValue(static_cast<double>(sym.location.range.start.character)));
         auto end = json::makeObject();
-        json::objectSet(end, "line", JsonValue(static_cast<double>(sym.range.end.line)));
-        json::objectSet(end, "character", JsonValue(static_cast<double>(sym.range.end.character)));
+        json::objectSet(end, "line", JsonValue(static_cast<double>(sym.location.range.end.line)));
+        json::objectSet(end, "character", JsonValue(static_cast<double>(sym.location.range.end.character)));
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
         json::objectSet(location, "range", range);
         
         json::objectSet(symJson, "location", location);
-        if (!sym.containerName.empty()) {
-            json::objectSet(symJson, "containerName", JsonValue(sym.containerName));
+        if (sym.containerName.has_value()) {
+            json::objectSet(symJson, "containerName", JsonValue(*sym.containerName));
         }
         
         json::arrayPushBack(result, symJson);
@@ -1540,8 +1540,8 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                 SymbolInformation info;
                 info.name = docSym.name;
                 info.kind = docSym.kind;
-                info.uri = uri;
-                info.range = docSym.range;
+                info.location.uri = uri;
+                info.location.range = docSym.range;
                 symbols.push_back(info);
             }
         }
@@ -1572,11 +1572,11 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                         const std::type_info& typeInfo = typeid(*stmt);
                         
                         SymbolInformation info;
-                        info.uri = pathToUri(entry.path());
-                        info.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
-                        info.range.start.character = 0;
-                        info.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
-                        info.range.end.character = 80;
+                        info.location.uri = pathToUri(entry.path());
+                        info.location.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
+                        info.location.range.start.character = 0;
+                        info.location.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
+                        info.location.range.end.character = 80;
                         
                         if (typeInfo == typeid(ast::FunctionDecl)) {
                             info.name = "function";
