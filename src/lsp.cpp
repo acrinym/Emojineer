@@ -1447,6 +1447,7 @@ JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
 std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& uri, const Position& pos) {
     std::vector<CompletionItem> completions;
     
+    // Language keywords
     const std::vector<std::pair<std::string, std::string>> keywords = {
         {"🧑‍💻", "variable declaration"},
         {"📤", "export statement"},
@@ -1471,6 +1472,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         completions.push_back(item);
     }
     
+    // Core emoji (non-custom) from CER
     for (const auto& def : registry_.definitions()) {
         if (!def.custom) {
             CompletionItem item;
@@ -1480,11 +1482,107 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         }
     }
     
+    // Custom CER tokens
+    for (const auto& def : registry_.definitions()) {
+        if (def.custom) {
+            CompletionItem item;
+            item.label = def.alias;
+            item.detail = "Custom CER: " + def.description;
+            completions.push_back(item);
+        }
+    }
+    
+    // Standard library modules
     for (const auto& module : standard_modules()) {
         CompletionItem item;
         item.label = std::string(module.specifier);
         item.detail = std::string(module.description);
         completions.push_back(item);
+    }
+    
+    // Get the document for user symbols and local context
+    auto doc = getDocument(uri);
+    if (doc) {
+        try {
+            // Lex to find user-defined symbols in current document
+            Lexer lexer(doc->text, registry_);
+            auto tokens = lexer.tokenize();
+            
+            std::unordered_set<std::string> seen;
+            
+            // Collect user-defined identifiers
+            for (const auto& token : tokens) {
+                if (token.kind == TokenKind::Identifier) {
+                    if (seen.insert(token.lexeme).second) {
+                        CompletionItem item;
+                        item.label = token.lexeme;
+                        item.detail = "user symbol";
+                        completions.push_back(item);
+                    }
+                }
+            }
+            
+            // Parse to find function declarations
+            Parser parser(std::move(tokens));
+            auto program = parser.parse();
+            
+            for (const auto& stmt : program.statements) {
+                if (auto* func = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
+                    if (seen.insert(func->name).second) {
+                        CompletionItem item;
+                        item.label = func->name;
+                        item.detail = "function";
+                        completions.push_back(item);
+                    }
+                } else if (auto* var = dynamic_cast<ast::VarDecl*>(stmt.get())) {
+                    if (seen.insert(var->name).second) {
+                        CompletionItem item;
+                        item.label = var->name;
+                        item.detail = "variable";
+                        completions.push_back(item);
+                    }
+                }
+            }
+        } catch (...) {}
+    }
+    
+    // If we have workspace, add local modules and direct packages
+    if (workspaceRoot_) {
+        // Local .emoji modules in workspace
+        try {
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(*workspaceRoot_)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".emoji") {
+                    std::string moduleName = entry.path().filename().stem().string();
+                    // Only add modules that are not hidden or in hidden directories
+                    if (!moduleName.empty() && moduleName[0] != '.') {
+                        CompletionItem item;
+                        item.label = "./" + entry.path().lexically_relative(*workspaceRoot_).string();
+                        item.detail = "local module";
+                        completions.push_back(item);
+                    }
+                }
+            }
+        } catch (...) {}
+        
+        // Direct path packages (from manifest if available)
+        if (manifest_) {
+            for (const auto& dep : manifest_->dependencies) {
+                CompletionItem item;
+                item.label = "pkg:" + dep.name + "/";
+                item.detail = "direct package";
+                completions.push_back(item);
+            }
+        }
+        
+        // Materialized direct registry packages from lock file
+        if (lock_) {
+            for (const auto& pkg : lock_->packages) {
+                CompletionItem item;
+                item.label = "pkg:" + pkg.name + "/";
+                item.detail = "materialized package";
+                completions.push_back(item);
+            }
+        }
     }
     
     return completions;
@@ -1818,18 +1916,13 @@ std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string
         Parser parser(std::move(tokens));
         auto program = parser.parse();
         
-        // Extract symbols from the AST
+        // Extract symbols from the AST with actual emoji names
         for (const auto& stmt : program.statements) {
             if (!stmt) continue;
             
             // Use the statement's line number for position
             auto line = stmt->line;
             
-            // Check statement type and extract symbol info
-            // We use dynamic_cast to check the actual type
-            using StmtType = ast::Stmt;
-            
-            // For each statement type, extract the symbol
             DocumentSymbol sym;
             sym.range.start.line = static_cast<std::uint32_t>(line - 1);
             sym.range.start.character = 0;
@@ -1837,32 +1930,27 @@ std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string
             sym.range.end.character = 80; // Approximate
             sym.selectionRange = sym.range;
             
-            // Try to identify the statement type and extract name
-            // This is done by checking the AST structure
-            const std::type_info& typeInfo = typeid(*stmt);
-            
-            if (typeInfo == typeid(ast::FunctionDecl)) {
-                // Function declaration
-                // Note: We can't directly access the name without casting
-                sym.name = "function";
+            // Use dynamic_cast to get actual names
+            if (auto* funcDecl = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
+                sym.name = funcDecl->name;
                 sym.kind = static_cast<int>(SymbolKind::Function);
                 sym.detail = "function declaration";
-            } else if (typeInfo == typeid(ast::VarDecl)) {
-                sym.name = "variable";
+            } else if (auto* varDecl = dynamic_cast<ast::VarDecl*>(stmt.get())) {
+                sym.name = varDecl->name;
                 sym.kind = static_cast<int>(SymbolKind::Variable);
                 sym.detail = "variable declaration";
-            } else if (typeInfo == typeid(ast::ModuleDecl)) {
-                sym.name = "module";
+            } else if (auto* modDecl = dynamic_cast<ast::ModuleDecl*>(stmt.get())) {
+                sym.name = modDecl->name;
                 sym.kind = static_cast<int>(SymbolKind::Module);
                 sym.detail = "module declaration";
-            } else if (typeInfo == typeid(ast::IfStmt)) {
-                sym.name = "if";
-                sym.kind = static_cast<int>(SymbolKind::Variable);
-                sym.detail = "if statement";
-            } else if (typeInfo == typeid(ast::WhileStmt)) {
-                sym.name = "while";
-                sym.kind = static_cast<int>(SymbolKind::Variable);
-                sym.detail = "while statement";
+            } else if (auto* importStmt = dynamic_cast<ast::ImportStmt*>(stmt.get())) {
+                sym.name = importStmt->specifier;
+                sym.kind = static_cast<int>(SymbolKind::Module);
+                sym.detail = "import statement";
+            } else if (auto* exportStmt = dynamic_cast<ast::ExportStmt*>(stmt.get())) {
+                sym.name = exportStmt->specifier;
+                sym.kind = static_cast<int>(SymbolKind::Module);
+                sym.detail = "export statement";
             } else {
                 // Skip other statement types
                 continue;
@@ -1957,8 +2045,6 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                     for (const auto& stmt : program.statements) {
                         if (!stmt) continue;
                         
-                        const std::type_info& typeInfo = typeid(*stmt);
-                        
                         SymbolInformation info;
                         info.location.uri = pathToUri(entry.path());
                         info.location.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
@@ -1966,14 +2052,21 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                         info.location.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
                         info.location.range.end.character = 80;
                         
-                        if (typeInfo == typeid(ast::FunctionDecl)) {
-                            info.name = "function";
+                        // Use dynamic_cast to get actual names
+                        if (auto* funcDecl = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
+                            info.name = funcDecl->name;
                             info.kind = static_cast<int>(SymbolKind::Function);
-                        } else if (typeInfo == typeid(ast::VarDecl)) {
-                            info.name = "variable";
+                        } else if (auto* varDecl = dynamic_cast<ast::VarDecl*>(stmt.get())) {
+                            info.name = varDecl->name;
                             info.kind = static_cast<int>(SymbolKind::Variable);
-                        } else if (typeInfo == typeid(ast::ModuleDecl)) {
-                            info.name = "module";
+                        } else if (auto* modDecl = dynamic_cast<ast::ModuleDecl*>(stmt.get())) {
+                            info.name = modDecl->name;
+                            info.kind = static_cast<int>(SymbolKind::Module);
+                        } else if (auto* importStmt = dynamic_cast<ast::ImportStmt*>(stmt.get())) {
+                            info.name = importStmt->specifier;
+                            info.kind = static_cast<int>(SymbolKind::Module);
+                        } else if (auto* exportStmt = dynamic_cast<ast::ExportStmt*>(stmt.get())) {
+                            info.name = exportStmt->specifier;
                             info.kind = static_cast<int>(SymbolKind::Module);
                         } else {
                             continue;
