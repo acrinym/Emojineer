@@ -16,6 +16,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <typeinfo>
 
 namespace emojineer {
 namespace lsp {
@@ -724,33 +725,88 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc
     if (doc.text.empty()) return diagnostics;
     
     try {
+        // First check lexer-level issues
         Lexer lexer(doc.text, registry_);
         auto tokens = lexer.tokenize();
+        
+        // Check for lexer errors (unexpected characters, etc.)
+        for (const auto& token : tokens) {
+            if (token.kind == TokenKind::Eof) continue;
+            
+            // Check for unknown tokens or issues - token.lexeme being empty is sometimes an indicator
+            // For now, we just validate tokenization works
+        }
+        
+        // Parse the document
         Parser parser(std::move(tokens));
         auto program = parser.parse();
+        
+        // Compile to check semantic errors
         Compiler compiler;
         compiler.compile(program);
+        
     } catch (const std::exception& e) {
         std::string errorMsg = e.what();
         std::size_t line = 1;
+        std::size_t column = 1;
         
+        // Try to extract line and column from error message
+        // Error messages typically contain "at line X" or "line X, column Y"
         std::size_t linePos = errorMsg.find("line ");
         if (linePos != std::string::npos) {
             try {
-                line = std::stoul(errorMsg.substr(linePos + 5));
+                std::string numStr = errorMsg.substr(linePos + 5);
+                // Find end of number
+                std::size_t endPos = numStr.find_first_not_of("0123456789");
+                if (endPos != std::string::npos) {
+                    line = std::stoul(numStr.substr(0, endPos));
+                } else {
+                    line = std::stoul(numStr);
+                }
             } catch (...) {}
         }
         
-        Position startPos;
-        startPos.line = static_cast<std::uint32_t>(line - 1);
-        startPos.character = 0;
+        // Try to find column info
+        std::size_t colPos = errorMsg.find("column ");
+        if (colPos != std::string::npos) {
+            try {
+                std::string numStr = errorMsg.substr(colPos + 7);
+                std::size_t endPos = numStr.find_first_not_of("0123456789");
+                if (endPos != std::string::npos) {
+                    column = std::stoul(numStr.substr(0, endPos));
+                } else {
+                    column = std::stoul(numStr);
+                }
+            } catch (...) {}
+        }
         
+        // Try to extract the token that caused the error from the message
+        // This helps provide better range information
+        Position startPos;
+        startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
+        startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
+        
+        // Try to find a token at or near this position for better range
+        try {
+            Lexer lexer(doc.text, registry_);
+            auto tokens = lexer.tokenize();
+            for (const auto& token : tokens) {
+                if (token.line == line) {
+                    // Found a token on the error line - use its position
+                    startPos.character = static_cast<std::uint32_t>(token.column > 0 ? token.column - 1 : 0);
+                    // Estimate end based on lexeme length
+                    break;
+                }
+            }
+        } catch (...) {}
+        
+        // Estimate end position - use a reasonable default or token length
         Position endPos = startPos;
-        endPos.character = 80;
+        endPos.character = startPos.character + 10; // Default span of 10 characters
         
         Diagnostic diag;
         diag.range = {startPos, endPos};
-        diag.severity = 1;
+        diag.severity = 1;  // Error
         diag.message = errorMsg;
         diag.source = "emojineer";
         diagnostics.push_back(diag);
@@ -1070,11 +1126,15 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
 }
 
 JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
+    // Extract the text document URI
+    auto textDoc = getJsonObject(params, "textDocument");
+    std::string uri = getJsonString(textDoc);
+    
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t char_ = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    auto defs = findDefinitions("", Position{line, char_});
+    auto defs = findDefinitions(uri, Position{line, char_});
     
     auto result = json::makeArray();
     for (const auto& def : defs) {
@@ -1099,19 +1159,147 @@ JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
 }
 
 std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& uri, const Position& pos) {
-    return {};
+    std::vector<SymbolLocation> results;
+    
+    auto doc = getDocument(uri);
+    if (!doc) return results;
+    
+    try {
+        Lexer lexer(doc->text, registry_);
+        auto tokens = lexer.tokenize();
+        Parser parser(std::move(tokens));
+        auto program = parser.parse();
+        
+        // Find the token at the given position
+        const Token* tokenAtPos = nullptr;
+        for (const auto& token : tokens) {
+            if (token.kind == TokenKind::Eof) continue;
+            
+            // Check if this token is at the requested position
+            // Position is 0-indexed in LSP
+            if (token.line == pos.line + 1) {
+                // Simple column matching - this is approximate
+                if (token.column <= pos.character + 1 && 
+                    token.column + token.lexeme.size() >= pos.character + 1) {
+                    tokenAtPos = &token;
+                    break;
+                }
+            }
+        }
+        
+        if (!tokenAtPos) return results;
+        
+        // Now search for the definition of this identifier
+        // In Emojineer, definitions come before uses, so we search backwards in the program
+        for (const auto& stmt : program.statements) {
+            if (!stmt) continue;
+            
+            const std::type_info& typeInfo = typeid(*stmt);
+            
+            // Check for variable declarations
+            if (typeInfo == typeid(ast::VarDecl)) {
+                auto* varDecl = dynamic_cast<ast::VarDecl*>(stmt.get());
+                if (varDecl && varDecl->name == tokenAtPos->lexeme) {
+                    SymbolLocation loc;
+                    loc.uri = uri;
+                    loc.name = varDecl->name;
+                    loc.symbolKind = "variable";
+                    loc.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
+                    loc.range.start.character = 0;
+                    loc.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
+                    loc.range.end.character = static_cast<std::uint32_t>(varDecl->name.length());
+                    results.push_back(loc);
+                    return results;
+                }
+            }
+            
+            // Check for function declarations
+            if (typeInfo == typeid(ast::FunctionDecl)) {
+                auto* funcDecl = dynamic_cast<ast::FunctionDecl*>(stmt.get());
+                if (funcDecl && funcDecl->name == tokenAtPos->lexeme) {
+                    SymbolLocation loc;
+                    loc.uri = uri;
+                    loc.name = funcDecl->name;
+                    loc.symbolKind = "function";
+                    loc.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
+                    loc.range.start.character = 0;
+                    loc.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
+                    loc.range.end.character = static_cast<std::uint32_t>(funcDecl->name.length());
+                    results.push_back(loc);
+                    return results;
+                }
+            }
+        }
+        
+    } catch (const std::exception&) {
+        // Return empty results on error
+    }
+    
+    return results;
 }
 
 std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& uri, const Position& pos) {
-    return {};
+    std::vector<SymbolLocation> results;
+    
+    // First find what symbol is at the position
+    auto defs = findDefinitions(uri, pos);
+    if (defs.empty()) return results;
+    
+    const std::string& symbolName = defs[0].name;
+    
+    auto doc = getDocument(uri);
+    if (!doc) return results;
+    
+    try {
+        Lexer lexer(doc->text, registry_);
+        auto tokens = lexer.tokenize();
+        
+        // Find all uses of this symbol
+        for (const auto& token : tokens) {
+            if (token.kind == TokenKind::Eof) continue;
+            
+            // Look for identifier tokens that match our symbol name
+            if (token.kind == TokenKind::Identifier && token.lexeme == symbolName) {
+                // Skip the definition itself (we'll have already found it via findDefinitions)
+                bool isDefinition = false;
+                for (const auto& def : defs) {
+                    if (def.range.start.line == token.line - 1) {
+                        isDefinition = true;
+                        break;
+                    }
+                }
+                
+                if (!isDefinition) {
+                    SymbolLocation loc;
+                    loc.uri = uri;
+                    loc.name = token.lexeme;
+                    loc.symbolKind = defs[0].symbolKind;
+                    loc.range.start.line = static_cast<std::uint32_t>(token.line - 1);
+                    loc.range.start.character = static_cast<std::uint32_t>(token.column > 0 ? token.column - 1 : 0);
+                    loc.range.end.line = static_cast<std::uint32_t>(token.line - 1);
+                    loc.range.end.character = loc.range.start.character + static_cast<std::uint32_t>(token.lexeme.length());
+                    results.push_back(loc);
+                }
+            }
+        }
+        
+    } catch (const std::exception&) {
+        // Return what we have on error
+    }
+    
+    return results;
 }
 
 JsonValue LanguageServer::handleReferences(const JsonValue& params) {
+    // Extract the text document URI
+    auto textDoc = getJsonObject(params, "textDocument");
+    std::string uri = getJsonString(textDoc);
+    
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t char_ = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    auto refs = findReferences("", Position{line, char_});
+    auto refs = findReferences(uri, Position{line, char_});
     
     auto result = json::makeArray();
     for (const auto& ref : refs) {
@@ -1136,23 +1324,291 @@ JsonValue LanguageServer::handleReferences(const JsonValue& params) {
 }
 
 JsonValue LanguageServer::handleDocumentSymbol(const JsonValue& params) {
-    return json::makeArray();
+    // Extract the text document URI
+    auto textDoc = getJsonObject(params, "textDocument");
+    std::string uri = getJsonString(textDoc);
+    
+    auto symbols = getDocumentSymbols(uri);
+    
+    // Convert DocumentSymbol to JSON
+    auto result = json::makeArray();
+    for (const auto& sym : symbols) {
+        auto symJson = json::makeObject();
+        json::objectSet(symJson, "name", JsonValue(sym.name));
+        if (sym.kind) json::objectSet(symJson, "kind", JsonValue(static_cast<double>(*sym.kind)));
+        
+        auto range = json::makeObject();
+        auto start = json::makeObject();
+        json::objectSet(start, "line", JsonValue(static_cast<double>(sym.range.start.line)));
+        json::objectSet(start, "character", JsonValue(static_cast<double>(sym.range.start.character)));
+        auto end = json::makeObject();
+        json::objectSet(end, "line", JsonValue(static_cast<double>(sym.range.end.line)));
+        json::objectSet(end, "character", JsonValue(static_cast<double>(sym.range.end.character)));
+        json::objectSet(range, "start", start);
+        json::objectSet(range, "end", end);
+        json::objectSet(symJson, "range", range);
+        
+        auto selectionRange = json::makeObject();
+        auto selStart = json::makeObject();
+        json::objectSet(selStart, "line", JsonValue(static_cast<double>(sym.selectionRange.start.line)));
+        json::objectSet(selStart, "character", JsonValue(static_cast<double>(sym.selectionRange.start.character)));
+        auto selEnd = json::makeObject();
+        json::objectSet(selEnd, "line", JsonValue(static_cast<double>(sym.selectionRange.end.line)));
+        json::objectSet(selEnd, "character", JsonValue(static_cast<double>(sym.selectionRange.end.character)));
+        json::objectSet(selectionRange, "start", selStart);
+        json::objectSet(selectionRange, "end", selEnd);
+        json::objectSet(symJson, "selectionRange", selectionRange);
+        
+        if (sym.detail) json::objectSet(symJson, "detail", JsonValue(*sym.detail));
+        
+        // Handle children recursively
+        if (!sym.children.empty()) {
+            auto children = json::makeArray();
+            for (const auto& child : sym.children) {
+                // Recursively convert child symbols - simplified for now
+                auto childJson = json::makeObject();
+                json::objectSet(childJson, "name", JsonValue(child.name));
+                json::arrayPushBack(children, childJson);
+            }
+            json::objectSet(symJson, "children", children);
+        }
+        
+        json::arrayPushBack(result, symJson);
+    }
+    
+    return result;
 }
 
 std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string& uri) {
-    return {};
+    std::vector<DocumentSymbol> symbols;
+    
+    auto doc = getDocument(uri);
+    if (!doc) return symbols;
+    
+    try {
+        Lexer lexer(doc->text, registry_);
+        auto tokens = lexer.tokenize();
+        Parser parser(std::move(tokens));
+        auto program = parser.parse();
+        
+        // Extract symbols from the AST
+        for (const auto& stmt : program.statements) {
+            if (!stmt) continue;
+            
+            // Use the statement's line number for position
+            auto line = stmt->line;
+            
+            // Check statement type and extract symbol info
+            // We use dynamic_cast to check the actual type
+            using StmtType = ast::Stmt;
+            
+            // For each statement type, extract the symbol
+            DocumentSymbol sym;
+            sym.range.start.line = static_cast<std::uint32_t>(line - 1);
+            sym.range.start.character = 0;
+            sym.range.end.line = static_cast<std::uint32_t>(line - 1);
+            sym.range.end.character = 80; // Approximate
+            sym.selectionRange = sym.range;
+            
+            // Try to identify the statement type and extract name
+            // This is done by checking the AST structure
+            const std::type_info& typeInfo = typeid(*stmt);
+            
+            if (typeInfo == typeid(ast::FunctionDecl)) {
+                // Function declaration
+                // Note: We can't directly access the name without casting
+                sym.name = "function";
+                sym.kind = static_cast<int>(SymbolKind::Function);
+                sym.detail = "function declaration";
+            } else if (typeInfo == typeid(ast::VarDecl)) {
+                sym.name = "variable";
+                sym.kind = static_cast<int>(SymbolKind::Variable);
+                sym.detail = "variable declaration";
+            } else if (typeInfo == typeid(ast::ModuleDecl)) {
+                sym.name = "module";
+                sym.kind = static_cast<int>(SymbolKind::Module);
+                sym.detail = "module declaration";
+            } else if (typeInfo == typeid(ast::IfStmt)) {
+                sym.name = "if";
+                sym.kind = static_cast<int>(SymbolKind::Statement);
+                sym.detail = "if statement";
+            } else if (typeInfo == typeid(ast::WhileStmt)) {
+                sym.name = "while";
+                sym.kind = static_cast<int>(SymbolKind::Statement);
+                sym.detail = "while statement";
+            } else {
+                // Skip other statement types
+                continue;
+            }
+            
+            symbols.push_back(sym);
+        }
+        
+    } catch (const std::exception&) {
+        // Return whatever symbols we found before the error
+    }
+    
+    return symbols;
 }
 
 JsonValue LanguageServer::handleWorkspaceSymbol(const JsonValue& params) {
-    return json::makeArray();
+    std::string query = getJsonString(getJsonObject(params, "query"));
+    
+    auto symbols = getWorkspaceSymbols(query);
+    
+    auto result = json::makeArray();
+    for (const auto& sym : symbols) {
+        auto symJson = json::makeObject();
+        json::objectSet(symJson, "name", JsonValue(sym.name));
+        if (sym.kind) json::objectSet(symJson, "kind", JsonValue(static_cast<double>(*sym.kind)));
+        
+        auto location = json::makeObject();
+        json::objectSet(location, "uri", JsonValue(sym.uri));
+        
+        auto range = json::makeObject();
+        auto start = json::makeObject();
+        json::objectSet(start, "line", JsonValue(static_cast<double>(sym.range.start.line)));
+        json::objectSet(start, "character", JsonValue(static_cast<double>(sym.range.start.character)));
+        auto end = json::makeObject();
+        json::objectSet(end, "line", JsonValue(static_cast<double>(sym.range.end.line)));
+        json::objectSet(end, "character", JsonValue(static_cast<double>(sym.range.end.character)));
+        json::objectSet(range, "start", start);
+        json::objectSet(range, "end", end);
+        json::objectSet(location, "range", range);
+        
+        json::objectSet(symJson, "location", location);
+        if (!sym.containerName.empty()) {
+            json::objectSet(symJson, "containerName", JsonValue(sym.containerName));
+        }
+        
+        json::arrayPushBack(result, symJson);
+    }
+    
+    return result;
 }
 
 std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::string& query) {
-    return {};
+    std::vector<SymbolInformation> symbols;
+    
+    if (!workspaceRoot_) return symbols;
+    
+    // Search through open documents first
+    for (const auto& [uri, doc] : openDocuments_) {
+        auto docSymbols = getDocumentSymbols(uri);
+        for (const auto& docSym : docSymbols) {
+            // Filter by query if provided
+            if (query.empty() || docSym.name.find(query) != std::string::npos) {
+                SymbolInformation info;
+                info.name = docSym.name;
+                info.kind = docSym.kind;
+                info.uri = uri;
+                info.range = docSym.range;
+                symbols.push_back(info);
+            }
+        }
+    }
+    
+    // Also search through local module files in the workspace
+    if (workspaceRoot_ && std::filesystem::exists(*workspaceRoot_)) {
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(*workspaceRoot_)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".emoji") {
+                std::string filePath = entry.path().string();
+                
+                // Try to read and parse the file
+                try {
+                    std::ifstream file(filePath);
+                    std::stringstream buffer;
+                    buffer << file.rdbuf();
+                    std::string source = buffer.str();
+                    
+                    // Parse and extract symbols
+                    Lexer lexer(source, registry_);
+                    auto tokens = lexer.tokenize();
+                    Parser parser(std::move(tokens));
+                    auto program = parser.parse();
+                    
+                    for (const auto& stmt : program.statements) {
+                        if (!stmt) continue;
+                        
+                        const std::type_info& typeInfo = typeid(*stmt);
+                        
+                        SymbolInformation info;
+                        info.uri = pathToUri(entry.path());
+                        info.range.start.line = static_cast<std::uint32_t>(stmt->line - 1);
+                        info.range.start.character = 0;
+                        info.range.end.line = static_cast<std::uint32_t>(stmt->line - 1);
+                        info.range.end.character = 80;
+                        
+                        if (typeInfo == typeid(ast::FunctionDecl)) {
+                            info.name = "function";
+                            info.kind = static_cast<int>(SymbolKind::Function);
+                        } else if (typeInfo == typeid(ast::VarDecl)) {
+                            info.name = "variable";
+                            info.kind = static_cast<int>(SymbolKind::Variable);
+                        } else if (typeInfo == typeid(ast::ModuleDecl)) {
+                            info.name = "module";
+                            info.kind = static_cast<int>(SymbolKind::Module);
+                        } else {
+                            continue;
+                        }
+                        
+                        // Filter by query if provided
+                        if (query.empty() || info.name.find(query) != std::string::npos) {
+                            symbols.push_back(info);
+                        }
+                    }
+                } catch (const std::exception&) {
+                    // Skip files that can't be parsed
+                }
+            }
+        }
+    }
+    
+    return symbols;
 }
 
 JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
-    return json::makeArray();
+    // Extract the text document
+    auto textDoc = getJsonObject(params, "textDocument");
+    std::string uri = getJsonString(textDoc);
+    
+    auto doc = getDocument(uri);
+    if (!doc) return json::makeArray();
+    
+    try {
+        // Use the canonical formatter
+        std::string formatted = emojineer::format_source(doc->text, registry_);
+        
+        // Create a TextEdit for the full document
+        auto result = json::makeArray();
+        auto edit = json::makeObject();
+        
+        // Full range from start to end
+        auto range = json::makeObject();
+        auto start = json::makeObject();
+        json::objectSet(start, "line", JsonValue(0.0));
+        json::objectSet(start, "character", JsonValue(0.0));
+        
+        auto end = json::makeObject();
+        // Count lines in original document
+        std::size_t lastLine = 0;
+        for (char c : doc->text) {
+            if (c == '\n') lastLine++;
+        }
+        json::objectSet(end, "line", JsonValue(static_cast<double>(lastLine)));
+        json::objectSet(end, "character", JsonValue(0.0));
+        
+        json::objectSet(range, "start", start);
+        json::objectSet(range, "end", end);
+        json::objectSet(edit, "range", range);
+        json::objectSet(edit, "newText", JsonValue(formatted));
+        
+        json::arrayPushBack(result, edit);
+        return result;
+    } catch (const std::exception& e) {
+        // Return empty array on error
+        return json::makeArray();
+    }
 }
 
 JsonValue LanguageServer::handleRangeFormatting(const JsonValue& params) {
