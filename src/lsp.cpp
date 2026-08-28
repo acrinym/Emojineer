@@ -942,6 +942,144 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
     return std::nullopt;
 }
 
+// Canonical token-to-range conversion: converts a Token's 1-based grapheme
+// line/column + lexeme into an exact LSP UTF-16 Range against original source.
+// This is the ONE authoritative way to convert token positions to LSP ranges.
+Range LanguageServer::tokenToRange(const std::string& sourceText, const Token& token) const {
+    Range range;
+    
+    // Handle EOF token - return empty range at document end
+    if (token.kind == TokenKind::Eof) {
+        // Return position at end of last line
+        range.start.line = static_cast<std::uint32_t>(token.line - 1);
+        range.start.character = 0;
+        range.end = range.start;
+        return range;
+    }
+    
+    // Step 1: Find the start of the token's line in the original source
+    // Handle LF, CRLF, and lone CR line endings
+    std::size_t lineStart = 0;
+    std::size_t currentLine = 1;
+    
+    for (std::size_t i = 0; i < sourceText.size(); ++i) {
+        if (currentLine == token.line) {
+            lineStart = i;
+            break;
+        }
+        
+        // Handle line endings
+        if (sourceText[i] == '\r') {
+            if (i + 1 < sourceText.size() && sourceText[i + 1] == '\n') {
+                // CRLF - skip both characters
+                ++currentLine;
+                ++i; // Extra increment to skip \n
+            } else {
+                // Lone CR
+                ++currentLine;
+            }
+        } else if (sourceText[i] == '\n') {
+            ++currentLine;
+        }
+    }
+    
+    // If we didn't find the line, token is past end of text
+    if (currentLine < token.line) {
+        // Token line is beyond text - return position at text end
+        range.start.line = static_cast<std::uint32_t>(sourceText.size());
+        range.start.character = 0;
+        range.end = range.start;
+        return range;
+    }
+    
+    // Step 2: Find the end of the token's line
+    std::size_t lineEnd = lineStart;
+    while (lineEnd < sourceText.size()) {
+        if (sourceText[lineEnd] == '\n' || sourceText[lineEnd] == '\r') {
+            break;
+        }
+        ++lineEnd;
+    }
+    
+    // Extract the line text
+    std::string lineText = sourceText.substr(lineStart, lineEnd - lineStart);
+    
+    // Step 3: Segment the line into graphemes and count UTF-16 units before token.column
+    // token.column is 1-based grapheme column
+    auto graphemes = segment_graphemes(lineText);
+    
+    std::uint32_t utf16Column = 0;
+    std::size_t graphemeIndex = 0;
+    
+    for (const auto& g : graphemes) {
+        if (graphemeIndex >= token.column - 1) {
+            // Reached or passed the token's column
+            break;
+        }
+        // Count UTF-16 units for this grapheme
+        utf16Column += static_cast<std::uint32_t>(countUtf16Units(g.display));
+        ++graphemeIndex;
+    }
+    
+    range.start.line = static_cast<std::uint32_t>(token.line - 1);
+    range.start.character = utf16Column;
+    
+    // Step 4: Compute end position by traversing the token's lexeme
+    // We need to find where the token ends in the original source
+    // Approach: start from the position we calculated and find the token's lexeme in the source
+    
+    // For multiline tokens (like strings), we need special handling
+    if (token.lexeme.find('\n') != std::string::npos || 
+        token.lexeme.find('\r') != std::string::npos) {
+        // Multiline token - calculate based on lexeme content
+        // Find start position in source
+        std::size_t tokenStartByte = lineStart;
+        
+        // Count UTF-8 bytes to get to the token start column
+        std::size_t byteOffset = 0;
+        graphemeIndex = 0;
+        for (const auto& g : graphemes) {
+            if (graphemeIndex >= token.column - 1) {
+                break;
+            }
+            byteOffset += g.display.size();
+            ++graphemeIndex;
+        }
+        tokenStartByte += byteOffset;
+        
+        // Now traverse the lexeme to find end position
+        // Count lines and UTF-16 columns in the lexeme
+        std::uint32_t endLine = range.start.line;
+        std::uint32_t endColumn = range.start.character;
+        
+        auto lexemeGraphemes = segment_graphemes(token.lexeme);
+        for (const auto& g : lexemeGraphemes) {
+            if (g.display == "\n") {
+                ++endLine;
+                endColumn = 0;
+            } else if (g.display == "\r") {
+                // Handle both lone CR and CR+LF
+                if (g.display.size() == 2 && g.display[1] == '\n') {
+                    // This is CRLF - already handled by grapheme
+                }
+                ++endLine;
+                endColumn = 0;
+            } else {
+                endColumn += static_cast<std::uint32_t>(countUtf16Units(g.display));
+            }
+        }
+        
+        range.end.line = endLine;
+        range.end.character = endColumn;
+    } else {
+        // Single-line token - find end column by adding UTF-16 units of lexeme
+        range.end.character = range.start.character + static_cast<std::uint32_t>(countUtf16Units(token.lexeme));
+        range.end.line = range.start.line;
+    }
+    
+    return range;
+}
+
 std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc) {
     std::vector<Diagnostic> diagnostics;
     
@@ -968,91 +1106,31 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc
         Compiler compiler;
         compiler.compile(program);
         
-    } catch (const std::exception& e) {
-        std::string errorMsg = e.what();
-        std::size_t line = 1;
-        std::size_t column = 1;
-        
-        // Try to extract line and column from error message
-        // Error messages typically contain "at line X" or "line X, column Y"
-        std::size_t linePos = errorMsg.find("line ");
-        if (linePos != std::string::npos) {
-            try {
-                std::string numStr = errorMsg.substr(linePos + 5);
-                // Find end of number
-                std::size_t endPos = numStr.find_first_not_of("0123456789");
-                if (endPos != std::string::npos) {
-                    line = std::stoul(numStr.substr(0, endPos));
-                } else {
-                    line = std::stoul(numStr);
-                }
-            } catch (...) {}
-        }
-        
-        // Try to find column info
-        std::size_t colPos = errorMsg.find("column ");
-        if (colPos != std::string::npos) {
-            try {
-                std::string numStr = errorMsg.substr(colPos + 7);
-                std::size_t endPos = numStr.find_first_not_of("0123456789");
-                if (endPos != std::string::npos) {
-                    column = std::stoul(numStr.substr(0, endPos));
-                } else {
-                    column = std::stoul(numStr);
-                }
-            } catch (...) {}
-        }
-        
-        // Try to extract the token that caused the error from the message
-        std::string tokenName;
-        std::size_t tokenNameStart = errorMsg.find("near '");
-        if (tokenNameStart != std::string::npos) {
-            tokenNameStart += 6; // Skip "near '"
-            auto tokenNameEnd = errorMsg.find("'", tokenNameStart);
-            if (tokenNameEnd != std::string::npos) {
-                tokenName = errorMsg.substr(tokenNameStart, tokenNameEnd - tokenNameStart);
-            }
-        }
-        
-        Position startPos;
-        startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
-        startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
-        
-        // Try to find a token at or near this position for better range
-        Position endPos = startPos;
-        try {
-            Lexer lex(doc.text, registry_);
-            auto tokens = lex.tokenize();
-            for (const auto& token : tokens) {
-                // If we have a token name from the error, find that specific token
-                if (!tokenName.empty() && token.lexeme == tokenName) {
-                    // Use exact token position and compute UTF-16 range
-                    std::size_t startByte = token.column > 0 ? token.column - 1 : 0;
-                    std::size_t endByte = startByte + token.lexeme.size();
-                    startPos = utf8ToUtf16(doc.text, startByte);
-                    endPos = utf8ToUtf16(doc.text, endByte);
-                    break;
-                }
-                // Otherwise, find a token on the error line
-                else if (token.line == line) {
-                    std::size_t startByte = token.column > 0 ? token.column - 1 : 0;
-                    std::size_t endByte = startByte + token.lexeme.size();
-                    startPos = utf8ToUtf16(doc.text, startByte);
-                    endPos = utf8ToUtf16(doc.text, endByte);
-                    break;
-                }
-            }
-        } catch (...) {}
-        
-        // If still using default positions, at least use UTF-16 aware single-character span
-        if (endPos.character == startPos.character) {
-            endPos.character = startPos.character + 1; // Single character span
-        }
-        
+    } catch (const lsp::SourceLocationException& sle) {
+        // Use typed source location for exact UTF-16 range
         Diagnostic diag;
-        diag.range = {startPos, endPos};
         diag.severity = 1;  // Error
-        diag.message = errorMsg;
+        diag.message = sle.message;
+        diag.source = "emojineer";
+        
+        // Create a synthetic token from the exception info for canonical range conversion
+        Token errorToken;
+        errorToken.kind = TokenKind::Identifier;
+        errorToken.line = sle.line;
+        errorToken.column = sle.column;
+        errorToken.lexeme = sle.tokenLexeme;
+        
+        // Use canonical helper to convert to UTF-16 range
+        diag.range = tokenToRange(doc.text, errorToken);
+        
+        diagnostics.push_back(diag);
+    } catch (const std::exception& e) {
+        // Generic non-source exception - emit safe document-level diagnostic
+        // without inventing coordinates from the message
+        Diagnostic diag;
+        diag.range = {{0, 0}, {0, 1}};  // Safe default: start of document
+        diag.severity = 1;  // Error
+        diag.message = e.what();
         diag.source = "emojineer";
         diagnostics.push_back(diag);
     }
@@ -1092,104 +1170,30 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDo
             // If we get here, compilation succeeded without errors
             // The chunk contains the compiled bytecode
             
-        } catch (const std::exception& e) {
-            std::string errorMsg = e.what();
-            std::size_t line = 1;
-            std::size_t column = 1;
-            
-            // Try to extract line and column from error message
-            std::size_t linePos = errorMsg.find("line ");
-            if (linePos != std::string::npos) {
-                try {
-                    std::string numStr = errorMsg.substr(linePos + 5);
-                    std::size_t endPos = numStr.find_first_not_of("0123456789");
-                    if (endPos != std::string::npos) {
-                        line = std::stoul(numStr.substr(0, endPos));
-                    } else {
-                        line = std::stoul(numStr);
-                    }
-                } catch (...) {}
-            }
-            
-            // Try to find column info
-            std::size_t colPos = errorMsg.find("column ");
-            if (colPos != std::string::npos) {
-                try {
-                    std::string numStr = errorMsg.substr(colPos + 7);
-                    std::size_t endPos = numStr.find_first_not_of("0123456789");
-                    if (endPos != std::string::npos) {
-                        column = std::stoul(numStr.substr(0, endPos));
-                    } else {
-                        column = std::stoul(numStr);
-                    }
-                } catch (...) {}
-            }
-            
-            // Try to find token/emoji info from quotes in error message
-            std::string tokenName;
-            std::size_t emojiPos = errorMsg.find('\'');
-            if (emojiPos != std::string::npos) {
-                auto endEmojiPos = errorMsg.find('\'', emojiPos + 1);
-                if (endEmojiPos != std::string::npos) {
-                    tokenName = errorMsg.substr(emojiPos + 1, endEmojiPos - emojiPos - 1);
-                }
-            }
-            
-            // Try to find a token at or near this position for better range
-            Position startPos;
-            Position endPos;
-            
-            try {
-                Lexer lex(doc.text, registry_);
-                auto tokens = lex.tokenize();
-                
-                // First try to find the specific token from the error
-                if (!tokenName.empty()) {
-                    for (const auto& tok : tokens) {
-                        if (tok.lexeme == tokenName || tok.canonical == tokenName) {
-                            // Use exact token position and compute UTF-16 range
-                            std::size_t startByte = tok.column > 0 ? tok.column - 1 : 0;
-                            std::size_t endByte = startByte + tok.lexeme.size();
-                            startPos = utf8ToUtf16(doc.text, startByte);
-                            endPos = utf8ToUtf16(doc.text, endByte);
-                            break;
-                        }
-                    }
-                }
-                
-                // If no token found yet, try to find a token on the error line
-                if (endPos.character == 0 && endPos.line == 0) {
-                    for (const auto& tok : tokens) {
-                        if (tok.line == line) {
-                            std::size_t startByte = tok.column > 0 ? tok.column - 1 : 0;
-                            std::size_t endByte = startByte + tok.lexeme.size();
-                            startPos = utf8ToUtf16(doc.text, startByte);
-                            endPos = utf8ToUtf16(doc.text, endByte);
-                            break;
-                        }
-                    }
-                }
-            } catch (...) {
-                // Fall back to basic position calculation
-            }
-            
-            // If still using default positions, compute from line/column
-            if (endPos.character == 0 && endPos.line == 0) {
-                startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
-                startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
-                
-                // Use UTF-16 aware token length if available
-                if (!tokenName.empty()) {
-                    endPos.character = startPos.character + static_cast<std::uint32_t>(countUtf16Units(tokenName));
-                } else {
-                    endPos.character = startPos.character + 1; // Single character span
-                }
-            }
-            
+        } catch (const lsp::SourceLocationException& sle) {
+            // Use typed source location for exact UTF-16 range
             Diagnostic diag;
-            diag.range = {startPos, endPos};
             diag.severity = 1;  // Error
-            diag.message = errorMsg;
+            diag.message = sle.message;
+            diag.source = "emojineer";
+            
+            // Create a synthetic token from the exception info for canonical range conversion
+            Token errorToken;
+            errorToken.kind = TokenKind::Identifier;
+            errorToken.line = sle.line;
+            errorToken.column = sle.column;
+            errorToken.lexeme = sle.tokenLexeme;
+            
+            // Use canonical helper to convert to UTF-16 range
+            diag.range = tokenToRange(doc.text, errorToken);
+            
+            diagnostics.push_back(diag);
+        } catch (const std::exception& e) {
+            // Generic non-source exception - emit safe document-level diagnostic
+            Diagnostic diag;
+            diag.range = {{0, 0}, {0, 1}};  // Safe default: start of document
+            diag.severity = 1;  // Error
+            diag.message = e.what();
             diag.source = "emojineer";
             diagnostics.push_back(diag);
         }
@@ -1459,28 +1463,24 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
         Lexer lexer(doc->text, registry_);
         auto tokens = lexer.tokenize();
         
-        // Find the token at the exact requested position
-        // Token columns are 1-indexed byte positions in the UTF-8 source
+        // Find the token at the exact requested position using canonical range conversion
         for (const auto& token : tokens) {
             if (token.kind == TokenKind::Eof) continue;
             
             // Check if this token contains the requested position
-            // token.line is 1-indexed, token.column is 1-indexed byte position
             if (token.line == pos.line + 1) {
-                // token.column is 1-indexed, convert to 0-indexed UTF-8 byte offset
-                std::size_t tokenStartByte = token.column > 0 ? token.column - 1 : 0;
-                // Token end is start + byte length of lexeme
-                std::size_t tokenEndByte = tokenStartByte + token.lexeme.size();
+                // Use canonical helper to get exact UTF-16 range
+                Range tokenRange = tokenToRange(doc->text, token);
                 
-                // Check if requested UTF-8 byte offset falls within this token's byte range
-                if (utf8Offset >= tokenStartByte && utf8Offset < tokenEndByte) {
+                // Check if requested UTF-16 position falls within this token's range
+                // Note: pos.character is UTF-16 column, need to check if it's within range
+                if (pos.character >= tokenRange.start.character && 
+                    pos.character <= tokenRange.end.character) {
                     Hover hover;
                     hover.contents = MarkupContent{"markdown", ""};
                     
-                    // Calculate exact token range in UTF-16 for the hover response
-                    Position startPos = utf8ToUtf16(doc->text, tokenStartByte);
-                    Position endPos = utf8ToUtf16(doc->text, tokenEndByte);
-                    hover.range = Range{startPos, endPos};
+                    // Use canonical range for hover response
+                    hover.range = tokenRange;
                     
                     const auto& defs = registry_.definitions();
                     for (const auto& def : defs) {
@@ -1729,20 +1729,18 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
         Parser parser(std::move(tokens));
         auto program = parser.parse();
         
-        // Find the token at the given position using exact UTF-8 byte offset
+        // Find the token at the given position using canonical range conversion
         const Token* tokenAtPos = nullptr;
         for (const auto& token : tokensCopy) {
             if (token.kind == TokenKind::Eof) continue;
             
-            // Check if this token is at the requested position
-            // token.line is 1-indexed, token.column is 1-indexed byte position
+            // Check if this token is at the requested position using canonical helper
             if (token.line == pos.line + 1) {
-                // Convert token column to 0-indexed byte offset
-                std::size_t tokenStartByte = token.column > 0 ? token.column - 1 : 0;
-                std::size_t tokenEndByte = tokenStartByte + token.lexeme.size();
+                Range tokenRange = tokenToRange(doc->text, token);
                 
-                // Check if the UTF-8 byte offset falls within this token's byte range
-                if (utf8Offset >= tokenStartByte && utf8Offset < tokenEndByte) {
+                // Check if the UTF-16 position falls within this token's range
+                if (pos.character >= tokenRange.start.character && 
+                    pos.character <= tokenRange.end.character) {
                     tokenAtPos = &token;
                     break;
                 }
@@ -1751,13 +1749,9 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
         
         if (!tokenAtPos) return results;
         
-        // Helper to convert token position to UTF-16 range
+        // Use canonical helper for token to UTF-16 range conversion
         auto tokenToUtf16Range = [this, &doc](const Token& tok) -> Range {
-            std::size_t startByte = tok.column > 0 ? tok.column - 1 : 0;
-            std::size_t endByte = startByte + tok.lexeme.size();
-            Position start = utf8ToUtf16(doc->text, startByte);
-            Position end = utf8ToUtf16(doc->text, endByte);
-            return Range{start, end};
+            return tokenToRange(doc->text, tok);
         };
         
         // Now search for the definition of this identifier

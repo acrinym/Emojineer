@@ -3,6 +3,7 @@
 #include "emojineer/ast.hpp"
 #include "emojineer/compiler.hpp"
 #include "emojineer/lexer.hpp"
+#include "emojineer/lsp.hpp"
 #include "emojineer/package.hpp"
 #include "emojineer/parser.hpp"
 #include "emojineer/stdlib.hpp"
@@ -148,9 +149,8 @@ void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
         if (dynamic_cast<const ast::ModuleDecl*>(stmt.get()) ||
             dynamic_cast<const ast::ImportStmt*>(stmt.get()) ||
             dynamic_cast<const ast::ExportStmt*>(stmt.get())) {
-            throw std::runtime_error("module '" + identity + "' line " +
-                                     std::to_string(stmt->line) +
-                                     ": 🧩, 🔗, and 📤 are top-level only");
+            throw lsp::SourceLocationException("🧩, 🔗, and 📤 are top-level only", 
+                                             {}, stmt->line, 1);
         }
         if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
             reject_nested_module_syntax(branch->then_branch, identity);
@@ -511,30 +511,25 @@ private:
                                                const ImportSpec& spec) const {
         const std::filesystem::path requested(spec.requested);
         if (requested.empty() || requested.is_absolute()) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) +
-                                     ": 🔗 import path must be non-empty and relative");
+            throw lsp::SourceLocationException("🔗 import path must be non-empty and relative",
+                                             {}, spec.line, 1);
         }
         if (spec.requested.find('\\') != std::string::npos) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) +
-                                     ": 🔗 import paths must use portable forward slashes");
+            throw lsp::SourceLocationException("🔗 import paths must use portable forward slashes",
+                                             {}, spec.line, 1);
         }
         if (requested.extension() != ".emoji") {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) +
-                                     ": 🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>");
+            throw lsp::SourceLocationException("🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>",
+                                             {}, spec.line, 1);
         }
         const auto candidate = importer.path.parent_path() / requested;
         if (!std::filesystem::exists(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) + ": imported module '" +
-                                     spec.requested + "' does not exist");
+            throw lsp::SourceLocationException("imported module '" + spec.requested + "' does not exist",
+                                             {}, spec.line, 1, spec.requested);
         }
         if (!std::filesystem::is_regular_file(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) + ": imported module '" +
-                                     spec.requested + "' is not a regular file");
+            throw lsp::SourceLocationException("imported module '" + spec.requested + "' is not a regular file",
+                                             {}, spec.line, 1, spec.requested);
         }
         const auto canonical = std::filesystem::canonical(candidate);
         const std::string context = "module '" + importer.identity + "' line " +

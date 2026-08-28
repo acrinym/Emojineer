@@ -293,6 +293,27 @@ struct SymbolLocation {
     std::string symbolKind;  // "function", "variable", "module", etc.
 };
 
+// Source location exception - carries typed source position info
+// Used for structured diagnostics instead of parsing e.what()
+struct SourceLocationException : public std::exception {
+    std::string message;
+    std::filesystem::path sourcePath;
+    std::size_t line;      // 1-based grapheme line
+    std::size_t column;    // 1-based grapheme column
+    std::string tokenLexeme;  // Optional: the token that caused the error
+    
+    SourceLocationException(const std::string& msg,
+                           std::filesystem::path path = "",
+                           std::size_t ln = 1,
+                           std::size_t col = 1,
+                           const std::string& lexeme = "")
+        : message(msg), sourcePath(std::move(path)), line(ln), column(col), tokenLexeme(lexeme) {}
+    
+    const char* what() const noexcept override {
+        return message.c_str();
+    }
+};
+
 // LSP server main class
 class LanguageServer {
 public:
@@ -343,6 +364,11 @@ private:
     // Position conversion (UTF-16 <-> UTF-8/grapheme)
     Position utf8ToUtf16(const std::string& text, std::size_t utf8Offset) const;
     std::optional<std::size_t> utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const;
+
+    // Canonical token-to-range conversion: converts a Token's 1-based grapheme
+    // line/column + lexeme into an exact LSP UTF-16 Range against original source.
+    // This is the ONE authoritative way to convert token positions to LSP ranges.
+    Range tokenToRange(const std::string& sourceText, const Token& token) const;
 
     // Diagnostics
     std::vector<Diagnostic> diagnoseDocument(const OpenDocument& doc);
