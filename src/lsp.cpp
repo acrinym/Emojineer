@@ -539,6 +539,28 @@ std::string LanguageServer::pathToUri(const std::filesystem::path& path) const {
     return "file://" + pathStr;
 }
 
+std::optional<std::string> LanguageServer::getSource(const std::string& uri) const {
+    // First check overlay documents
+    auto it = openDocuments_.find(uri);
+    if (it != openDocuments_.end()) {
+        return it->second.text;
+    }
+    
+    // Fall back to filesystem
+    if (workspaceRoot_) {
+        std::filesystem::path filePath = uriToPath(uri);
+        if (!filePath.empty() && std::filesystem::exists(filePath)) {
+            try {
+                return readFile(filePath);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+    }
+    
+    return std::nullopt;
+}
+
 std::optional<OpenDocument> LanguageServer::getDocument(const std::string& uri) const {
     auto it = openDocuments_.find(uri);
     if (it != openDocuments_.end()) {
@@ -1295,9 +1317,38 @@ JsonValue LanguageServer::handleHover(const JsonValue& params) {
     
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
-    std::uint32_t char_ = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
+    std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    auto hover = getHover(doc->uri, Position{line, char_});
+    // Convert UTF-16 position to UTF-8 byte offset
+    auto utf8OffsetOpt = utf16ToUtf8(doc->text, line, utf16Char);
+    std::size_t utf8Offset = utf8OffsetOpt.value_or(0);
+    
+    // Find the column (byte offset within the line) by scanning from line start
+    std::size_t lineStart = 0;
+    std::size_t currentLineNum = 0;
+    for (std::size_t i = 0; i < doc->text.size(); ++i) {
+        if (currentLineNum == line) {
+            lineStart = i;
+            break;
+        }
+        // Handle CRLF: check for \r\n sequence
+        if (i + 1 < doc->text.size() && doc->text[i] == '\r' && doc->text[i + 1] == '\n') {
+            currentLineNum++;
+            i++; // Skip the \n as well
+        } else if (doc->text[i] == '\n') {
+            currentLineNum++;
+        } else if (doc->text[i] == '\r') {
+            currentLineNum++;
+        }
+    }
+    
+    // Column is the byte offset from the start of the line
+    std::uint32_t column = 0;
+    if (utf8Offset > lineStart) {
+        column = static_cast<std::uint32_t>(utf8Offset - lineStart);
+    }
+    
+    auto hover = getHover(doc->uri, Position{line, column});
     if (!hover) return JsonValue(nullptr);
     
     auto result = json::makeObject();
@@ -1444,11 +1495,42 @@ JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(textDoc);
     
+    auto doc = getDocument(uri);
+    if (!doc) return json::makeArray();
+    
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
-    std::uint32_t char_ = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
+    std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    auto defs = findDefinitions(uri, Position{line, char_});
+    // Convert UTF-16 position to UTF-8 byte offset
+    auto utf8OffsetOpt = utf16ToUtf8(doc->text, line, utf16Char);
+    std::size_t utf8Offset = utf8OffsetOpt.value_or(0);
+    
+    // Find the column (byte offset within the line) by scanning from line start
+    std::size_t lineStart = 0;
+    std::size_t currentLineNum = 0;
+    for (std::size_t i = 0; i < doc->text.size(); ++i) {
+        if (currentLineNum == line) {
+            lineStart = i;
+            break;
+        }
+        // Handle CRLF: check for \r\n sequence
+        if (i + 1 < doc->text.size() && doc->text[i] == '\r' && doc->text[i + 1] == '\n') {
+            currentLineNum++;
+            i++; // Skip the \n as well
+        } else if (doc->text[i] == '\n') {
+            currentLineNum++;
+        } else if (doc->text[i] == '\r') {
+            currentLineNum++;
+        }
+    }
+    
+    std::uint32_t column = 0;
+    if (utf8Offset > lineStart) {
+        column = static_cast<std::uint32_t>(utf8Offset - lineStart);
+    }
+    
+    auto defs = findDefinitions(uri, Position{line, column});
     
     auto result = json::makeArray();
     for (const auto& def : defs) {
@@ -1609,11 +1691,42 @@ JsonValue LanguageServer::handleReferences(const JsonValue& params) {
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(textDoc);
     
+    auto doc = getDocument(uri);
+    if (!doc) return json::makeArray();
+    
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
-    std::uint32_t char_ = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
+    std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    auto refs = findReferences(uri, Position{line, char_});
+    // Convert UTF-16 position to UTF-8 byte offset
+    auto utf8OffsetOpt = utf16ToUtf8(doc->text, line, utf16Char);
+    std::size_t utf8Offset = utf8OffsetOpt.value_or(0);
+    
+    // Find the column (byte offset within the line) by scanning from line start
+    std::size_t lineStart = 0;
+    std::size_t currentLineNum = 0;
+    for (std::size_t i = 0; i < doc->text.size(); ++i) {
+        if (currentLineNum == line) {
+            lineStart = i;
+            break;
+        }
+        // Handle CRLF: check for \r\n sequence
+        if (i + 1 < doc->text.size() && doc->text[i] == '\r' && doc->text[i + 1] == '\n') {
+            currentLineNum++;
+            i++; // Skip the \n as well
+        } else if (doc->text[i] == '\n') {
+            currentLineNum++;
+        } else if (doc->text[i] == '\r') {
+            currentLineNum++;
+        }
+    }
+    
+    std::uint32_t column = 0;
+    if (utf8Offset > lineStart) {
+        column = static_cast<std::uint32_t>(utf8Offset - lineStart);
+    }
+    
+    auto refs = findReferences(uri, Position{line, column});
     
     auto result = json::makeArray();
     for (const auto& ref : refs) {
