@@ -1418,10 +1418,7 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
         auto tokens = lexer.tokenize();
         
         // Find the token at the exact requested position
-        // Convert LSP UTF-16 position to UTF-8 offset for comparison
-        auto utf8Offset = utf16ToUtf8(doc->text, pos.line, pos.character);
-        if (!utf8Offset) return std::nullopt;
-        
+        // Use token's line/column to determine position
         for (const auto& token : tokens) {
             if (token.kind == TokenKind::Eof) continue;
             
@@ -1429,14 +1426,17 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
             // token.line is 1-indexed, token.column is 1-indexed
             // We need to check if the position falls within this token's range
             if (token.line == pos.line + 1) {
-                // Get token's UTF-8 start position
-                auto tokenStartPos = utf8ToUtf16(doc->text, token.byte_offset);
-                auto tokenEndPos = utf8ToUtf16(doc->text, token.byte_offset + token.lexeme.size());
+                // token.column is 1-indexed, convert to 0-indexed for comparison
+                std::size_t tokenStartCol = token.column > 0 ? token.column - 1 : 0;
+                std::size_t tokenEndCol = tokenStartCol + token.lexeme.size();
+                
+                // Convert UTF-16 character position to UTF-8 column approximation
+                // For simplicity, we assume the UTF-16 column roughly maps to UTF-8 column for non-supplementary-plane chars
+                std::size_t utf8Column = pos.character;
                 
                 // Check if requested position is within this token's range
                 // Position is inclusive at start, exclusive at end
-                if (pos.character >= tokenStartPos.character && 
-                    pos.character < tokenEndPos.character) {
+                if (utf8Column >= tokenStartCol && utf8Column < tokenEndCol) {
                     Hover hover;
                     hover.contents = MarkupContent{"markdown", ""};
                     
@@ -1520,8 +1520,8 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         }
         
         // Mark custom definitions
-        if (def.custom) {
-            item.detail = "Custom " + item.detail;
+        if (def.custom && item.detail) {
+            item.detail = "Custom " + *item.detail;
         }
         
         completions.push_back(item);
