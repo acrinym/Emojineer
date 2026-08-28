@@ -556,17 +556,20 @@ Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Of
     utf8Offset = std::min(utf8Offset, text.size());
     
     while (utf8Pos < utf8Offset) {
+        // Check if remaining bytes fit in the current offset
+        std::size_t remaining = utf8Offset - utf8Pos;
+        
         // Handle CRLF: check for \r\n sequence
         if (utf8Pos + 1 < text.size() && 
             text[utf8Pos] == '\r' && text[utf8Pos + 1] == '\n') {
             // Check if CRLF fits within the requested offset
-            if (utf8Pos + 2 <= utf8Offset) {
+            if (remaining >= 2) {
                 pos.line++;
                 utf16Col = 0;
                 utf8Pos += 2;
             } else {
                 // Partial CRLF - stop at offset without counting
-                utf8Pos = utf8Offset;
+                break;
             }
             continue;
         }
@@ -574,25 +577,48 @@ Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Of
         unsigned char byte = static_cast<unsigned char>(text[utf8Pos]);
         
         if (byte == '\n') {
-            pos.line++;
-            utf16Col = 0;
-            utf8Pos++;
+            if (remaining >= 1) {
+                pos.line++;
+                utf16Col = 0;
+                utf8Pos++;
+            } else {
+                break;
+            }
         } else if (byte == '\r') {
             // CR not followed by LF - treat as line ending
-            pos.line++;
-            utf16Col = 0;
-            utf8Pos++;
+            if (remaining >= 1) {
+                pos.line++;
+                utf16Col = 0;
+                utf8Pos++;
+            } else {
+                break;
+            }
         } else {
-            // Decode UTF-8 code point using validated decoder
+            // Try to decode a valid UTF-8 code point starting from current position
             char32_t codePoint = 0;
             std::size_t oldPos = utf8Pos;
+            
             if (decodeUtf8CodePoint(text, utf8Pos, codePoint)) {
                 // Successfully decoded - count UTF-16 units for this scalar value
-                utf16Col += countUtf16UnitsForCodePoint(codePoint);
+                std::size_t seqLen = utf8Pos - oldPos;
+                if (seqLen <= remaining) {
+                    // The full sequence fits within the offset
+                    utf16Col += countUtf16UnitsForCodePoint(codePoint);
+                } else {
+                    // The offset falls in the middle of this multi-byte sequence
+                    // Report position at the START of this character
+                    utf8Pos = oldPos;  // Reset to start of character
+                    break;  // Exit loop - we've found our position
+                }
             } else {
                 // Invalid UTF-8 - treat as single byte
                 utf8Pos = oldPos + 1;
-                utf16Col += 1;
+                if (utf8Pos <= utf8Offset) {
+                    utf16Col += 1;
+                } else {
+                    utf8Pos = oldPos;
+                    break;
+                }
             }
         }
     }
