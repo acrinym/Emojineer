@@ -58,7 +58,7 @@ JsonValue parseJsonValue(const std::string& json, std::size_t& pos);
 
 // JSON parsing utilities
 void skipWhitespace(const std::string& json, std::size_t& pos) {
-    while (pos < json.size() && std::isspace(json[pos])) pos++;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) pos++;
 }
 
 // Helper to decode a surrogate pair
@@ -219,9 +219,9 @@ JsonValue parseJsonValue(const std::string& json, std::size_t& pos) {
             if (json.substr(pos, 4) == "null") { pos += 4; return JsonValue(nullptr); }
             throw std::runtime_error("invalid token");
         default:
-            if (json[pos] == '-' || std::isdigit(json[pos])) {
+            if (json[pos] == '-' || std::isdigit(static_cast<unsigned char>(json[pos]))) {
                 std::string numStr;
-                while (pos < json.size() && (std::isdigit(json[pos]) || json[pos] == '.' || 
+                while (pos < json.size() && (std::isdigit(static_cast<unsigned char>(json[pos])) || json[pos] == '.' || 
                                              json[pos] == '-' || json[pos] == '+' || 
                                              json[pos] == 'e' || json[pos] == 'E')) {
                     numStr += json[pos++];
@@ -987,7 +987,20 @@ void LanguageServer::handleDidChangeTextDocument(const JsonValue& params) {
     auto changes = getJsonObject(params, "contentChanges");
     auto arr = getJsonArray(changes);
     if (!arr.empty()) {
-        std::string text = getJsonString(arr[arr.size() - 1]);
+        // Get the final change event - server advertises full sync, reject ranged incremental
+        const JsonValue& lastChange = arr[arr.size() - 1];
+        
+        // Check if this is a ranged (incremental) change - reject it for full sync
+        auto rangeObj = getJsonObject(lastChange, "range");
+        if (!rangeObj.isNull()) {
+            // Server advertises full sync - reject incremental changes
+            return;
+        }
+        
+        // Get the text field from the change object
+        auto textObj = getJsonObject(lastChange, "text");
+        std::string text = getJsonString(textObj);
+        
         if (!uri.empty()) {
             updateDocument(uri, text, static_cast<int>(version));
         }
@@ -1688,60 +1701,143 @@ void LanguageServer::handleMessage(const JsonValue& message) {
     
     // Handle the response - prefer string IDs if present
     if (stringId || intId) {
+        // Check for invalid request: requests after shutdown (except exit)
+        if (shutdown_ && method != "exit") {
+            if (stringId) {
+                std::cout << formatJsonRpcErrorStringId(-32600, "Invalid request: cannot handle requests after shutdown", *stringId);
+            } else {
+                std::cout << formatJsonRpcError(-32600, "Invalid request: cannot handle requests after shutdown", intId);
+            }
+            std::cout.flush();
+            return;
+        }
+        
+        // Check for unknown method - return method not found error
+        bool knownMethod = (method == "initialize" || method == "shutdown" ||
+                          method == "textDocument/hover" || method == "textDocument/completion" ||
+                          method == "textDocument/definition" || method == "textDocument/references" ||
+                          method == "textDocument/documentSymbol" || method == "workspace/symbol" ||
+                          method == "textDocument/formatting" || method == "textDocument/rangeFormatting");
+        
+        if (!knownMethod) {
+            if (stringId) {
+                std::cout << formatJsonRpcErrorStringId(-32601, "Method not found", *stringId);
+            } else {
+                std::cout << formatJsonRpcError(-32601, "Method not found", intId);
+            }
+            std::cout.flush();
+            return;
+        }
+        
         try {
             auto result = handleRequest(method, params);
             if (stringId) {
                 // Use string ID format
-                std::cout << formatJsonRpcResponseStringId(result, *stringId) << "\n";
+                std::cout << formatJsonRpcResponseStringId(result, *stringId);
             } else {
-                std::cout << formatJsonRpcResponse(result, intId) << "\n";
+                std::cout << formatJsonRpcResponse(result, intId);
             }
+            std::cout.flush();
         } catch (const std::exception& e) {
             if (stringId) {
-                std::cout << formatJsonRpcErrorStringId(-32603, e.what(), *stringId) << "\n";
+                std::cout << formatJsonRpcErrorStringId(-32603, e.what(), *stringId);
             } else {
-                std::cout << formatJsonRpcError(-32603, e.what(), intId) << "\n";
+                std::cout << formatJsonRpcError(-32603, e.what(), intId);
             }
+            std::cout.flush();
         }
     } else {
         handleNotification(method, params);
     }
 }
 
+// Helper function to send a JSON-RPC error response for malformed requests
+static void sendMalformedJsonResponse(const std::string& errorMsg) {
+    auto obj = json::makeObject();
+    json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
+    
+    auto error = json::makeObject();
+    json::objectSet(error, "code", JsonValue(static_cast<double>(-32700)));  // Parse error
+    json::objectSet(error, "message", JsonValue(errorMsg));
+    json::objectSet(obj, "error", error);
+    
+    std::string body = toJson(obj);
+    std::cout << "Content-Length: " << body.size() << "\r\n\r\n" << body;
+    std::cout.flush();
+}
+
 int LanguageServer::run() {
     std::string buffer;
-    std::string line;
     
-    while (std::getline(std::cin, line)) {
-        buffer += line;
-        buffer += '\n';
+    // Set stdin to binary mode to read exact bytes
+    std::cin >> std::noskipws;
+    
+    while (true) {
+        // Read headers
+        std::string headers;
+        char ch;
         
-        if (buffer.find("Content-Length:") != std::string::npos) {
-            size_t headerEnd = buffer.find("\r\n\r\n");
-            if (headerEnd != std::string::npos) {
-                size_t contentLengthStart = buffer.find("Content-Length:") + 16;
-                size_t contentLengthEnd = buffer.find("\r\n", contentLengthStart);
-                int contentLength = std::stoi(buffer.substr(contentLengthStart, contentLengthEnd - contentLengthStart));
-                
-                size_t bodyStart = headerEnd + 4;
-                if (buffer.size() >= bodyStart + contentLength) {
-                    std::string body = buffer.substr(bodyStart, contentLength);
-                    buffer = buffer.substr(bodyStart + contentLength);
-                    
-                    try {
-                        auto json = parseJson(body);
-                        handleMessage(json);
-                    } catch (const std::exception& e) {
-                        std::cerr << "LSP error: " << e.what() << std::endl;
-                    }
-                }
+        // Read until we find the end of headers (blank line)
+        while (std::cin.get(ch)) {
+            headers += ch;
+            if (headers.size() >= 4 && 
+                headers.substr(headers.size() - 4) == "\r\n\r\n") {
+                break;
             }
-        } else {
-            try {
-                auto json = parseJson(buffer);
+        }
+        
+        if (headers.empty() && std::cin.eof()) {
+            break;
+        }
+        
+        // Parse Content-Length
+        size_t contentLength = 0;
+        size_t pos = headers.find("Content-Length:");
+        if (pos != std::string::npos) {
+            pos += 15;  // Length of "Content-Length:"
+            // Skip whitespace
+            while (pos < headers.size() && (headers[pos] == ' ' || headers[pos] == '\t')) pos++;
+            // Read digits
+            size_t endPos = pos;
+            while (endPos < headers.size() && headers[endPos] >= '0' && headers[endPos] <= '9') {
+                endPos++;
+            }
+            if (endPos > pos) {
+                contentLength = std::stoul(headers.substr(pos, endPos - pos));
+            }
+        }
+        
+        if (contentLength == 0) {
+            // Try to parse as a raw JSON message (for testing without headers)
+            if (!buffer.empty()) {
+                try {
+                    auto json = parseJson(buffer);
+                    handleMessage(json);
+                } catch (const std::exception& e) {
+                    sendMalformedJsonResponse(e.what());
+                }
                 buffer.clear();
-                handleMessage(json);
-            } catch (...) {}
+            }
+            continue;
+        }
+        
+        // Read exactly contentLength bytes
+        std::string body;
+        body.reserve(contentLength);
+        while (body.size() < contentLength) {
+            if (!std::cin.get(ch)) {
+                break;
+            }
+            body += ch;
+        }
+        
+        // Process the message
+        try {
+            auto json = parseJson(body);
+            handleMessage(json);
+            std::cout.flush();
+        } catch (const std::exception& e) {
+            sendMalformedJsonResponse(e.what());
         }
     }
     
