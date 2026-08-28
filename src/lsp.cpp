@@ -99,33 +99,35 @@ std::string parseJsonString(const std::string& json, std::size_t& pos) {
                         char32_t codePoint = static_cast<char32_t>(std::stoul(hex, nullptr, 16));
                         pos += 4;
                         
-                        // Validate: code point must not be a surrogate
-                        if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
-                            throw std::runtime_error("invalid Unicode surrogate in \\u escape");
-                        }
-                        
-                        // Check for surrogate pair
+                        // First check for surrogate PAIR: if high surrogate, look for low surrogate
                         if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
-                            // High surrogate, expect \uXXXX low surrogate
-                            if (pos + 6 < json.size() && json[pos + 1] == '\\' && json[pos + 2] == 'u') {
-                                // Validate low surrogate hex
-                                for (int i = 3; i <= 6; i++) {
+                            // High surrogate (0xD800-0xDBFF), expect \uXXXX low surrogate
+                            if (pos + 6 < json.size() && json[pos] == '\\' && json[pos + 1] == 'u') {
+                                // Validate low surrogate hex digits
+                                for (int i = 2; i <= 5; i++) {
                                     char c = json[pos + i];
                                     if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
                                         throw std::runtime_error("invalid low surrogate escape");
                                     }
                                 }
-                                std::string lowHex = json.substr(pos + 3, 4);
+                                std::string lowHex = json.substr(pos + 2, 4);
                                 char32_t lowSurrogate = static_cast<char32_t>(std::stoul(lowHex, nullptr, 16));
                                 if (lowSurrogate >= 0xDC00 && lowSurrogate <= 0xDFFF) {
+                                    // Valid pair - decode to actual code point
                                     codePoint = decodeSurrogatePair(static_cast<char16_t>(codePoint), static_cast<char16_t>(lowSurrogate));
                                     pos += 6;
                                 } else {
-                                    throw std::runtime_error("high surrogate without valid low surrogate");
+                                    throw std::runtime_error("high surrogate without valid low surrogate (DC00-DFFF)");
                                 }
                             } else {
-                                throw std::runtime_error("high surrogate without low surrogate");
+                                throw std::runtime_error("unpaired high surrogate without following \\uXXXX");
                             }
+                        } else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF) {
+                            // Low surrogate without preceding high surrogate - invalid
+                            throw std::runtime_error("unpaired low surrogate");
+                        } else if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+                            // This shouldn't be reached due to above checks, but safety net
+                            throw std::runtime_error("invalid Unicode surrogate");
                         }
                         
                         // Validate final code point is in valid Unicode range
@@ -551,7 +553,22 @@ void LanguageServer::openDocument(const std::string& uri, const std::string& tex
     doc.path = uriToPath(uri);
     doc.text = text;
     doc.version = version;
-    doc.diagnostics = diagnoseDocument(doc);
+    
+    // Install the document FIRST (before diagnostics)
+    openDocuments_[uri] = doc;
+    
+    // Invalidate parse caches for this document
+    parsedPrograms_.erase(uri);
+    diagnosticsCache_.erase(uri);
+    
+    // Use compile-based diagnostics if workspace is available
+    if (workspaceRoot_) {
+        doc.diagnostics = diagnoseDocumentWithCompile(doc);
+    } else {
+        doc.diagnostics = diagnoseDocument(doc);
+    }
+    
+    // Update the stored document with diagnostics
     openDocuments_[uri] = doc;
     publishDiagnostics(uri, doc.diagnostics);
 }
@@ -559,9 +576,20 @@ void LanguageServer::openDocument(const std::string& uri, const std::string& tex
 void LanguageServer::updateDocument(const std::string& uri, const std::string& text, int version) {
     auto it = openDocuments_.find(uri);
     if (it != openDocuments_.end()) {
+        // Update the document text first
         it->second.text = text;
         it->second.version = version;
-        it->second.diagnostics = diagnoseDocument(it->second);
+        
+        // Invalidate parse caches for this document
+        parsedPrograms_.erase(uri);
+        diagnosticsCache_.erase(uri);
+        
+        // Use compile-based diagnostics if workspace is available
+        if (workspaceRoot_) {
+            it->second.diagnostics = diagnoseDocumentWithCompile(it->second);
+        } else {
+            it->second.diagnostics = diagnoseDocument(it->second);
+        }
         publishDiagnostics(uri, it->second.diagnostics);
     }
 }
@@ -575,6 +603,9 @@ void LanguageServer::saveDocument(const std::string& uri) {
 }
 
 void LanguageServer::closeDocument(const std::string& uri) {
+    // Invalidate caches for this document
+    parsedPrograms_.erase(uri);
+    diagnosticsCache_.erase(uri);
     openDocuments_.erase(uri);
 }
 
@@ -966,6 +997,104 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc
     return diagnostics;
 }
 
+SourceProvider LanguageServer::createSourceProvider() const {
+    // Create a source provider that checks open documents first before reading from disk
+    return [this](const std::filesystem::path& path) -> std::optional<std::string> {
+        // Convert path to URI and check if document is open
+        std::string uri = pathToUri(path);
+        auto it = openDocuments_.find(uri);
+        if (it != openDocuments_.end()) {
+            return it->second.text;
+        }
+        // Not in overlay, return nullopt to fall back to disk
+        return std::nullopt;
+    };
+}
+
+std::vector<Diagnostic> LanguageServer::diagnoseDocumentWithCompile(const OpenDocument& doc) {
+    std::vector<Diagnostic> diagnostics;
+    
+    if (doc.text.empty()) return diagnostics;
+    
+    // If we have a workspace root, use compile_file with the source provider
+    // to get proper module/package graph diagnostics
+    if (workspaceRoot_) {
+        try {
+            auto sourceProvider = createSourceProvider();
+            
+            // Try to compile the document using the sovereign module system
+            // This will catch module/import/package errors
+            Chunk chunk = compile_file(doc.path, registry_, *workspaceRoot_, sourceProvider);
+            
+            // If we get here, compilation succeeded without errors
+            // The chunk contains the compiled bytecode
+            
+        } catch (const std::exception& e) {
+            std::string errorMsg = e.what();
+            std::size_t line = 1;
+            std::size_t column = 1;
+            
+            // Try to extract line and column from error message
+            std::size_t linePos = errorMsg.find("line ");
+            if (linePos != std::string::npos) {
+                try {
+                    std::string numStr = errorMsg.substr(linePos + 5);
+                    std::size_t endPos = numStr.find_first_not_of("0123456789");
+                    if (endPos != std::string::npos) {
+                        line = std::stoul(numStr.substr(0, endPos));
+                    } else {
+                        line = std::stoul(numStr);
+                    }
+                } catch (...) {}
+            }
+            
+            // Try to find column info
+            std::size_t colPos = errorMsg.find("column ");
+            if (colPos != std::string::npos) {
+                try {
+                    std::string numStr = errorMsg.substr(colPos + 7);
+                    std::size_t endPos = numStr.find_first_not_of("0123456789");
+                    if (endPos != std::string::npos) {
+                        column = std::stoul(numStr.substr(0, endPos));
+                    } else {
+                        column = std::stoul(numStr);
+                    }
+                } catch (...) {}
+            }
+            
+            // Try to find token/emoji info
+            std::size_t emojiPos = errorMsg.find('\'');
+            std::string tokenName;
+            if (emojiPos != std::string::npos) {
+                auto endEmojiPos = errorMsg.find('\'', emojiPos + 1);
+                if (endEmojiPos != std::string::npos) {
+                    tokenName = errorMsg.substr(emojiPos + 1, endEmojiPos - emojiPos - 1);
+                }
+            }
+            
+            Position startPos;
+            startPos.line = static_cast<std::uint32_t>(line > 0 ? line - 1 : 0);
+            startPos.character = static_cast<std::uint32_t>(column > 0 ? column - 1 : 0);
+            
+            // Estimate end position
+            Position endPos = startPos;
+            endPos.character = startPos.character + (tokenName.empty() ? 10 : tokenName.length());
+            
+            Diagnostic diag;
+            diag.range = {startPos, endPos};
+            diag.severity = 1;  // Error
+            diag.message = errorMsg;
+            diag.source = "emojineer";
+            diagnostics.push_back(diag);
+        }
+    } else {
+        // No workspace root - fall back to simple diagnostics
+        return diagnoseDocument(doc);
+    }
+    
+    return diagnostics;
+}
+
 void LanguageServer::publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics) {
     auto params = json::makeObject();
     json::objectSet(params, "uri", JsonValue(uri));
@@ -1189,28 +1318,45 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
         Lexer lexer(doc->text, registry_);
         auto tokens = lexer.tokenize();
         
+        // Find the token at the exact requested position
+        // Convert LSP UTF-16 position to UTF-8 offset for comparison
+        auto utf8Offset = utf16ToUtf8(doc->text, pos.line, pos.character);
+        if (!utf8Offset) return std::nullopt;
+        
         for (const auto& token : tokens) {
             if (token.kind == TokenKind::Eof) continue;
             
+            // Check if this token contains the requested position
+            // token.line is 1-indexed, token.column is 1-indexed
+            // We need to check if the position falls within this token's range
             if (token.line == pos.line + 1) {
-                Hover hover;
-                hover.contents = MarkupContent{"markdown", ""};
+                // Get token's UTF-8 start position
+                auto tokenStartPos = utf8ToUtf16(doc->text, token.byte_offset);
+                auto tokenEndPos = utf8ToUtf16(doc->text, token.byte_offset + token.lexeme.size());
                 
-                const auto& defs = registry_.definitions();
-                for (const auto& def : defs) {
-                    if (def.kind == token.kind) {
-                        hover.contents->value = "**" + def.alias + "**\n\n" + def.description;
+                // Check if requested position is within this token's range
+                // Position is inclusive at start, exclusive at end
+                if (pos.character >= tokenStartPos.character && 
+                    pos.character < tokenEndPos.character) {
+                    Hover hover;
+                    hover.contents = MarkupContent{"markdown", ""};
+                    
+                    const auto& defs = registry_.definitions();
+                    for (const auto& def : defs) {
+                        if (def.kind == token.kind) {
+                            hover.contents->value = "**" + def.alias + "**\n\n" + def.description;
+                            return hover;
+                        }
+                    }
+                    
+                    if (token.kind == TokenKind::Identifier) {
+                        hover.contents->value = "Identifier: `" + token.lexeme + "`";
                         return hover;
                     }
-                }
-                
-                if (token.kind == TokenKind::Identifier) {
-                    hover.contents->value = "Identifier: `" + token.lexeme + "`";
+                    
+                    hover.contents->value = "Token: " + token_kind_name(token.kind);
                     return hover;
                 }
-                
-                hover.contents->value = "Token: " + token_kind_name(token.kind);
-                return hover;
             }
         }
     } catch (...) {}
@@ -1219,11 +1365,15 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
 }
 
 JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
+    // Extract the text document URI from params
+    auto textDoc = getJsonObject(params, "textDocument");
+    std::string uri = getJsonString(textDoc);
+    
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t char_ = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
     
-    auto completions = getCompletions("", Position{line, char_});
+    auto completions = getCompletions(uri, Position{line, char_});
     
     auto result = json::makeObject();
     json::objectSet(result, "isIncomplete", JsonValue(false));
@@ -1747,20 +1897,36 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
         auto result = json::makeArray();
         auto edit = json::makeObject();
         
-        // Full range from start to end
+        // Full range from start to actual end of document
         auto range = json::makeObject();
         auto start = json::makeObject();
         json::objectSet(start, "line", JsonValue(0.0));
         json::objectSet(start, "character", JsonValue(0.0));
         
         auto end = json::makeObject();
-        // Count lines in original document
+        
+        // Calculate actual end position: find last line and its length
         std::size_t lastLine = 0;
-        for (char c : doc->text) {
-            if (c == '\n') lastLine++;
+        std::size_t lastLineStart = 0;
+        for (std::size_t i = 0; i < doc->text.size(); i++) {
+            if (doc->text[i] == '\n') {
+                lastLine++;
+                lastLineStart = i + 1;
+            }
         }
-        json::objectSet(end, "line", JsonValue(static_cast<double>(lastLine)));
-        json::objectSet(end, "character", JsonValue(0.0));
+        
+        // Calculate character position at end (UTF-16 column)
+        // If document is empty, end is at 0,0
+        if (doc->text.empty()) {
+            json::objectSet(end, "line", JsonValue(0.0));
+            json::objectSet(end, "character", JsonValue(0.0));
+        } else {
+            json::objectSet(end, "line", JsonValue(static_cast<double>(lastLine)));
+            // Calculate UTF-16 position at end of document
+            std::string lastLineContent = doc->text.substr(lastLineStart);
+            Position endPos = utf8ToUtf16(doc->text, doc->text.size());
+            json::objectSet(end, "character", JsonValue(static_cast<double>(endPos.character)));
+        }
         
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
@@ -1776,6 +1942,24 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
 }
 
 JsonValue LanguageServer::handleRangeFormatting(const JsonValue& params) {
+    // Extract the text document and range
+    auto textDoc = getJsonObject(params, "textDocument");
+    std::string uri = getJsonString(textDoc);
+    
+    auto doc = getDocument(uri);
+    if (!doc) return json::makeArray();
+    
+    // Check if range is provided
+    auto rangeObj = getJsonObject(params, "range");
+    if (rangeObj.isNull()) {
+        // No range provided, fall back to full document formatting
+        return handleFormatting(params);
+    }
+    
+    // Currently, we only support full document formatting
+    // Range formatting would require the formatter to support partial formatting
+    // Since the canonical formatter works on the full document, we fall back to full doc
+    // TODO: Implement true range formatting using formatter's internal APIs
     return handleFormatting(params);
 }
 

@@ -70,9 +70,20 @@ ast::Program parse_text(const std::string& source,
     }
 }
 
+// Parse source from a path, optionally using a SourceProvider for in-memory overlays.
+// If source_provider is provided and returns a value, use that instead of reading from disk.
 ast::Program parse_source(const std::filesystem::path& path,
                           const CustomEmojiRegistry& registry,
-                          const std::string& identity) {
+                          const std::string& identity,
+                          SourceProvider source_provider = {}) {
+    // First check if the source provider has the content
+    if (source_provider) {
+        auto overlay = source_provider(path);
+        if (overlay) {
+            return parse_text(*overlay, registry, identity);
+        }
+    }
+    // Fall back to reading from disk
     return parse_text(read_text(path), registry, identity);
 }
 
@@ -385,10 +396,12 @@ class ModuleLinker {
 public:
     ModuleLinker(std::filesystem::path root,
                  CustomEmojiRegistry registry,
-                 std::optional<PackageGraph> package_graph)
+                 std::optional<PackageGraph> package_graph,
+                 SourceProvider source_provider = {})
         : root_(std::move(root)),
           registry_(std::move(registry)),
-          package_graph_(std::move(package_graph)) {}
+          package_graph_(std::move(package_graph)),
+          source_provider_(std::move(source_provider)) {}
 
     Chunk compile(const std::filesystem::path& entry) {
         std::vector<std::string> stack;
@@ -665,7 +678,7 @@ private:
         unit.package_root = package_root(package_name);
         unit.package_name = package_name;
         unit.identity = identity;
-        unit.program = parse_source(canonical, registry_, identity);
+        unit.program = parse_source(canonical, registry_, identity, source_provider_);
         analyze_unit(unit);
         register_unit(std::move(unit));
 
@@ -745,6 +758,7 @@ private:
     std::filesystem::path root_;
     CustomEmojiRegistry registry_;
     std::optional<PackageGraph> package_graph_;
+    SourceProvider source_provider_;
     std::unordered_map<std::string, ModuleUnit> units_;
     std::unordered_map<std::string, VisitState> states_;
     std::unordered_map<std::string, std::string> module_names_;
@@ -755,7 +769,8 @@ private:
 
 Chunk compile_file(const std::filesystem::path& raw_entry,
                    CustomEmojiRegistry registry,
-                   std::filesystem::path raw_root) {
+                   std::filesystem::path raw_root,
+                   SourceProvider source_provider) {
     if (!std::filesystem::exists(raw_entry)) {
         throw std::runtime_error("entry source does not exist: " + raw_entry.string());
     }
@@ -771,7 +786,7 @@ Chunk compile_file(const std::filesystem::path& raw_entry,
     if (!within(root, entry)) throw std::runtime_error("entry source escapes the module root");
 
     const std::string identity = identity_for(root, entry);
-    ast::Program entry_program = parse_source(entry, registry, identity);
+    ast::Program entry_program = parse_source(entry, registry, identity, source_provider);
     if (!has_module_syntax(entry_program)) {
         Compiler compiler;
         return compiler.compile(entry_program);
@@ -782,7 +797,7 @@ Chunk compile_file(const std::filesystem::path& raw_entry,
         package_graph = resolve_package_graph(root);
     }
 
-    ModuleLinker linker(root, std::move(registry), std::move(package_graph));
+    ModuleLinker linker(root, std::move(registry), std::move(package_graph), std::move(source_provider));
     return linker.compile(entry);
 }
 

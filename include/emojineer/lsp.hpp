@@ -342,7 +342,11 @@ private:
 
     // Diagnostics
     std::vector<Diagnostic> diagnoseDocument(const OpenDocument& doc);
+    std::vector<Diagnostic> diagnoseDocumentWithCompile(const OpenDocument& doc);
     void publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics);
+    
+    // Create a SourceProvider that checks open documents first
+    SourceProvider createSourceProvider() const;
 
     // Workspace management
     void discoverWorkspace(const std::filesystem::path& root);
