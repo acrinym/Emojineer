@@ -81,7 +81,7 @@ std::string package_hash(const std::filesystem::path& root,
 
     std::string framed;
     append_field(framed, "EMOJINEER-PACKAGE-v1");
-    append_field(framed, canonical_manifest_text(manifest, false));
+    append_field(framed, canonical_manifest_text(manifest));
     for (const auto& [path, source] : sources) {
         append_field(framed, path);
         append_field(framed, source);
@@ -113,18 +113,12 @@ std::string registry_package_hash(const std::filesystem::path& root,
 
     std::string framed;
     append_field(framed, "EMOJINEER-PACKAGE-v1");
-    append_field(framed, canonical_manifest_text(manifest, false));
+    append_field(framed, canonical_manifest_text(manifest));
     for (const auto& [path, source] : sources) {
         append_field(framed, path);
         append_field(framed, source);
     }
     return sha256_hex(framed);
-}
-
-// Public API: compute registry package hash using production authority
-std::string compute_registry_package_hash(const std::filesystem::path& package_root,
-                                         const ProjectManifest& manifest) {
-    return registry_package_hash(package_root, manifest);
 }
 
 class Resolver {
@@ -485,6 +479,11 @@ private:
 
 } // namespace
 
+std::string compute_registry_package_hash(const std::filesystem::path& package_root,
+                                          const ProjectManifest& manifest) {
+    return registry_package_hash(package_root, manifest);
+}
+
 const ResolvedPackage* PackageGraph::find(const std::string& name) const {
     auto it = std::lower_bound(packages.begin(), packages.end(), name,
                                [](const ResolvedPackage& package, const std::string& key) {
@@ -517,14 +516,31 @@ PackageGraph resolve_package_graph(const std::filesystem::path& root,
     std::filesystem::path effective_store_root = store_root;
     
     if (offline || !store_root.empty()) {
-        auto lock_path = root / "emojineer.lock";
-        if (std::filesystem::exists(lock_path)) {
-            lock_storage = load_project_lock(lock_path);
+        const auto lock_path = root / "emojineer.lock";
+        const bool root_has_registry_dependency = std::any_of(
+            root_manifest.dependencies.begin(), root_manifest.dependencies.end(),
+            [](const ProjectDependency& dependency) {
+                return dependency.kind == DependencyKind::Registry;
+            });
+
+        if (!std::filesystem::exists(lock_path)) {
+            if (offline && root_has_registry_dependency) {
+                throw std::runtime_error(
+                    "offline package resolution requires emojineer.lock for registry dependencies");
+            }
+        } else {
+            try {
+                lock_storage = load_project_lock(lock_path);
+            } catch (const std::exception& error) {
+                throw std::runtime_error(
+                    std::string("cannot load emojineer.lock for package resolution: ") + error.what());
+            }
+            if (is_lock_stale(root, root_manifest, lock_storage)) {
+                throw std::runtime_error("emojineer.lock is stale; run 'emji sync'");
+            }
             lock = &lock_storage;
-            
-            // Use store root from lock if not explicitly provided
             if (effective_store_root.empty()) {
-                effective_store_root = root / ".emojineer" / "packages";
+                effective_store_root = package_store_root(root);
             }
         }
     }

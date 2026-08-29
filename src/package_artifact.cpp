@@ -146,10 +146,51 @@ void validate_canonical_manifest(const PackageArtifact& artifact) {
     if (!artifact.manifest.starts_with(prefix)) {
         throw std::runtime_error("package artifact metadata does not match its canonical manifest");
     }
+
     std::string_view rest{artifact.manifest};
     rest.remove_prefix(prefix.size());
     if (rest.empty()) return;
+
+    constexpr std::string_view registry_header = "\n[registries]\n";
     constexpr std::string_view dependency_header = "\n[dependencies]\n";
+    std::set<std::string> registry_aliases;
+
+    if (rest.starts_with(registry_header)) {
+        rest.remove_prefix(registry_header.size());
+        std::string previous_alias;
+        while (!rest.empty() && !rest.starts_with(dependency_header)) {
+            const auto newline = rest.find('\n');
+            if (newline == std::string_view::npos) {
+                throw std::runtime_error("package artifact manifest must end with a newline");
+            }
+            const auto line = rest.substr(0, newline);
+            if (line.empty()) {
+                throw std::runtime_error("package artifact manifest has an empty registries section");
+            }
+            rest.remove_prefix(newline + 1);
+            const auto separator = line.find(" = \"");
+            if (separator == std::string_view::npos || line.size() < separator + 5 || line.back() != '"') {
+                throw std::runtime_error("package artifact registry manifest line is not canonical");
+            }
+            const std::string alias(line.substr(0, separator));
+            const std::string endpoint(line.substr(separator + 4, line.size() - separator - 5));
+            validate_name(alias);
+            if (endpoint.empty()) {
+                throw std::runtime_error("package artifact registry endpoint may not be empty");
+            }
+            (void)parse_registry_endpoint(endpoint);
+            if (!registry_aliases.insert(alias).second ||
+                (!previous_alias.empty() && alias <= previous_alias)) {
+                throw std::runtime_error("package artifact registry manifest is not canonically ordered");
+            }
+            previous_alias = alias;
+        }
+        if (registry_aliases.empty()) {
+            throw std::runtime_error("package artifact manifest has an empty registries section");
+        }
+        if (rest.empty()) return;
+    }
+
     if (!rest.starts_with(dependency_header)) {
         throw std::runtime_error("package artifact manifest is not canonical");
     }
@@ -172,20 +213,21 @@ void validate_canonical_manifest(const PackageArtifact& artifact) {
         const std::string name(line.substr(0, separator));
         const std::string value(line.substr(separator + 4, line.size() - separator - 5));
         validate_name(name);
-        
-        // Registry dependencies have format "registry:alias:requirement" and don't need path validation
         if (value.rfind("registry:", 0) == 0) {
-            // Validate registry dependency format: registry:alias:requirement
-            // Must have at least one more colon after "registry:"
             const auto second_colon = value.find(':', 9);
-            if (second_colon == std::string::npos || second_colon == value.size() - 1) {
-                throw std::runtime_error("package artifact dependency '" + name + "' has invalid registry format");
+            if (second_colon == std::string::npos || second_colon == 9 ||
+                second_colon == value.size() - 1) {
+                throw std::runtime_error("package artifact dependency '" + name +
+                                         "' has invalid registry format");
+            }
+            const std::string alias = value.substr(9, second_colon - 9);
+            if (!registry_aliases.contains(alias)) {
+                throw std::runtime_error("package artifact dependency '" + name +
+                                         "' references undeclared registry '" + alias + "'");
             }
         } else {
-            // Path dependency needs path validation
             validate_dependency_path(value, name);
         }
-        
         if (name == artifact.name) throw std::runtime_error("package artifact may not depend on itself");
         if (!names.insert(name).second || (!previous_name.empty() && name <= previous_name)) {
             throw std::runtime_error("package artifact dependency manifest is not canonically ordered");
@@ -275,7 +317,7 @@ std::string build_package_artifact_bytes(const std::filesystem::path& raw_root) 
     if (std::none_of(files.begin(), files.end(), [&](const auto& file) { return file.path == entry; })) {
         throw std::runtime_error("package artifact entry source is not package-owned or does not exist: " + entry);
     }
-    const auto canonical_manifest = canonical_manifest_text(manifest, false);
+    const auto canonical_manifest = canonical_manifest_text(manifest);
     const auto computed_content = content_identity(canonical_manifest, files);
     if (computed_content != resolved->content_sha256) {
         throw std::runtime_error("package artifact content identity diverges from PackageGraph");

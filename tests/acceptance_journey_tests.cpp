@@ -80,62 +80,93 @@ void test_publish_library_versions() {
     std::cout << "  ✅ Published multiple library versions\n";
 }
 
-// Test 2: Create and publish a second library that depends on the first
+// Test 2: Registry dependencies survive publication/materialization and remain sovereign offline
 void test_publish_library_with_dependency() {
-    std::cout << "Test: publish library with registry dependency...\n";
-    
-    // Create the base registry
+    std::cout << "Test: registry dependency artifact round-trip and offline ownership...\n";
     const auto registry_root = temp_root("registry-dep");
     std::filesystem::create_directories(registry_root);
     emojineer::initialize_file_registry(registry_root, "emojineer.test");
-    auto endpoint = emojineer::parse_registry_endpoint(registry_root.string());
-    
-    // Create and publish base library (mathkit)
-    const auto mathkit_root = temp_root("mathkit");
-    std::filesystem::create_directories(mathkit_root);
-    write_text(mathkit_root / "emojineer.toml",
-        "[package]\n"
-        "name = \"mathkit\"\n"
-        "version = \"1.0.0\"\n"
-        "entry = \"src/math.emoji\"\n");
-    std::filesystem::create_directories(mathkit_root / "src");
-    write_text(mathkit_root / "src/math.emoji", "📝 Math library\n");
-    emojineer::publish_package_to_registry(mathkit_root, endpoint);
-    
-    // Create and publish dependent library (calckit depends on mathkit)
-    const auto calckit_root = temp_root("calckit");
-    std::filesystem::create_directories(calckit_root);
-    write_text(calckit_root / "emojineer.toml",
-        "[package]\n"
-        "name = \"calckit\"\n"
-        "version = \"2.0.0\"\n"
-        "entry = \"src/calc.emoji\"\n"
-        "\n"
-        "[registries]\n"
-        "origin = \"" + registry_root.string() + "\"\n"
-        "\n"
-        "[dependencies]\n"
-        "mathkit = \"registry:origin:^1.0.0\"\n");
-    std::filesystem::create_directories(calckit_root / "src");
-    write_text(calckit_root / "src/calc.emoji", "📝 Calc library depends on mathkit\n");
-    
-    // This should fail because calckit has a path dependency on mathkit embedded
-    // but the registry doesn't know about it - this tests the path dependency rejection
-    try {
-        emojineer::publish_package_to_registry(calckit_root, endpoint);
-        // If it publishes, check the dependency was recorded
-        auto index = emojineer::load_registry_package_index(endpoint, "calckit");
-        require(!index.versions.empty(), "calckit should be published");
-    } catch (const std::exception& e) {
-        // Expected: path dependencies in registry packages should be rejected
+    const auto endpoint = emojineer::parse_registry_endpoint(registry_root.string());
+
+    const auto lib_a_root = temp_root("lib-a");
+    std::filesystem::create_directories(lib_a_root / "src");
+    write_text(lib_a_root / "emojineer.toml",
+        "[package]\nname = \"lib-a\"\nversion = \"1.0.0\"\nentry = \"src/main.emoji\"\n");
+    write_text(lib_a_root / "src/main.emoji",
+        "🧩 🌊\n🐍 🌟 🔢 🟰 9\n📤 🌟\n");
+    const auto published_a = emojineer::publish_package_to_registry(lib_a_root, endpoint);
+    require(published_a.record.version == "1.0.0", "lib-a publication must succeed");
+
+    const auto lib_b_root = temp_root("lib-b");
+    std::filesystem::create_directories(lib_b_root / "src");
+    write_text(lib_b_root / "emojineer.toml",
+        "[package]\nname = \"lib-b\"\nversion = \"1.0.0\"\nentry = \"src/main.emoji\"\n"
+        "\n[registries]\norigin = \"" + registry_root.string() + "\"\n"
+        "\n[dependencies]\nlib-a = \"registry:origin:^1.0.0\"\n");
+    write_text(lib_b_root / "src/main.emoji",
+        "🧩 🌲\n🔗 📜pkg:lib-a/src/main.emoji📜\n"
+        "🛠️ 🍏 🫴 🤲\n📦 🌟\n🏁\n📤 🍏\n");
+
+    const auto artifact = emojineer::parse_package_artifact(
+        emojineer::build_package_artifact_bytes(lib_b_root));
+    require(artifact.manifest.find("[registries]") != std::string::npos,
+            "registry package artifact must preserve [registries]");
+    require(artifact.manifest.find("lib-a = \"registry:origin:^1.0.0\"") != std::string::npos,
+            "registry dependency coordinate must round-trip in the artifact");
+    const auto published_b = emojineer::publish_package_to_registry(lib_b_root, endpoint);
+    require(published_b.record.version == "1.0.0", "lib-b publication must succeed");
+    require(!emojineer::load_registry_package_index(endpoint, "lib-b").versions.empty(),
+            "published lib-b must be discoverable");
+
+    const auto app_root = temp_root("app-registry-chain");
+    emojineer::initialize_project(app_root, "app");
+    emojineer::add_project_registry_dependency(
+        app_root, "lib-b", "^1.0.0", registry_root.string(), "origin");
+    emojineer::sync_project(app_root, false);
+
+    const auto app_manifest = emojineer::load_project_manifest(app_root / "emojineer.toml");
+    const auto app_lock = emojineer::load_project_lock(app_root / "emojineer.lock");
+    require(!emojineer::is_lock_stale(app_root, app_manifest, app_lock),
+            "freshly synced registry lock must not be stale");
+    require(app_lock.registries.size() == 1 && app_lock.registries.front().alias == "origin",
+            "lock must retain the concrete registry authority");
+    bool saw_b = false;
+    bool saw_a = false;
+    for (const auto& dep : app_lock.dependencies) {
+        if (dep.name == "lib-b") {
+            saw_b = dep.source == emojineer::LockSourceKind::Registry && dep.store_path.has_value();
+        } else if (dep.name == "lib-a") {
+            saw_a = dep.source == emojineer::LockSourceKind::Registry && dep.store_path.has_value();
+        }
     }
-    
-    // Cleanup
-    std::filesystem::remove_all(mathkit_root);
-    std::filesystem::remove_all(calckit_root);
+    require(saw_b && saw_a,
+            "lock must materialize direct lib-b and transitive lib-a as registry packages");
+    const auto offline_graph = emojineer::resolve_package_graph(
+        app_root, app_manifest, emojineer::package_store_root(app_root), true);
+    require(offline_graph.find("lib-b") != nullptr && offline_graph.find("lib-a") != nullptr,
+            "offline graph must contain direct lib-b and its owned transitive lib-a");
+
     std::filesystem::remove_all(registry_root);
-    
-    std::cout << "  ✅ Library with dependency publishing works\n";
+    write_text(app_root / "src/main.emoji",
+        "🧩 🚀\n🔗 📜pkg:lib-b/src/main.emoji📜\n📝 🍏 🫴 🤲\n");
+    (void)emojineer::compile_file(app_root / "src/main.emoji", {}, app_root);
+
+    write_text(app_root / "src/main.emoji",
+        "🧩 🚀\n🔗 📜pkg:lib-a/src/main.emoji📜\n");
+    bool transitive_rejected = false;
+    try {
+        (void)emojineer::compile_file(app_root / "src/main.emoji", {}, app_root);
+    } catch (const std::runtime_error& error) {
+        transitive_rejected = std::string(error.what()).find(
+            "does not declare direct dependency 'lib-a'") != std::string::npos;
+    }
+    require(transitive_rejected,
+            "root must reject ambient transitive lib-a with the direct-ownership diagnostic");
+
+    std::filesystem::remove_all(lib_a_root);
+    std::filesystem::remove_all(lib_b_root);
+    std::filesystem::remove_all(app_root);
+    std::cout << "  ✅ Registry artifact, offline direct dependency, and transitive ownership proven\n";
 }
 
 // Test 3: Initialize an application and add remote dependency

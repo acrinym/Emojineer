@@ -1,4 +1,5 @@
 #include "emojineer/project.hpp"
+#include "emojineer/registry_transport.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -24,6 +25,26 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     if (!output) throw std::runtime_error("cannot write project test file");
     output << text;
+}
+
+void refresh_project_test_lock_manifest_hash(const std::filesystem::path& root) {
+    const auto lock_path = root / "emojineer.lock";
+    if (!std::filesystem::exists(lock_path)) return;
+    const auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    const auto manifest_hash = emojineer::project_manifest_hash(manifest);
+    std::ifstream input(lock_path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot read project test lock");
+    std::string lock_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    const std::string prefix = "manifest_hash = \"";
+    const auto begin = lock_text.find(prefix);
+    if (begin == std::string::npos) throw std::runtime_error("project test lock is missing manifest_hash");
+    const auto value_begin = begin + prefix.size();
+    const auto value_end = lock_text.find('\"', value_begin);
+    if (value_end == std::string::npos) throw std::runtime_error("project test lock has malformed manifest_hash");
+    lock_text.replace(value_begin, value_end - value_begin, manifest_hash);
+    std::ofstream output(lock_path, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("cannot rewrite project test lock");
+    output << lock_text;
 }
 
 bool has_diagnostic(const std::vector<emojineer::ProjectDiagnostic>& diagnostics,
@@ -177,78 +198,47 @@ void test_absolute_dependency_path_rejected() {
 // Regression test: path dependency in registry package must be rejected in online mode
 void test_registry_path_dependency_rejected_online() {
     const auto root = temp_root("reg-path-dep-online");
-    const auto store_root = root / ".emojineer" / "packages";
+    const auto registry_root = root / "registry";
+    const auto package_root = root / "mylib";
+    const auto local_dep = package_root / "local-dep";
+    const auto app_root = root / "app";
+    const auto store_root = app_root / ".emojineer" / "packages";
     std::filesystem::remove_all(root);
 
-    emojineer::initialize_project(root, "app");
-    
-    // Create a local path dependency
-    const auto local_dep = root / "local-dep";
+    emojineer::initialize_file_registry(registry_root, "project-tests.local");
+    const auto endpoint = emojineer::parse_registry_endpoint(registry_root.string());
+
+    emojineer::initialize_project(package_root, "mylib");
     emojineer::initialize_project(local_dep, "local-dep");
-    
-    // Create materialized registry package that has a path dependency
-    std::filesystem::create_directories(store_root / "origin" / "mylib" / "1.0.0" / "abc123");
-    auto pkg_path = store_root / "origin" / "mylib" / "1.0.0" / "abc123";
-    
-    std::ofstream manifest_out(pkg_path / "emojineer.toml");
-    manifest_out << "[package]\n";
-    manifest_out << "name = \"mylib\"\n";
-    manifest_out << "version = \"1.0.0\"\n";
-    manifest_out << "entry = \"src/main.emoji\"\n";
-    // mylib incorrectly has a path dependency - this should be rejected
-    manifest_out << "\n[dependencies]\n";
-    manifest_out << "local-dep = \"../local-dep\"\n";
-    manifest_out.close();
-    
-    std::filesystem::create_directories(pkg_path / "src");
-    std::ofstream source_out(pkg_path / "src" / "main.emoji");
-    source_out << "📝 greeting = \"Hello\" 📤\n";
-    source_out.close();
-    
-    // Create lock file with the registry dependency
-    std::ofstream lock_out(root / "emojineer.lock");
-    lock_out << "lock_version = \"3\"\n";
-    lock_out << "manifest_hash = \"abc123def456\"\n";
-    lock_out << "\n";
-    lock_out << "[[registry]]\n";
-    lock_out << "alias = \"origin\"\n";
-    lock_out << "id = \"origin-id\"\n";
-    lock_out << "endpoint = \"https://registry.example.com\"\n";
-    lock_out << "\n";
-    lock_out << "[[dependency]]\n";
-    lock_out << "source = \"registry\"\n";
-    lock_out << "name = \"mylib\"\n";
-    lock_out << "version = \"1.0.0\"\n";
-    lock_out << "registry_alias = \"origin\"\n";
-    lock_out << "registry_id = \"origin-id\"\n";
-    lock_out << "registry_endpoint = \"https://registry.example.com\"\n";
-    lock_out << "requirement = \"^1.0.0\"\n";
-    lock_out << "artifact_sha256 = \"abc123\"\n";
-    lock_out << "store_path = \"" << pkg_path.generic_string() << "\"\n";
-    lock_out << "content_sha256 = \"def456\"\n";
-    lock_out.close();
-    
-    // Update manifest to include registry dependency
-    std::ofstream manifest_file(root / "emojineer.toml", std::ios::app);
-    manifest_file << "\n[registries]\n";
-    manifest_file << "origin = \"https://registry.example.com\"\n";
-    manifest_file << "\n[dependencies]\n";
-    manifest_file << "mylib = \"registry:origin:^1.0.0\"\n";
-    manifest_file.close();
-    
-    auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
-    
-    // This should throw because registry package has path dependency - ONLINE mode (offline=false)
+    auto package_manifest = emojineer::load_project_manifest(package_root / "emojineer.toml");
+    package_manifest.version = "1.0.0";
+    write_text(package_root / "emojineer.toml", emojineer::canonical_manifest_text(package_manifest));
+    emojineer::add_project_dependency(package_root, "local-dep", "local-dep");
+    (void)emojineer::publish_package_to_registry(package_root, endpoint);
+
+    emojineer::initialize_project(app_root, "app");
+    write_text(app_root / "emojineer.toml",
+               "[package]\n"
+               "name = \"app\"\n"
+               "version = \"0.1.0\"\n"
+               "entry = \"src/main.emoji\"\n"
+               "\n[registries]\n"
+               "origin = \"" + registry_root.string() + "\"\n"
+               "\n[dependencies]\n"
+               "mylib = \"registry:origin:^1.0.0\"\n");
+    const auto manifest = emojineer::load_project_manifest(app_root / "emojineer.toml");
+
     bool rejected = false;
     std::string error_msg;
     try {
-        auto resolved = emojineer::resolve_registry_dependencies(manifest, store_root, root, false);
+        (void)emojineer::resolve_registry_dependencies(manifest, store_root, app_root, false);
     } catch (const std::runtime_error& e) {
         rejected = std::string(e.what()).find("path dependency") != std::string::npos;
         error_msg = e.what();
     }
-    require(rejected, "registry package with path dependency should be rejected in ONLINE mode, got: " + error_msg);
-    
+    require(rejected,
+            "registry package with path dependency should be rejected in ONLINE mode, got: " + error_msg);
+
     std::filesystem::remove_all(root);
 }
 
@@ -315,6 +305,7 @@ void test_registry_path_dependency_rejected_offline() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_project_test_lock_manifest_hash(root);
     
     // This should throw because registry package has path dependency - OFFLINE mode (offline=true)
     bool rejected = false;
@@ -386,6 +377,7 @@ void test_corrupted_offline_materialization_fails() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_project_test_lock_manifest_hash(root);
     
     // This should throw because the materialized manifest is corrupted - OFFLINE mode
     bool failed = false;

@@ -48,7 +48,7 @@ template <class Fn>
 std::string expect_error(Fn&& fn, const std::string& needle) {
     try {
         fn();
-    } catch (const std::runtime_error& error) {
+    } catch (const std::exception& error) {
         const std::string message = error.what();
         require(message.find(needle) != std::string::npos,
                 "expected error containing '" + needle + "', got '" + message + "'");

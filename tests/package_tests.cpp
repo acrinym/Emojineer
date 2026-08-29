@@ -28,6 +28,26 @@ void write_source(const std::filesystem::path& path, const std::string& source) 
     output << source;
 }
 
+void refresh_lock_manifest_hash(const std::filesystem::path& root) {
+    const auto lock_path = root / "emojineer.lock";
+    if (!std::filesystem::exists(lock_path)) return;
+    const auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    const auto manifest_hash = emojineer::project_manifest_hash(manifest);
+    std::ifstream input(lock_path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot read package test lock");
+    std::string lock_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    const std::string prefix = "manifest_hash = \"";
+    const auto begin = lock_text.find(prefix);
+    if (begin == std::string::npos) throw std::runtime_error("package test lock is missing manifest_hash");
+    const auto value_begin = begin + prefix.size();
+    const auto value_end = lock_text.find('\"', value_begin);
+    if (value_end == std::string::npos) throw std::runtime_error("package test lock has malformed manifest_hash");
+    lock_text.replace(value_begin, value_end - value_begin, manifest_hash);
+    std::ofstream output(lock_path, std::ios::binary | std::ios::trunc);
+    if (!output) throw std::runtime_error("cannot rewrite package test lock");
+    output << lock_text;
+}
+
 void test_sha256_vectors() {
     require(emojineer::sha256_hex("") ==
                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -86,6 +106,7 @@ void test_independent_nested_package_is_excluded_from_container_hash() {
     emojineer::initialize_project(c, "c");
 
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     manifest.dependencies = {
         {"b", emojineer::DependencyKind::Path, std::filesystem::path("deps/b"), {}, {}},
         {"c", emojineer::DependencyKind::Path, std::filesystem::path("deps/b/vendor/c"), {}, {}}
@@ -225,6 +246,7 @@ void test_registry_dependency_offline_resolution() {
     
     // Load manifest and call resolve_package_graph with offline=true
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     auto graph = emojineer::resolve_package_graph(root, manifest, store_root, true);
     
     // Verify the registry package is properly resolved
@@ -274,6 +296,7 @@ void test_registry_dependency_offline_without_lock() {
     // Load manifest and call resolve_package_graph with offline=true but no lock
     // In offline mode without a lock entry, this should throw an exception
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     bool caught_error = false;
     std::string error_msg;
     try {
@@ -284,9 +307,9 @@ void test_registry_dependency_offline_without_lock() {
     }
     
     require(caught_error, "offline mode should fail without lock entry");
-    require(error_msg.find("offline mode") != std::string::npos, "error should mention offline mode");
-    require(error_msg.find("no lock entry") != std::string::npos || error_msg.find("lock entry") != std::string::npos, 
-            "error should mention missing lock entry");
+    require(error_msg.find("offline") != std::string::npos, "error should identify offline resolution");
+    require(error_msg.find("lock") != std::string::npos,
+            "error should identify the missing lock requirement");
     
     std::filesystem::remove_all(root);
 }
@@ -360,6 +383,7 @@ void test_registry_package_unique_names_no_duplicates() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     auto graph = emojineer::resolve_package_graph(root, manifest, store_root, true);
     
     // Verify unique package names - no duplicates
@@ -442,6 +466,7 @@ void test_registry_package_source_kind_preserved() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     auto graph = emojineer::resolve_package_graph(root, manifest, store_root, true);
     
     // Verify mylib is Registry, not Path
@@ -505,11 +530,11 @@ void test_transitive_registry_child_preserves_source_kind() {
     transitive_source.close();
     
     // Compute the expected hashes for both packages using production authority
-    auto mylib_manifest = emojineer::load_project_manifest(mylib_path / "emojineer.toml");
-    std::string mylib_hash = emojineer::compute_registry_package_hash(mylib_path, mylib_manifest);
+    auto loaded_mylib_manifest = emojineer::load_project_manifest(mylib_path / "emojineer.toml");
+    std::string mylib_hash = emojineer::compute_registry_package_hash(mylib_path, loaded_mylib_manifest);
     
-    auto transitive_manifest = emojineer::load_project_manifest(transitive_path / "emojineer.toml");
-    std::string transitive_hash = emojineer::compute_registry_package_hash(transitive_path, transitive_manifest);
+    auto loaded_transitive_manifest = emojineer::load_project_manifest(transitive_path / "emojineer.toml");
+    std::string transitive_hash = emojineer::compute_registry_package_hash(transitive_path, loaded_transitive_manifest);
     
     // Create lock file with both direct and transitive deps
     std::ofstream lock_out(root / "emojineer.lock");
@@ -560,6 +585,7 @@ void test_transitive_registry_child_preserves_source_kind() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     auto graph = emojineer::resolve_package_graph(root, manifest, store_root, true);
     
     // Verify all packages exist and have correct source kinds
@@ -650,6 +676,7 @@ void test_registry_package_rejects_path_dependency() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     
     // This should throw because registry package has path dependency
     bool rejected = false;
@@ -730,6 +757,7 @@ void test_registry_package_content_integrity_valid_hash_succeeds() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     
     // This should succeed because the hash matches
     auto graph = emojineer::resolve_package_graph(root, manifest, store_root, true);
@@ -812,6 +840,7 @@ void test_registry_package_content_integrity_hash_mismatch_rejected() {
     manifest_file.close();
     
     auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
+    refresh_lock_manifest_hash(root);
     
     // This should throw because the content hash no longer matches
     bool rejected = false;

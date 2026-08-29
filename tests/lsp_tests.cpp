@@ -385,7 +385,7 @@ void test_initialize_shutdown_exit() {
     }
     
     // Send initialize request
-    std::string params = R"({"processId":)" + std::to_string(getpid()) + R(,"rootUri":"file:///test","capabilities":{}})";
+    std::string params = "{\"processId\":" + std::to_string(getpid()) + ",\"rootUri\":\"file:///test\",\"capabilities\":{}}";
     std::string response = client.sendRequest("initialize", params);
     
     // Should get a response with result

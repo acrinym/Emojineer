@@ -795,6 +795,13 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
                             if (std::filesystem::exists(resolved_dep.store_path / "emojineer.toml")) {
                                 auto embedded_manifest = load_project_manifest(resolved_dep.store_path / "emojineer.toml");
                                 resolved_dep.dependencies = embedded_manifest.dependencies;
+                                for (const auto& embedded_dep : embedded_manifest.dependencies) {
+                                    if (embedded_dep.kind == DependencyKind::Path) {
+                                        resolving.erase(dep.name);
+                                        throw std::runtime_error("registry package '" + resolved_dep.name + "'@'" + resolved_dep.version +
+                                                                 "' contains path dependency '" + embedded_dep.name + "' which cannot be resolved by consumers");
+                                    }
+                                }
                             }
                             
                             resolved[key] = resolved_dep;
@@ -811,7 +818,10 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
                         }
                     }
                 } catch (...) {
-                    // Lock load failed, will try online resolution
+                    // Offline resolution is sovereign: malformed lock/materialization and
+                    // structural package failures are terminal, never an implicit online fallback.
+                    resolving.erase(dep.name);
+                    throw;
                 }
             }
             if (!resolved_from_lock) {

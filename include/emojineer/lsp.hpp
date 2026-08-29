@@ -286,6 +286,11 @@ struct OpenDocument {
     std::vector<Diagnostic> diagnostics;
 };
 
+struct DiagnosticResult {
+    std::string primaryUri;
+    std::unordered_map<std::string, std::vector<Diagnostic>> diagnosticsByUri;
+};
+
 // Symbol location for definitions/references
 struct SymbolLocation {
     std::string uri;
@@ -356,7 +361,7 @@ private:
 
     // Diagnostics
     std::vector<Diagnostic> diagnoseDocument(const OpenDocument& doc);
-    std::vector<Diagnostic> diagnoseDocumentWithCompile(const OpenDocument& doc);
+    DiagnosticResult diagnoseDocumentWithCompile(const OpenDocument& doc);
     void publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics);
     
     // Create a SourceProvider that checks open documents first
