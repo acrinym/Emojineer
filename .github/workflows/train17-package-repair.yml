@@ -1,31 +1,41 @@
-name: Train 17 Exact-Head Qualification
+name: Train 17 Registry Lock Integrity Repair
 
 'on':
   push:
     branches:
       - train-17-package-foundation-repair
-      - train-17-language-server
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  qualify-exact-head:
+  repair-and-qualify:
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: train-17-package-foundation-repair
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
-      - name: Exact-head clean configure, build, and full CTest
+      - name: Apply canonical registry lock integrity repair
+        run: python3 .github/scripts/train17_registry_lock_integrity_repair.py
+      - name: Verify patch
+        run: git diff --check
+      - name: Clean configure, build, and full CTest
         run: |
           rm -rf build
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-      - name: Record exact qualified head
+      - name: Commit qualified source repair
         run: |
-          echo "QUALIFIED_HEAD=$(git rev-parse HEAD)"
-          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/project.cpp src/package.cpp tests/acceptance_journey_tests.cpp
+          git commit -m "Train 17: persist and enforce registry content hashes"
+          git push origin HEAD:train-17-package-foundation-repair
