@@ -23,7 +23,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
       - name: Apply owner-local registry authority repair
-        run: python3 .github/scripts/train17_owner_registry_authority_repair.py
+        run: |
+          python3 .github/scripts/train17_owner_registry_authority_repair.py
+          python3 .github/scripts/train17_owner_registry_authority_fixture_fix.py
       - name: Verify patch
         run: git diff --check
       - name: Clean configure, build, and full CTest
