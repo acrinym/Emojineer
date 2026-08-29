@@ -1,4 +1,4 @@
-name: Train 17 Owner Registry Authority Repair
+name: Train 17 Package Exact-Head Final
 
 'on':
   push:
@@ -7,37 +7,24 @@ name: Train 17 Owner Registry Authority Repair
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair-and-qualify:
-    if: ${{ github.actor != 'github-actions[bot]' }}
+  qualify-exact-head:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: train-17-package-foundation-repair
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
-      - name: Apply owner-local registry authority repair
-        run: |
-          python3 .github/scripts/train17_owner_registry_authority_repair.py
-          python3 .github/scripts/train17_owner_registry_authority_fixture_fix.py
-      - name: Verify patch
-        run: git diff --check
-      - name: Clean configure, build, and full CTest
+      - name: Exact-head clean configure, build, and full CTest
         run: |
           rm -rf build
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-      - name: Commit qualified source repair
+      - name: Record exact qualified head
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/project.cpp tests/acceptance_journey_tests.cpp
-          git commit -m "Train 17: resolve transitive registries from package authority"
-          git push origin HEAD:train-17-package-foundation-repair
+          echo "QUALIFIED_HEAD=$(git rev-parse HEAD)"
+          git status --short
