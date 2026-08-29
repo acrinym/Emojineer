@@ -26,6 +26,7 @@ jobs:
         run: |
           python3 .github/scripts/train17_lock_metadata_hardening.py
           python3 .github/scripts/train17_lock_metadata_followup.py
+          python3 .github/scripts/train17_lock_metadata_fixture_finish.py
       - name: Verify patch
         run: |
           git diff --check
