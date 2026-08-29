@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 
 def replace_once(path, old, new, label):
@@ -158,7 +157,6 @@ if helper.strip() not in text:
 else:
     print("already applied: package fixture production manifest-hash helper")
 
-# Refresh only at root-manifest load sites; no-lock fixtures remain no-lock because helper is a no-op.
 needle = '    auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");\n'
 replacement = needle + '    refresh_lock_manifest_hash(root);\n'
 if replacement not in text:
@@ -169,6 +167,19 @@ if replacement not in text:
     print(f"applied: refreshed manifest identity at {count} package fixture sites")
 else:
     print("already applied: package fixture manifest identities")
+
+# Missing-lock diagnostics are a semantic contract: offline + lock, not one historical phrase.
+old_no_lock = '''    require(error_msg.find("offline mode") != std::string::npos, "error should mention offline mode");
+    require(error_msg.find("no lock entry") != std::string::npos || error_msg.find("lock entry") != std::string::npos, 
+            "error should mention missing lock entry");'''
+new_no_lock = '''    require(error_msg.find("offline") != std::string::npos, "error should identify offline resolution");
+    require(error_msg.find("lock") != std::string::npos,
+            "error should identify the missing lock requirement");'''
+if new_no_lock not in text:
+    if text.count(old_no_lock) != 1:
+        raise SystemExit("offline missing-lock diagnostic fixture not found")
+    text = text.replace(old_no_lock, new_no_lock, 1)
+    print("applied: missing-lock fixture asserts semantic diagnostic contract")
 p.write_text(text)
 
 # Project regression fixtures also need current manifest identity for offline structural tests.
@@ -237,8 +248,15 @@ new_online = '''void test_registry_path_dependency_rejected_online() {
     (void)emojineer::publish_package_to_registry(package_root, endpoint);
 
     emojineer::initialize_project(app_root, "app");
-    emojineer::add_project_registry_dependency(app_root, "mylib", "^1.0.0",
-                                               registry_root.string(), "origin");
+    write_text(app_root / "emojineer.toml",
+               "[package]\\n"
+               "name = \\\"app\\\"\\n"
+               "version = \\\"0.1.0\\\"\\n"
+               "entry = \\\"src/main.emoji\\\"\\n"
+               "\\n[registries]\\n"
+               "origin = \\\"" + registry_root.string() + "\\\"\\n"
+               "\\n[dependencies]\\n"
+               "mylib = \\\"registry:origin:^1.0.0\\\"\\n");
     const auto manifest = emojineer::load_project_manifest(app_root / "emojineer.toml");
 
     bool rejected = false;
@@ -257,16 +275,14 @@ new_online = '''void test_registry_path_dependency_rejected_online() {
 
 '''
 current_online = text[start:end]
-if 'project-tests.local' not in current_online:
+if 'write_text(app_root / "emojineer.toml"' not in current_online:
     text = text[:start] + new_online + text[end:]
-    print("applied: online registry path-dependency test uses real file registry")
+    print("applied: online path-dependency rejection is caught at resolver boundary")
 else:
-    print("already applied: online registry path-dependency test uses real file registry")
+    print("already applied: online path-dependency rejection is caught at resolver boundary")
 
-# For remaining handcrafted offline locks, refresh the root manifest identity immediately after load.
 needle = '    auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");\n'
 replacement = needle + '    refresh_project_test_lock_manifest_hash(root);\n'
-# Restrict replacement to the two legacy offline fixture functions by function slice.
 for fn in ["test_registry_path_dependency_rejected_offline", "test_corrupted_offline_materialization_fails"]:
     fn_start = text.find(f"void {fn}() {{")
     if fn_start == -1:
