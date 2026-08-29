@@ -488,9 +488,10 @@ void test_sync_lock_offline_compile_roundtrip() {
         "version = \"1.0.0\"\n"
         "entry = \"src/lib-a.emoji\"\n");
     std::filesystem::create_directories(lib_a_root / "src");
-    write_text(lib_a_root / "src/lib-a.emoji", 
-        "📝 Library A\n"
-        "export const a_value = 42\n");
+    write_text(lib_a_root / "src/lib-a.emoji",
+        "🧩 🌊\n"
+        "🐍 🌟 🔢 🟰 9\n"
+        "📤 🌟\n");
     emojineer::publish_package_to_registry(lib_a_root, endpoint);
     
     // Create and publish lib-b that depends on lib-a (transitive dep)
@@ -508,10 +509,13 @@ void test_sync_lock_offline_compile_roundtrip() {
         "[dependencies]\n"
         "lib-a = \"registry:origin:^1.0.0\"\n");
     std::filesystem::create_directories(lib_b_root / "src");
-    write_text(lib_b_root / "src/lib-b.emoji", 
-        "📝 Library B depends on A\n"
-        "🔗 📜\"lib-a\"📜\n"
-        "export const b_value = 1\n");
+    write_text(lib_b_root / "src/lib-b.emoji",
+        "🧩 🌲\n"
+        "🔗 📜pkg:lib-a/src/lib-a.emoji📜\n"
+        "🛠️ 🍏 🫴 🤲\n"
+        "📦 🌟\n"
+        "🏁\n"
+        "📤 🍏\n");
     emojineer::publish_package_to_registry(lib_b_root, endpoint);
     
     // Create app that depends on lib-b (which has transitive dep on lib-a)
@@ -525,9 +529,9 @@ void test_sync_lock_offline_compile_roundtrip() {
     // Use valid Emojineer emoji syntax from module_tests.cpp
     std::filesystem::create_directories(app_root / "src");
     write_text(app_root / "src/main.emoji",
-        "🧩 🚀\n"           // Module declaration
-        "🐍 🌟 🟰 42\n"    // Variable declaration: 🐍 = variable, 🌟 = name, 🟰 = assignment
-        "📤 🌟\n");         // Export 🌟
+        "🧩 🚀\n"
+        "🔗 📜pkg:lib-b/src/lib-b.emoji📜\n"
+        "📝 🍏 🫴 🤲\n");
     
     // Step 1: Sync - this should materialize both lib-b and lib-a (transitive)
     emojineer::sync_project(app_root, false);
@@ -598,19 +602,18 @@ void test_sync_lock_offline_compile_roundtrip() {
     // Step 6: Try to import transitive lib-a directly - should fail
     // because package ownership boundaries are enforced (no ambient transitive imports)
     write_text(app_root / "src/bad_import.emoji",
-        "import { a_value } from \"lib-a\"\n"  // Direct import of transitive dep should fail
-        "export const bad = a_value\n");
+        "🧩 🚀\n"
+        "🔗 📜pkg:lib-a/src/lib-a.emoji📜\n");
     
     bool import_rejected = false;
     try {
-        auto chunk = emojineer::compile_file(app_root / "src/bad_import.emoji", {}, app_root);
-        // If this succeeds, the test should fail
-        require(false, "direct import of transitive lib-a should be rejected");
-    } catch (const std::exception& e) {
-        // Expected - import of transitive dependency should be rejected
-        import_rejected = true;
+        (void)emojineer::compile_file(app_root / "src/bad_import.emoji", {}, app_root);
+    } catch (const std::runtime_error& error) {
+        import_rejected = std::string(error.what()).find(
+            "does not declare direct dependency 'lib-a'") != std::string::npos;
     }
-    require(import_rejected, "direct import of transitive dependency lib-a should be rejected in offline mode");
+    require(import_rejected,
+            "direct transitive lib-a import must fail with direct-dependency ownership diagnostic");
     
     // Cleanup
     std::filesystem::remove_all(lib_a_root);
@@ -619,6 +622,103 @@ void test_sync_lock_offline_compile_roundtrip() {
     // Registry already removed
     
     std::cout << "  ✅ Sync -> lock -> registry unavailable -> compile round-trip works\n";
+}
+
+
+void test_offline_registry_lock_metadata_rejected() {
+    std::cout << "Test: malformed registry lock metadata is rejected before offline module loading...\n";
+    const auto registry_root = temp_root("registry-lock-metadata");
+    std::filesystem::create_directories(registry_root);
+    emojineer::initialize_file_registry(registry_root, "emojineer.test");
+    const auto endpoint = emojineer::parse_registry_endpoint(registry_root.string());
+
+    const auto lib_root = temp_root("lock-metadata-lib");
+    std::filesystem::create_directories(lib_root / "src");
+    write_text(lib_root / "emojineer.toml",
+        "[package]\nname = \"locked-lib\"\nversion = \"1.0.0\"\nentry = \"src/main.emoji\"\n");
+    write_text(lib_root / "src/main.emoji", "🧩 🌊\n🐍 🌟 🔢 🟰 9\n📤 🌟\n");
+    (void)emojineer::publish_package_to_registry(lib_root, endpoint);
+
+    const auto app_root = temp_root("lock-metadata-app");
+    emojineer::initialize_project(app_root, "app");
+    emojineer::add_project_registry_dependency(app_root, "locked-lib", "^1.0.0",
+                                               registry_root.string(), "origin");
+    write_text(app_root / "src/main.emoji",
+        "🧩 🚀\n🔗 📜pkg:locked-lib/src/main.emoji📜\n");
+    emojineer::sync_project(app_root, false);
+
+    const auto manifest = emojineer::load_project_manifest(app_root / "emojineer.toml");
+    const auto good_lock = emojineer::load_project_lock(app_root / "emojineer.lock");
+    const auto good_text = emojineer::read_text_standalone(app_root / "emojineer.lock");
+    const auto store_root = emojineer::package_store_root(app_root);
+    const auto* locked = [&]() -> const emojineer::LockDependency* {
+        for (const auto& dep : good_lock.dependencies) if (dep.name == "locked-lib") return &dep;
+        return nullptr;
+    }();
+    require(locked && locked->registry_alias && locked->registry_id && locked->registry_endpoint &&
+            locked->requirement && locked->artifact_sha256 && locked->content_sha256,
+            "sync-produced registry lock must contain complete metadata before mutation");
+
+    auto replace_once = [](std::string text, const std::string& old_value,
+                           const std::string& new_value) {
+        const auto pos = text.find(old_value);
+        if (pos == std::string::npos) throw std::runtime_error("acceptance mutation anchor missing: " + old_value);
+        text.replace(pos, old_value.size(), new_value);
+        return text;
+    };
+    auto erase_once = [](std::string text, const std::string& value) {
+        const auto pos = text.find(value);
+        if (pos == std::string::npos) throw std::runtime_error("acceptance erase anchor missing: " + value);
+        text.erase(pos, value.size());
+        return text;
+    };
+
+    std::vector<std::pair<std::string, std::string>> cases;
+    cases.push_back({"lock version", replace_once(good_text, "lock_version = 3", "lock_version = 2")});
+    cases.push_back({"missing registry alias", erase_once(good_text, "registry = \"" + *locked->registry_alias + "\"\n")});
+    cases.push_back({"undeclared registry alias", replace_once(good_text,
+        "registry = \"" + *locked->registry_alias + "\"",
+        "registry = \"missing-authority\"")});
+    cases.push_back({"missing registry id", erase_once(good_text, "registry_id = \"" + *locked->registry_id + "\"\n")});
+    cases.push_back({"mismatched registry endpoint", replace_once(good_text,
+        "registry_endpoint = \"" + *locked->registry_endpoint + "\"",
+        "registry_endpoint = \"file:///wrong-registry\"")});
+    cases.push_back({"empty requirement", replace_once(good_text,
+        "requirement = \"" + *locked->requirement + "\"", "requirement = \"\"")});
+    cases.push_back({"invalid artifact sha", replace_once(good_text,
+        "artifact_sha256 = \"" + *locked->artifact_sha256 + "\"", "artifact_sha256 = \"xyz\"")});
+    cases.push_back({"missing content sha", erase_once(good_text,
+        "content_sha256 = \"" + *locked->content_sha256 + "\"\n")});
+    cases.push_back({"wrong dependency edges", replace_once(good_text,
+        "dependencies = \"\"", "dependencies = \"ghost\"")});
+
+    std::filesystem::remove_all(registry_root);
+    for (const auto& [label, mutated] : cases) {
+        write_text(app_root / "emojineer.lock", mutated);
+        bool graph_rejected = false;
+        try {
+            (void)emojineer::resolve_package_graph(app_root, manifest, store_root, true);
+        } catch (const std::runtime_error&) {
+            graph_rejected = true;
+        }
+        require(graph_rejected, label + " must be rejected by offline package graph");
+
+        bool compile_rejected = false;
+        try {
+            (void)emojineer::compile_file(app_root / "src/main.emoji", {}, app_root);
+        } catch (const std::runtime_error&) {
+            compile_rejected = true;
+        }
+        require(compile_rejected, label + " must be rejected by compile_file before module loading");
+    }
+
+    write_text(app_root / "emojineer.lock", good_text);
+    (void)emojineer::resolve_package_graph(app_root, manifest, store_root, true);
+    (void)emojineer::compile_file(app_root / "src/main.emoji", {}, app_root);
+
+    std::filesystem::remove_all(lib_root);
+    std::filesystem::remove_all(app_root);
+    std::cout << "  ✅ Malformed registry lock metadata rejected by graph and compile authority\n";
 }
 
 } // anonymous namespace
@@ -638,6 +738,7 @@ int main() {
         test_manifest_rejects_duplicate_dependency_kind();
         test_offline_sync();
         test_sync_lock_offline_compile_roundtrip();
+        test_offline_registry_lock_metadata_rejected();
         
         std::cout << "\n✅ All acceptance journey tests passed!\n";
         return 0;

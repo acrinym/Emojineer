@@ -36,6 +36,27 @@ void refresh_lock_manifest_hash(const std::filesystem::path& root) {
     std::ifstream input(lock_path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot read package test lock");
     std::string lock_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    if (lock_text.find("lock_version = 3") == std::string::npos) {
+        const std::string legacy = "version = \"3\"\n";
+        const auto legacy_pos = lock_text.find(legacy);
+        if (legacy_pos != std::string::npos) lock_text.replace(legacy_pos, legacy.size(), "lock_version = 3\n");
+        else lock_text.insert(0, "lock_version = 3\n");
+    }
+    const std::string artifact_prefix = "artifact_sha256 = \"";
+    std::size_t artifact_pos = 0;
+    while ((artifact_pos = lock_text.find(artifact_prefix, artifact_pos)) != std::string::npos) {
+        const auto value_begin = artifact_pos + artifact_prefix.size();
+        const auto value_end = lock_text.find('\"', value_begin);
+        if (value_end == std::string::npos) throw std::runtime_error("package test lock has malformed artifact_sha256");
+        const auto value = lock_text.substr(value_begin, value_end - value_begin);
+        if (value.size() != 64) {
+            const auto normalized = emojineer::sha256_hex(value);
+            lock_text.replace(value_begin, value.size(), normalized);
+            artifact_pos = value_begin + normalized.size();
+        } else {
+            artifact_pos = value_end + 1;
+        }
+    }
     const std::string prefix = "manifest_hash = \"";
     const auto begin = lock_text.find(prefix);
     if (begin == std::string::npos) throw std::runtime_error("package test lock is missing manifest_hash");
@@ -43,9 +64,34 @@ void refresh_lock_manifest_hash(const std::filesystem::path& root) {
     const auto value_end = lock_text.find('\"', value_begin);
     if (value_end == std::string::npos) throw std::runtime_error("package test lock has malformed manifest_hash");
     lock_text.replace(value_begin, value_end - value_begin, manifest_hash);
-    std::ofstream output(lock_path, std::ios::binary | std::ios::trunc);
-    if (!output) throw std::runtime_error("cannot rewrite package test lock");
-    output << lock_text;
+    {
+        std::ofstream output(lock_path, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("cannot rewrite package test lock");
+        output << lock_text;
+    }
+
+    auto lock = emojineer::load_project_lock(lock_path);
+    lock.version = "3";
+    lock.manifest_hash = manifest_hash;
+    for (auto& dependency : lock.dependencies) {
+        if (dependency.source != emojineer::LockSourceKind::Registry || !dependency.store_path) continue;
+        const auto dep_manifest_path = std::filesystem::path(*dependency.store_path) / "emojineer.toml";
+        if (!std::filesystem::exists(dep_manifest_path)) continue;
+        try {
+            const auto dep_manifest = emojineer::load_project_manifest(dep_manifest_path);
+            dependency.dependencies.clear();
+            for (const auto& nested : dep_manifest.dependencies) {
+                dependency.dependencies.push_back(nested.name);
+            }
+        } catch (const std::exception&) {
+            // Corrupt-manifest regression fixtures intentionally fail later at the production seam.
+        }
+    }
+    {
+        std::ofstream output(lock_path, std::ios::binary | std::ios::trunc);
+        if (!output) throw std::runtime_error("cannot canonicalize package test lock");
+        output << emojineer::canonical_lock_text(lock);
+    }
 }
 
 void test_sha256_vectors() {

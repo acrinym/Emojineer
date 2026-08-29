@@ -90,6 +90,88 @@ std::string package_hash(const std::filesystem::path& root,
 }
 
 // Compute hash for a registry package (materialized package without dependency roots)
+bool valid_sha256_hex(const std::optional<std::string>& value) {
+    if (!value || value->size() != 64) return false;
+    return std::all_of(value->begin(), value->end(), [](char c) {
+        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    });
+}
+
+const LockRegistry* find_lock_registry(const ProjectLock& lock,
+                                       const std::string& alias,
+                                       const std::string& id,
+                                       const std::string& endpoint) {
+    const LockRegistry* found = nullptr;
+    for (const auto& registry : lock.registries) {
+        if (registry.alias != alias || registry.id != id || registry.endpoint != endpoint) continue;
+        if (found) {
+            throw std::runtime_error("offline lock contains duplicate registry authority for alias '" + alias + "'");
+        }
+        found = &registry;
+    }
+    return found;
+}
+
+void validate_offline_registry_lock(const ProjectManifest& root_manifest,
+                                    const ProjectLock& lock) {
+    if (lock.version != "3") {
+        throw std::runtime_error("offline package resolution requires lock_version 3");
+    }
+
+    std::unordered_map<std::string, const LockDependency*> dependencies;
+    for (const auto& locked : lock.dependencies) {
+        if (locked.name.empty() || locked.version.empty()) {
+            throw std::runtime_error("offline lock contains dependency with missing name or version");
+        }
+        if (!dependencies.emplace(locked.name, &locked).second) {
+            throw std::runtime_error("offline lock contains duplicate dependency '" + locked.name + "'");
+        }
+        if (locked.source != LockSourceKind::Registry) continue;
+        if (!locked.registry_alias || locked.registry_alias->empty() ||
+            !locked.registry_id || locked.registry_id->empty() ||
+            !locked.registry_endpoint || locked.registry_endpoint->empty() ||
+            !locked.requirement || locked.requirement->empty() ||
+            !locked.store_path || locked.store_path->empty()) {
+            throw std::runtime_error("offline registry dependency '" + locked.name +
+                                     "' is missing required provenance metadata");
+        }
+        if (!valid_sha256_hex(locked.artifact_sha256)) {
+            throw std::runtime_error("offline registry dependency '" + locked.name +
+                                     "' requires valid artifact_sha256");
+        }
+        if (!valid_sha256_hex(locked.content_sha256)) {
+            throw std::runtime_error("offline registry dependency '" + locked.name +
+                                     "' requires valid content_sha256");
+        }
+        const auto* registry = find_lock_registry(lock, *locked.registry_alias,
+                                                  *locked.registry_id,
+                                                  *locked.registry_endpoint);
+        if (!registry) {
+            throw std::runtime_error("offline registry dependency '" + locked.name +
+                                     "' references undeclared registry '" + *locked.registry_alias + "'");
+        }
+        if (registry->id.empty() || registry->endpoint.empty()) {
+            throw std::runtime_error("offline registry dependency '" + locked.name +
+                                     "' registry authority record is incomplete");
+        }
+    }
+
+    for (const auto& dependency : root_manifest.dependencies) {
+        if (dependency.kind != DependencyKind::Registry) continue;
+        const auto found = dependencies.find(dependency.name);
+        if (found == dependencies.end() || found->second->source != LockSourceKind::Registry) {
+            throw std::runtime_error("offline root registry dependency '" + dependency.name +
+                                     "' has no registry lock entry");
+        }
+        const auto& locked = *found->second;
+        if (!locked.registry_alias || *locked.registry_alias != dependency.registry_alias ||
+            !locked.requirement || *locked.requirement != dependency.requirement) {
+            throw std::runtime_error("offline root registry dependency '" + dependency.name +
+                                     "' lock provenance does not match manifest declaration");
+        }
+    }
+}
+
 std::string registry_package_hash(const std::filesystem::path& root,
                                  const ProjectManifest& manifest) {
     std::vector<std::pair<std::string, std::string>> sources;
@@ -379,6 +461,24 @@ private:
                     dependency_names.push_back(dependency.name);
                     continue;
                 }
+
+                if (offline_) {
+                    if (!lock_dep->registry_alias || *lock_dep->registry_alias != dependency.registry_alias ||
+                        !lock_dep->requirement || *lock_dep->requirement != dependency.requirement) {
+                        throw std::runtime_error("offline mode: registry dependency '" + dependency.name +
+                                                 "' lock coordinate does not match owner manifest");
+                    }
+                    std::vector<std::string> manifest_edges;
+                    manifest_edges.reserve(dep_manifest.dependencies.size());
+                    for (const auto& nested : dep_manifest.dependencies) manifest_edges.push_back(nested.name);
+                    std::sort(manifest_edges.begin(), manifest_edges.end());
+                    auto lock_edges = lock_dep->dependencies;
+                    std::sort(lock_edges.begin(), lock_edges.end());
+                    if (manifest_edges != lock_edges) {
+                        throw std::runtime_error("offline mode: registry dependency '" + dependency.name +
+                                                 "' lock dependency edges do not match materialized manifest");
+                    }
+                }
                 
                 // Registry package is valid
                 dependency_names.push_back(dependency.name);
@@ -539,22 +639,7 @@ PackageGraph resolve_package_graph(const std::filesystem::path& root,
                 throw std::runtime_error("emojineer.lock is stale; run 'emji sync'");
             }
             if (offline) {
-                const auto is_hex = [](char c) {
-                    return (c >= '0' && c <= '9') ||
-                           (c >= 'a' && c <= 'f') ||
-                           (c >= 'A' && c <= 'F');
-                };
-                for (const auto& locked_dependency : lock_storage.dependencies) {
-                    if (locked_dependency.source != LockSourceKind::Registry) continue;
-                    if (!locked_dependency.content_sha256 ||
-                        locked_dependency.content_sha256->size() != 64 ||
-                        !std::all_of(locked_dependency.content_sha256->begin(),
-                                     locked_dependency.content_sha256->end(), is_hex)) {
-                        throw std::runtime_error(
-                            "offline package resolution requires valid content_sha256 for registry dependency '" +
-                            locked_dependency.name + "'");
-                    }
-                }
+                validate_offline_registry_lock(root_manifest, lock_storage);
             }
             lock = &lock_storage;
             if (effective_store_root.empty()) {

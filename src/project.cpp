@@ -621,7 +621,7 @@ ProjectLock manifest_to_lock(const std::filesystem::path& root,
         lock.registries.push_back({
             reg.alias,
             registry_identity(endpoint),
-            reg.endpoint
+            endpoint.canonical
         });
     }
     
@@ -672,10 +672,26 @@ ProjectLock manifest_to_lock_with_resolved_deps(
         lock.registries.push_back({
             reg.alias,
             registry_identity(endpoint),
-            reg.endpoint
+            endpoint.canonical
         });
     }
     
+    // Registry aliases are lock-wide authority records. Preserve authorities discovered
+    // through transitive registry packages as well as root-declared registries.
+    for (const auto& resolved : resolved_registry_deps) {
+        auto existing = std::find_if(lock.registries.begin(), lock.registries.end(),
+                                     [&](const LockRegistry& registry) {
+                                         return registry.alias == resolved.registry_alias &&
+                                                registry.id == resolved.registry_id &&
+                                                registry.endpoint == resolved.registry_endpoint;
+                                     });
+        if (existing == lock.registries.end()) {
+            lock.registries.push_back({resolved.registry_alias,
+                                       resolved.registry_id,
+                                       resolved.registry_endpoint});
+        }
+    }
+
     // Resolve package graph for path dependencies
     auto canonical_root = std::filesystem::canonical(root);
     auto graph = resolve_package_graph(canonical_root, manifest);
@@ -1051,7 +1067,9 @@ std::string canonical_lock_text(const ProjectLock& lock) {
     std::vector<LockRegistry> sorted_regs = lock.registries;
     std::sort(sorted_regs.begin(), sorted_regs.end(),
               [](const LockRegistry& a, const LockRegistry& b) {
-                  return a.alias < b.alias;
+                  if (a.alias != b.alias) return a.alias < b.alias;
+                  if (a.id != b.id) return a.id < b.id;
+                  return a.endpoint < b.endpoint;
               });
     
     // Sort dependencies by name for deterministic output
@@ -1102,7 +1120,7 @@ std::string canonical_lock_text(const ProjectLock& lock) {
 ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
     auto text = read_text(lock_path);
     ProjectLock lock;
-    lock.version = "3";  // Default to version 3
+    lock.version.clear();
     
     // Simple TOML-like parsing
     std::istringstream stream(text);
@@ -1114,7 +1132,14 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
         line = trim(line);
         if (line.empty() || line.front() == '#') continue;
         
-        if (line == "[[registry]]") {
+        if (!current_reg && !current_dep && line.rfind("lock_version", 0) == 0) {
+            const auto eq = line.find('=');
+            if (eq == std::string::npos || !lock.version.empty()) {
+                throw std::runtime_error("malformed or duplicate lock_version");
+            }
+            lock.version = trim(line.substr(eq + 1));
+            if (lock.version.empty()) throw std::runtime_error("lock_version cannot be empty");
+        } else if (line == "[[registry]]") {
             lock.registries.push_back({});
             current_reg = &lock.registries.back();
             current_dep = nullptr;
@@ -1137,7 +1162,9 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
                 auto key = trim(line.substr(0, eq));
                 auto value = trim(parse_quoted(line.substr(eq + 1), 1));
                 if (key == "source") {
-                    current_dep->source = (value == "registry") ? LockSourceKind::Registry : LockSourceKind::Path;
+                    if (value == "registry") current_dep->source = LockSourceKind::Registry;
+                    else if (value == "path") current_dep->source = LockSourceKind::Path;
+                    else throw std::runtime_error("unsupported lock dependency source '" + value + "'");
                 } else if (key == "name") current_dep->name = value;
                 else if (key == "version") current_dep->version = value;
                 else if (key == "path") current_dep->path = std::filesystem::path(value);
