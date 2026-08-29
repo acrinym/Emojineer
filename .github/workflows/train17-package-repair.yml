@@ -1,4 +1,4 @@
-name: Train 17 Package Repair Qualification
+name: Train 17 Exact-Head Qualification
 
 'on':
   push:
@@ -8,55 +8,10 @@ name: Train 17 Package Repair Qualification
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  repair-package-foundation:
-    if: ${{ github.ref == 'refs/heads/train-17-package-foundation-repair' && github.actor != 'github-actions[bot]' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: train-17-package-foundation-repair
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libicu-dev libcurl4-openssl-dev
-      - name: Apply reviewed package repairs and parent interface reconciliation
-        run: |
-          python3 .github/scripts/train17_package_repair.py
-          python3 .github/scripts/train17_package_linkage_repair.py
-          python3 .github/scripts/train17_parent_lsp_interface_repair.py
-          python3 .github/scripts/train17_package_test_compile_repair.py
-          python3 .github/scripts/train17_lsp_test_compile_repair.py
-          python3 .github/scripts/train17_source_diagnostic_test_compile_repair.py
-          python3 .github/scripts/train17_ctest_regression_repair.py
-          python3 .github/scripts/train17_offline_registry_structure_repair.py
-      - name: Verify patch shape
-        run: |
-          git diff --check
-          git status --short
-      - name: Build and test repaired tree
-        run: |
-          rm -rf build
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build -j2
-          ctest --test-dir build --output-on-failure
-      - name: Commit repaired source
-        run: |
-          if git diff --quiet; then
-            echo "No source changes remain to commit."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/module.cpp src/package.cpp src/package_artifact.cpp src/project.cpp src/lsp.cpp include/emojineer/lsp.hpp tests/acceptance_journey_tests.cpp tests/package_tests.cpp tests/project_tests.cpp tests/module_tests.cpp tests/tests.cpp tests/lsp_tests.cpp tests/source_diagnostic_tests.cpp
-          git commit -m "Train 17 package repair: close offline artifact blockers"
-          git push origin HEAD:train-17-package-foundation-repair
-
   qualify-exact-head:
-    if: ${{ github.actor == 'github-actions[bot]' || github.ref == 'refs/heads/train-17-language-server' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
