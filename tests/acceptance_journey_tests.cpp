@@ -132,15 +132,21 @@ void test_publish_library_with_dependency() {
             "lock must retain the concrete registry authority");
     bool saw_b = false;
     bool saw_a = false;
+    std::filesystem::path lib_b_store;
     for (const auto& dep : app_lock.dependencies) {
         if (dep.name == "lib-b") {
-            saw_b = dep.source == emojineer::LockSourceKind::Registry && dep.store_path.has_value();
+            saw_b = dep.source == emojineer::LockSourceKind::Registry &&
+                    dep.store_path.has_value() && dep.content_sha256.has_value() &&
+                    dep.content_sha256->size() == 64;
+            if (dep.store_path) lib_b_store = *dep.store_path;
         } else if (dep.name == "lib-a") {
-            saw_a = dep.source == emojineer::LockSourceKind::Registry && dep.store_path.has_value();
+            saw_a = dep.source == emojineer::LockSourceKind::Registry &&
+                    dep.store_path.has_value() && dep.content_sha256.has_value() &&
+                    dep.content_sha256->size() == 64;
         }
     }
     require(saw_b && saw_a,
-            "lock must materialize direct lib-b and transitive lib-a as registry packages");
+            "sync-produced lock must retain store paths and content hashes for direct/transitive registry packages");
     const auto offline_graph = emojineer::resolve_package_graph(
         app_root, app_manifest, emojineer::package_store_root(app_root), true);
     require(offline_graph.find("lib-b") != nullptr && offline_graph.find("lib-a") != nullptr,
@@ -162,6 +168,34 @@ void test_publish_library_with_dependency() {
     }
     require(transitive_rejected,
             "root must reject ambient transitive lib-a with the direct-ownership diagnostic");
+
+    // Tamper with a package materialized by sync. The registry is already unavailable, so
+    // both graph resolution and compile_file must enforce the lock's persisted content hash.
+    require(!lib_b_store.empty(), "sync must expose lib-b materialized store path");
+    write_text(lib_b_store / "src/main.emoji",
+        "🧩 🌲\n🔗 📜pkg:lib-a/src/main.emoji📜\n"
+        "🛠️ 🍏 🫴 🤲\n📦 🌟\n🏁\n📤 🍏\n📝 tampered-after-sync\n");
+
+    bool graph_tamper_rejected = false;
+    try {
+        (void)emojineer::resolve_package_graph(
+            app_root, app_manifest, emojineer::package_store_root(app_root), true);
+    } catch (const std::runtime_error& error) {
+        graph_tamper_rejected = std::string(error.what()).find("content SHA256 mismatch") != std::string::npos;
+    }
+    require(graph_tamper_rejected,
+            "offline graph must reject content tampering using sync-produced registry lock hash");
+
+    write_text(app_root / "src/main.emoji",
+        "🧩 🚀\n🔗 📜pkg:lib-b/src/main.emoji📜\n📝 🍏 🫴 🤲\n");
+    bool compile_tamper_rejected = false;
+    try {
+        (void)emojineer::compile_file(app_root / "src/main.emoji", {}, app_root);
+    } catch (const std::runtime_error& error) {
+        compile_tamper_rejected = std::string(error.what()).find("content SHA256 mismatch") != std::string::npos;
+    }
+    require(compile_tamper_rejected,
+            "compile_file must reject content tampering using sync-produced registry lock hash");
 
     std::filesystem::remove_all(lib_a_root);
     std::filesystem::remove_all(lib_b_root);

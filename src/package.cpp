@@ -538,6 +538,24 @@ PackageGraph resolve_package_graph(const std::filesystem::path& root,
             if (is_lock_stale(root, root_manifest, lock_storage)) {
                 throw std::runtime_error("emojineer.lock is stale; run 'emji sync'");
             }
+            if (offline) {
+                const auto is_hex = [](char c) {
+                    return (c >= '0' && c <= '9') ||
+                           (c >= 'a' && c <= 'f') ||
+                           (c >= 'A' && c <= 'F');
+                };
+                for (const auto& locked_dependency : lock_storage.dependencies) {
+                    if (locked_dependency.source != LockSourceKind::Registry) continue;
+                    if (!locked_dependency.content_sha256 ||
+                        locked_dependency.content_sha256->size() != 64 ||
+                        !std::all_of(locked_dependency.content_sha256->begin(),
+                                     locked_dependency.content_sha256->end(), is_hex)) {
+                        throw std::runtime_error(
+                            "offline package resolution requires valid content_sha256 for registry dependency '" +
+                            locked_dependency.name + "'");
+                    }
+                }
+            }
             lock = &lock_storage;
             if (effective_store_root.empty()) {
                 effective_store_root = package_store_root(root);

@@ -1089,6 +1089,7 @@ std::string canonical_lock_text(const ProjectLock& lock) {
             if (dep.registry_endpoint) out << "registry_endpoint = \"" << *dep.registry_endpoint << "\"\n";
             if (dep.requirement) out << "requirement = \"" << *dep.requirement << "\"\n";
             if (dep.artifact_sha256) out << "artifact_sha256 = \"" << *dep.artifact_sha256 << "\"\n";
+            if (dep.content_sha256) out << "content_sha256 = \"" << *dep.content_sha256 << "\"\n";
             if (dep.store_path) out << "store_path = \"" << *dep.store_path << "\"\n";
         }
         
