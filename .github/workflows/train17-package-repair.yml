@@ -19,7 +19,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
-      - name: Clean configure, build, and full CTest
+      - name: Exact-head clean configure, build, and full CTest
         run: |
           rm -rf build
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
