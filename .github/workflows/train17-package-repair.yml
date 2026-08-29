@@ -23,7 +23,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
       - name: Apply strict registry lock metadata repair
-        run: python3 .github/scripts/train17_lock_metadata_hardening.py
+        run: |
+          python3 .github/scripts/train17_lock_metadata_hardening.py
+          python3 .github/scripts/train17_lock_metadata_followup.py
       - name: Verify patch
         run: |
           git diff --check
@@ -38,6 +40,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/project.cpp src/package.cpp tests/acceptance_journey_tests.cpp
-          git commit -m "Train 17: enforce registry lock metadata authority"
+          git add src/project.cpp src/package.cpp tests/package_tests.cpp tests/acceptance_journey_tests.cpp
+          git commit -m "Train 17: enforce scoped registry lock authority"
           git push origin HEAD:train-17-package-foundation-repair
