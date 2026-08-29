@@ -963,13 +963,12 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
                     }
                 }
                 
-                // Recursively resolve embedded dependencies
-                // Create a synthetic manifest with the parent project's registries and embedded package's dependencies
-                // This is needed because the embedded artifact doesn't include registry definitions
+                // Recursively resolve embedded dependencies using the owning package's
+                // embedded registry authority. Registry aliases are package-local coordinates:
+                // a child package may bind `origin` to a different endpoint than the root app.
                 ProjectManifest synthetic_manifest;
                 synthetic_manifest.dependencies = embedded_manifest.dependencies;
-                // Use parent manifest's registries for resolving transitive deps
-                synthetic_manifest.registries = manifest.registries;
+                synthetic_manifest.registries = embedded_manifest.registries;
                 
                 auto nested = resolve_registry_dependencies_impl(synthetic_manifest, store_root, project_root, offline, resolved, resolving);
                 result.insert(result.end(), nested.begin(), nested.end());

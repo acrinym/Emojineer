@@ -75,6 +75,7 @@ void test_publish_library_versions() {
     
     // Cleanup
     std::filesystem::remove_all(lib_root);
+    // Both network/file authorities are gone: all following package operations are offline.
     std::filesystem::remove_all(registry_root);
     
     std::cout << "  ✅ Published multiple library versions\n";
@@ -83,10 +84,16 @@ void test_publish_library_versions() {
 // Test 2: Registry dependencies survive publication/materialization and remain sovereign offline
 void test_publish_library_with_dependency() {
     std::cout << "Test: registry dependency artifact round-trip and offline ownership...\n";
-    const auto registry_root = temp_root("registry-dep");
-    std::filesystem::create_directories(registry_root);
-    emojineer::initialize_file_registry(registry_root, "emojineer.test");
-    const auto endpoint = emojineer::parse_registry_endpoint(registry_root.string());
+    // Root and child deliberately reuse alias `origin` for different authorities.
+    // lib-b is published in root_registry; only child_registry contains transitive lib-a.
+    const auto root_registry = temp_root("registry-dep-root");
+    const auto child_registry = temp_root("registry-dep-child");
+    std::filesystem::create_directories(root_registry);
+    std::filesystem::create_directories(child_registry);
+    emojineer::initialize_file_registry(root_registry, "emojineer.root.test");
+    emojineer::initialize_file_registry(child_registry, "emojineer.child.test");
+    const auto root_endpoint = emojineer::parse_registry_endpoint(root_registry.string());
+    const auto child_endpoint = emojineer::parse_registry_endpoint(child_registry.string());
 
     const auto lib_a_root = temp_root("lib-a");
     std::filesystem::create_directories(lib_a_root / "src");
@@ -94,14 +101,14 @@ void test_publish_library_with_dependency() {
         "[package]\nname = \"lib-a\"\nversion = \"1.0.0\"\nentry = \"src/main.emoji\"\n");
     write_text(lib_a_root / "src/main.emoji",
         "🧩 🌊\n🐍 🌟 🔢 🟰 9\n📤 🌟\n");
-    const auto published_a = emojineer::publish_package_to_registry(lib_a_root, endpoint);
+    const auto published_a = emojineer::publish_package_to_registry(lib_a_root, child_endpoint);
     require(published_a.record.version == "1.0.0", "lib-a publication must succeed");
 
     const auto lib_b_root = temp_root("lib-b");
     std::filesystem::create_directories(lib_b_root / "src");
     write_text(lib_b_root / "emojineer.toml",
         "[package]\nname = \"lib-b\"\nversion = \"1.0.0\"\nentry = \"src/main.emoji\"\n"
-        "\n[registries]\norigin = \"" + registry_root.string() + "\"\n"
+        "\n[registries]\norigin = \"" + child_registry.string() + "\"\n"
         "\n[dependencies]\nlib-a = \"registry:origin:^1.0.0\"\n");
     write_text(lib_b_root / "src/main.emoji",
         "🧩 🌲\n🔗 📜pkg:lib-a/src/main.emoji📜\n"
@@ -113,23 +120,30 @@ void test_publish_library_with_dependency() {
             "registry package artifact must preserve [registries]");
     require(artifact.manifest.find("lib-a = \"registry:origin:^1.0.0\"") != std::string::npos,
             "registry dependency coordinate must round-trip in the artifact");
-    const auto published_b = emojineer::publish_package_to_registry(lib_b_root, endpoint);
+    const auto published_b = emojineer::publish_package_to_registry(lib_b_root, root_endpoint);
     require(published_b.record.version == "1.0.0", "lib-b publication must succeed");
-    require(!emojineer::load_registry_package_index(endpoint, "lib-b").versions.empty(),
+    require(!emojineer::load_registry_package_index(root_endpoint, "lib-b").versions.empty(),
             "published lib-b must be discoverable");
 
     const auto app_root = temp_root("app-registry-chain");
     emojineer::initialize_project(app_root, "app");
     emojineer::add_project_registry_dependency(
-        app_root, "lib-b", "^1.0.0", registry_root.string(), "origin");
+        app_root, "lib-b", "^1.0.0", root_registry.string(), "origin");
     emojineer::sync_project(app_root, false);
 
     const auto app_manifest = emojineer::load_project_manifest(app_root / "emojineer.toml");
     const auto app_lock = emojineer::load_project_lock(app_root / "emojineer.lock");
     require(!emojineer::is_lock_stale(app_root, app_manifest, app_lock),
             "freshly synced registry lock must not be stale");
-    require(app_lock.registries.size() == 1 && app_lock.registries.front().alias == "origin",
-            "lock must retain the concrete registry authority");
+    bool saw_root_authority = false;
+    bool saw_child_authority = false;
+    for (const auto& registry : app_lock.registries) {
+        if (registry.alias != "origin") continue;
+        if (registry.endpoint == root_endpoint.canonical) saw_root_authority = true;
+        if (registry.endpoint == child_endpoint.canonical) saw_child_authority = true;
+    }
+    require(saw_root_authority && saw_child_authority,
+            "lock must retain both package-local authorities even when both aliases are origin");
     bool saw_b = false;
     bool saw_a = false;
     std::filesystem::path lib_b_store;
@@ -152,7 +166,8 @@ void test_publish_library_with_dependency() {
     require(offline_graph.find("lib-b") != nullptr && offline_graph.find("lib-a") != nullptr,
             "offline graph must contain direct lib-b and its owned transitive lib-a");
 
-    std::filesystem::remove_all(registry_root);
+    std::filesystem::remove_all(root_registry);
+    std::filesystem::remove_all(child_registry);
     write_text(app_root / "src/main.emoji",
         "🧩 🚀\n🔗 📜pkg:lib-b/src/main.emoji📜\n📝 🍏 🫴 🤲\n");
     (void)emojineer::compile_file(app_root / "src/main.emoji", {}, app_root);
@@ -200,7 +215,7 @@ void test_publish_library_with_dependency() {
     std::filesystem::remove_all(lib_a_root);
     std::filesystem::remove_all(lib_b_root);
     std::filesystem::remove_all(app_root);
-    std::cout << "  ✅ Registry artifact, offline direct dependency, and transitive ownership proven\n";
+    std::cout << "  ✅ Package-local registry authority, offline ownership, and tamper integrity proven\n";
 }
 
 // Test 3: Initialize an application and add remote dependency
