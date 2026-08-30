@@ -1,0 +1,28 @@
+name: Train 17 LSP Parent Integration
+
+'on':
+  push:
+    branches:
+      - train-17-lsp-semantics-repair
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  integrate-parent:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: train-17-lsp-semantics-repair
+      - name: Merge exact repaired Train 17 parent
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin train-17-language-server
+          test "$(git rev-parse origin/train-17-language-server)" = "fb992e03733ac757fe4f3f102b899ab1b5193877"
+          git merge --no-edit origin/train-17-language-server
+          git push origin HEAD:train-17-lsp-semantics-repair
