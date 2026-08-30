@@ -2357,6 +2357,14 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
                 continue;
             }
         }
+        if (workspaceRoot_ && packageGraph_) {
+            auto visibleRoots = visibleSourceRoots(
+                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
+                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                continue;
+            }
+        }
 
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
@@ -2635,6 +2643,14 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
                 continue;
             }
         }
+        if (workspaceRoot_ && packageGraph_) {
+            auto visibleRoots = visibleSourceRoots(
+                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
+                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                continue;
+            }
+        }
 
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
@@ -2888,6 +2904,14 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
     // Add symbols from other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
+        if (workspaceRoot_ && packageGraph_) {
+            auto visibleRoots = visibleSourceRoots(
+                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
+                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                continue;
+            }
+        }
         if (workspaceRoot_ && packageGraph_) {
             auto visibleRoots = visibleSourceRoots(
                 *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
