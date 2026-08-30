@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Verify repaired parent ancestry
         run: git merge-base --is-ancestor fb992e03733ac757fe4f3f102b899ab1b5193877 HEAD
       - name: Install build dependencies
