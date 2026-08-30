@@ -27,6 +27,8 @@ jobs:
         run: python3 .github/scripts/train17_lsp_position_symbol_repair.py
       - name: Apply semantic authority and acceptance repair
         run: python3 .github/scripts/train17_lsp_authority_repair.py
+      - name: Bind semantic ranges to canonical server authority
+        run: python3 .github/scripts/train17_lsp_authority_compilefix.py
       - name: Verify patch
         run: git diff --check
       - name: Clean configure, build, and full CTest
