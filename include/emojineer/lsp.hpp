@@ -2,16 +2,18 @@
 
 #include "emojineer/cer.hpp"
 #include "emojineer/module.hpp"
+#include "emojineer/package.hpp"
 #include "emojineer/project.hpp"
 #include "emojineer/source_diagnostic.hpp"
+#include "emojineer/token.hpp"
 
 #include <any>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -22,6 +24,7 @@ namespace emojineer {
 // Forward declarations for ast
 namespace ast {
 struct Program;
+struct Stmt;
 }
 
 namespace lsp {
@@ -45,7 +48,7 @@ struct Range {
 
 struct JsonValue {
     std::any value;
-    
+
     JsonValue() = default;
     JsonValue(std::nullptr_t v) : value(v) {}
     JsonValue(bool v) : value(v) {}
@@ -54,26 +57,26 @@ struct JsonValue {
     JsonValue(unsigned int v) : value(static_cast<double>(v)) {}  // Unsigned integers
     JsonValue(const std::string& v) : value(v) {}
     JsonValue(const char* v) : value(std::string(v)) {}
-    
+
     template<typename T>
     JsonValue(const std::vector<T>& v) : value(v) {}
-    
+
     template<typename T>
-    JsonValue(const std::unordered_map<std::string, T>& v) : value(v) {}
-    
+    JsonValue(const std::map<std::string, T>& v) : value(v) {}
+
     bool isNull() const { return value.type() == typeid(nullptr); }
     bool isBool() const { return value.type() == typeid(bool); }
     bool isNumber() const { return value.type() == typeid(double); }
     bool isString() const { return value.type() == typeid(std::string); }
     bool isArray() const { return value.type() == typeid(std::vector<JsonValue>); }
-    bool isObject() const { return value.type() == typeid(std::unordered_map<std::string, JsonValue>); }
-    
+    bool isObject() const { return value.type() == typeid(std::map<std::string, JsonValue>); }
+
     template<typename T>
     T get() const { return std::any_cast<T>(value); }
-    
+
     template<typename T>
     const T* getPtr() const { return std::any_cast<T>(&value); }
-    
+
     template<typename T>
     T* getPtr() { return std::any_cast<T>(&value); }
 };
@@ -83,18 +86,18 @@ namespace json {
     inline JsonValue makeArray() {
         return JsonValue(std::vector<JsonValue>{});
     }
-    
+
     inline JsonValue makeObject() {
-        return JsonValue(std::unordered_map<std::string, JsonValue>{});
+        return JsonValue(std::map<std::string, JsonValue>{});
     }
-    
+
     inline void arrayPushBack(JsonValue& arr, const JsonValue& item) {
         auto* vec = arr.getPtr<std::vector<JsonValue>>();
         if (vec) vec->push_back(item);
     }
-    
+
     inline void objectSet(JsonValue& obj, const std::string& key, const JsonValue& item) {
-        auto* map = obj.getPtr<std::unordered_map<std::string, JsonValue>>();
+        auto* map = obj.getPtr<std::map<std::string, JsonValue>>();
         if (map) (*map)[key] = item;
     }
 }
@@ -344,13 +347,14 @@ private:
     void saveDocument(const std::string& uri);
     void closeDocument(const std::string& uri);
     std::optional<OpenDocument> getDocument(const std::string& uri) const;
+
+public:
+    // URI/path conversion (public for testing)
     std::string uriToPath(const std::string& uri) const;
     std::string pathToUri(const std::filesystem::path& path) const;
-    
-    // Source access (hybrid: overlay first, then filesystem)
-    std::optional<std::string> getSource(const std::string& uri) const;
 
     // Position conversion (UTF-16 <-> UTF-8/grapheme)
+    // utf16ToUtf8 returns std::nullopt for invalid positions (e.g., mid-surrogate)
     Position utf8ToUtf16(const std::string& text, std::size_t utf8Offset) const;
     std::optional<std::size_t> utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const;
 
@@ -363,9 +367,8 @@ private:
     std::vector<Diagnostic> diagnoseDocument(const OpenDocument& doc);
     DiagnosticResult diagnoseDocumentWithCompile(const OpenDocument& doc);
     void publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics);
-    
-    // Create a SourceProvider that checks open documents first
-    // Uses ::emojineer::SourceProvider (the callback type from module.hpp)
+
+    // Overlay-first source provider for compile-based diagnostics.
     ::emojineer::SourceProvider createSourceProvider() const;
 
     // Workspace management
@@ -375,7 +378,7 @@ private:
 
     // Symbol resolution
     std::vector<SymbolLocation> findDefinitions(const std::string& uri, const Position& pos);
-    std::vector<SymbolLocation> findReferences(const std::string& uri, const Position& pos);
+    std::vector<SymbolLocation> findReferences(const std::string& uri, const Position& pos, bool includeDeclaration = true);
     std::vector<DocumentSymbol> getDocumentSymbols(const std::string& uri);
     std::vector<SymbolInformation> getWorkspaceSymbols(const std::string& query);
 
@@ -385,23 +388,38 @@ private:
     // Hover information
     std::optional<Hover> getHover(const std::string& uri, const Position& pos);
 
+    // Get or parse a document's AST program
+    std::optional<std::reference_wrapper<ast::Program>> getOrParseProgram(const std::string& uri);
+
+    // Get tokens for a document (for accurate position information)
+    std::optional<std::reference_wrapper<const std::vector<Token>>> getTokens(const std::string& uri);
+
+    // Find the column position of an identifier in a statement using tokens
+    // Returns std::nullopt if not found
+    std::optional<std::uint32_t> findIdentifierColumn(const ast::Stmt& stmt, const std::string& identifierName, const std::vector<Token>& tokens);
+
+    // Source provider for overlay support
+    SourceProvider getSourceProvider();
+
     // State
     bool initialized_{false};
     bool shutdown_{false};
     std::optional<InitializeResult> serverInfo_;
-    
+
     // Document overlays
     std::unordered_map<std::string, OpenDocument> openDocuments_;
-    
+
     // Workspace state
     std::optional<std::filesystem::path> workspaceRoot_;
     std::optional<ProjectManifest> manifest_;
     std::optional<ProjectLock> lock_;
     std::optional<PackageStore> packageStore_;
+    std::optional<PackageGraph> packageGraph_;
     CustomEmojiRegistry registry_;
 
-    // Cached data
-    std::unordered_map<std::string, ast::Program> parsedPrograms_;
+    // Cached data - store programs as unique_ptr to avoid copying unique_ptr members
+    std::unordered_map<std::string, std::unique_ptr<ast::Program>> parsedPrograms_;
+    std::unordered_map<std::string, std::vector<Token>> parsedTokens_;
     std::unordered_map<std::string, std::vector<Diagnostic>> diagnosticsCache_;
 };
 
