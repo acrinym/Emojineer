@@ -88,7 +88,7 @@ ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path
 void initialize_project(const std::filesystem::path& root, const std::string& name);
 std::vector<ProjectDiagnostic> check_project(const std::filesystem::path& root);
 void validate_manifest(const ProjectManifest& manifest);
-std::string canonical_manifest_text(const ProjectManifest& manifest);
+std::string canonical_manifest_text(const ProjectManifest& manifest, bool include_registries = true);
 std::string project_manifest_hash(const ProjectManifest& manifest);
 std::string canonical_project_lock(const std::filesystem::path& root,
                                    const ProjectManifest& manifest);
@@ -148,16 +148,32 @@ struct ResolvedRegistryDependency {
 std::vector<ResolvedRegistryDependency> resolve_registry_dependencies(
     const ProjectManifest& manifest,
     const std::filesystem::path& store_root,
+    const std::filesystem::path& project_root,
     bool offline);
 
 // Convert manifest to lock format 3
 ProjectLock manifest_to_lock(const std::filesystem::path& root,
                             const ProjectManifest& manifest);
 
+// Convert manifest to lock format 3 using pre-resolved registry dependencies
+// This avoids re-fetching from registry during lock writing
+ProjectLock manifest_to_lock_with_resolved_deps(
+    const std::filesystem::path& root,
+    const ProjectManifest& manifest,
+    const std::vector<ResolvedRegistryDependency>& resolved_registry_deps);
+
+// Write project lock using pre-resolved registry dependencies
+void write_project_lock_with_resolved_deps(
+    const std::filesystem::path& root,
+    const ProjectManifest& manifest,
+    const std::vector<ResolvedRegistryDependency>& resolved_registry_deps);
+
 ResolvedRegistryDependency resolve_single_registry_dependency(
     const RegistryEndpoint& endpoint,
     const std::string& name,
-    std::string_view requirement);
+    std::string_view requirement,
+    const std::filesystem::path& store_root,
+    const std::string& registry_alias);
 
 // Version conflict detection
 struct VersionConflict {
