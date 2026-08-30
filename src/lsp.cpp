@@ -3750,7 +3750,13 @@ std::string formatJsonRpcResponse(const JsonValue& result, std::optional<int> id
     auto obj = json::makeObject();
     json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
     json::objectSet(obj, "result", result);
-    if (id) json::objectSet(obj, "id", JsonValue(static_cast<double>(*id)));
+    if (id) {
+        json::objectSet(obj, "id", JsonValue(static_cast<double>(*id)));
+    } else {
+        // JSON-RPC 2.0 requires an explicit null id when a response/error
+        // cannot be correlated to a valid request id.
+        json::objectSet(obj, "id", JsonValue(nullptr));
+    }
 
     std::string body = toJson(obj);
     std::ostringstream out;
@@ -3767,7 +3773,13 @@ std::string formatJsonRpcError(int code, const std::string& message, std::option
     json::objectSet(error, "message", JsonValue(message));
     json::objectSet(obj, "error", error);
 
-    if (id) json::objectSet(obj, "id", JsonValue(static_cast<double>(*id)));
+    if (id) {
+        json::objectSet(obj, "id", JsonValue(static_cast<double>(*id)));
+    } else {
+        // JSON-RPC 2.0 requires an explicit null id when a response/error
+        // cannot be correlated to a valid request id.
+        json::objectSet(obj, "id", JsonValue(nullptr));
+    }
 
     std::string body = toJson(obj);
     std::ostringstream out;

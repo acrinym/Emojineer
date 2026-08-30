@@ -1801,7 +1801,26 @@ void test_publish_diagnostics_preserves_canonical_utf16_ranges() {
            "published diagnostic must preserve UTF-16 end character");
 }
 
+
+// JSON-RPC 2.0 requires an explicit null id for a response/error when the
+// request id cannot be identified. Notifications, by contrast, omit id.
+void test_jsonrpc_null_id_contract() {
+    const std::string error = formatJsonRpcError(-32700, "Parse error", std::nullopt);
+    assert(error.find("Content-Length:") == 0);
+    assert(error.find("\"id\":null") != std::string::npos &&
+           "unidentifiable JSON-RPC errors must carry id:null");
+
+    const std::string response = formatJsonRpcResponse(JsonValue(nullptr), std::nullopt);
+    assert(response.find("\"id\":null") != std::string::npos &&
+           "unidentifiable JSON-RPC responses must carry id:null");
+
+    const std::string notification = formatNotification("exit", JsonValue(nullptr));
+    assert(notification.find("\"id\"") == std::string::npos &&
+           "JSON-RPC notifications must not gain an id member");
+}
+
 int main() {
+    test_jsonrpc_null_id_contract();
     test_publish_diagnostics_preserves_canonical_utf16_ranges();
     std::cout << "=== Emojineer LSP Protocol Tests ===" << std::endl;
     
