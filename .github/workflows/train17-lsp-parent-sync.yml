@@ -33,8 +33,12 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j2
           ctest --test-dir build --output-on-failure
-      - name: Commit qualified repair
+      - name: Commit qualified repair if needed
         run: |
+          if git diff --quiet -- src/lsp.cpp; then
+            echo "No generated LSP repair delta remains on this head."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/lsp.cpp
