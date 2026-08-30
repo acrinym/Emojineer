@@ -25,6 +25,8 @@ jobs:
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
       - name: Apply exact-current product repair
         run: python3 .github/scripts/train17_final_coderabbit_repair.py
+      - name: Align capability tests with typed model
+        run: python3 .github/scripts/train17_final_capability_test_fix.py
       - name: Verify patch hygiene
         run: git diff --check
       - name: Debug configure, build, and full CTest
