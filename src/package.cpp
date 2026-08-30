@@ -468,6 +468,30 @@ private:
                         throw std::runtime_error("offline mode: registry dependency '" + dependency.name +
                                                  "' lock coordinate does not match owner manifest");
                     }
+
+                    // Alias alone is not an authority: two packages may both call different
+                    // registries `origin`. Bind the locked dependency to the registry declared
+                    // by THIS owning package and require canonical endpoint + identity equality.
+                    const auto owner_registry = std::find_if(
+                        manifest.registries.begin(), manifest.registries.end(),
+                        [&](const ProjectRegistry& registry) {
+                            return registry.alias == dependency.registry_alias;
+                        });
+                    if (owner_registry == manifest.registries.end()) {
+                        throw std::runtime_error("offline mode: registry dependency '" + dependency.name +
+                                                 "' owner manifest has no registry '" +
+                                                 dependency.registry_alias + "'");
+                    }
+                    // Owner binding is the canonical endpoint declared by this package.
+                    // The persisted registry ID remains validated against the lock's own
+                    // [[registry]] authority record; never rediscover it from the network offline.
+                    const auto expected_endpoint = parse_registry_endpoint(owner_registry->endpoint);
+                    if (!lock_dep->registry_endpoint ||
+                        *lock_dep->registry_endpoint != expected_endpoint.canonical) {
+                        throw std::runtime_error("offline mode: registry dependency '" + dependency.name +
+                                                 "' lock authority does not match owner manifest");
+                    }
+
                     std::vector<std::string> manifest_edges;
                     manifest_edges.reserve(dep_manifest.dependencies.size());
                     for (const auto& nested : dep_manifest.dependencies) manifest_edges.push_back(nested.name);

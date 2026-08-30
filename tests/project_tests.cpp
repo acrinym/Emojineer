@@ -246,6 +246,7 @@ void test_registry_path_dependency_rejected_online() {
 void test_registry_path_dependency_rejected_offline() {
     const auto root = temp_root("reg-path-dep-offline");
     const auto store_root = root / ".emojineer" / "packages";
+    const auto endpoint = emojineer::parse_registry_endpoint("https://registry.example.com");
     std::filesystem::remove_all(root);
 
     emojineer::initialize_project(root, "app");
@@ -275,21 +276,21 @@ void test_registry_path_dependency_rejected_offline() {
     
     // Create lock file with the registry dependency
     std::ofstream lock_out(root / "emojineer.lock");
-    lock_out << "lock_version = \"3\"\n";
+    lock_out << "lock_version = 3\n";
     lock_out << "manifest_hash = \"abc123def456\"\n";
     lock_out << "\n";
     lock_out << "[[registry]]\n";
     lock_out << "alias = \"origin\"\n";
     lock_out << "id = \"origin-id\"\n";
-    lock_out << "endpoint = \"https://registry.example.com\"\n";
+    lock_out << "endpoint = \"" << endpoint.canonical << "\"\n";
     lock_out << "\n";
     lock_out << "[[dependency]]\n";
     lock_out << "source = \"registry\"\n";
     lock_out << "name = \"mylib\"\n";
     lock_out << "version = \"1.0.0\"\n";
-    lock_out << "registry_alias = \"origin\"\n";
+    lock_out << "registry = \"origin\"\n";
     lock_out << "registry_id = \"origin-id\"\n";
-    lock_out << "registry_endpoint = \"https://registry.example.com\"\n";
+    lock_out << "registry_endpoint = \"" << endpoint.canonical << "\"\n";
     lock_out << "requirement = \"^1.0.0\"\n";
     lock_out << "artifact_sha256 = \"abc123\"\n";
     lock_out << "store_path = \"" << pkg_path.generic_string() << "\"\n";
@@ -299,7 +300,7 @@ void test_registry_path_dependency_rejected_offline() {
     // Update manifest to include registry dependency
     std::ofstream manifest_file(root / "emojineer.toml", std::ios::app);
     manifest_file << "\n[registries]\n";
-    manifest_file << "origin = \"https://registry.example.com\"\n";
+    manifest_file << "origin = \"" << endpoint.canonical << "\"\n";
     manifest_file << "\n[dependencies]\n";
     manifest_file << "mylib = \"registry:origin:^1.0.0\"\n";
     manifest_file.close();

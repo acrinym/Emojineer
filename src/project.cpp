@@ -792,9 +792,31 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
             if (std::filesystem::exists(lock_path)) {
                 try {
                     auto lock = load_project_lock(lock_path);
+
+                    // Registry aliases are package-local coordinates. Resolve the authority
+                    // from the CURRENT owning manifest before accepting a lock entry.
+                    const auto owner_registry = std::find_if(
+                        manifest.registries.begin(), manifest.registries.end(),
+                        [&](const ProjectRegistry& registry) {
+                            return registry.alias == dep.registry_alias;
+                        });
+                    if (owner_registry == manifest.registries.end()) {
+                        throw std::runtime_error("offline registry dependency '" + dep.name +
+                                                 "' references unknown owner registry '" +
+                                                 dep.registry_alias + "'");
+                    }
+                    // Canonicalizing the endpoint is local/string-only. Do NOT call
+                    // registry_identity() here: file/HTTPS identity discovery is network/authority I/O
+                    // and ordinary offline resolution must never contact the registry.
+                    const auto expected_endpoint = parse_registry_endpoint(owner_registry->endpoint);
+
                     for (const auto& lock_dep : lock.dependencies) {
-                        if (lock_dep.name == dep.name && lock_dep.source == LockSourceKind::Registry) {
-                            // Found in lock - construct resolved dependency from lock data
+                        if (lock_dep.name == dep.name &&
+                            lock_dep.source == LockSourceKind::Registry &&
+                            lock_dep.registry_alias && *lock_dep.registry_alias == dep.registry_alias &&
+                            lock_dep.requirement && *lock_dep.requirement == dep.requirement &&
+                            lock_dep.registry_endpoint && *lock_dep.registry_endpoint == expected_endpoint.canonical) {
+                            // Found the exact owner-scoped coordinate in the lock.
                             ResolvedRegistryDependency resolved_dep;
                             resolved_dep.name = lock_dep.name;
                             resolved_dep.version = lock_dep.version;
@@ -823,9 +845,15 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
                             resolved[key] = resolved_dep;
                             result.push_back(resolved_dep);
                             
-                            // Recursively resolve dependencies from lock
+                            // Recursively resolve dependencies from lock using the materialized
+                            // package's own registry bindings, not the root application's aliases.
                             ProjectManifest synthetic_manifest;
                             synthetic_manifest.dependencies = resolved_dep.dependencies;
+                            if (std::filesystem::exists(resolved_dep.store_path / "emojineer.toml")) {
+                                const auto embedded_manifest = load_project_manifest(
+                                    resolved_dep.store_path / "emojineer.toml");
+                                synthetic_manifest.registries = embedded_manifest.registries;
+                            }
                             auto nested = resolve_registry_dependencies_impl(synthetic_manifest, store_root, project_root, offline, resolved, resolving);
                             result.insert(result.end(), nested.begin(), nested.end());
                             
@@ -998,6 +1026,13 @@ void sync_project(const std::filesystem::path& root,
         std::filesystem::create_directories(store_root);
     }
     
+    // Offline sync may not be a weaker authority than offline compile/LSP.
+    // Validate the existing lock and the complete materialized package graph BEFORE
+    // resolving or rewriting anything. A malformed/stale/wrong-authority lock fails here.
+    if (offline) {
+        (void)resolve_package_graph(root, manifest, store_root, true);
+    }
+
     // Resolve registry dependencies
     std::unordered_map<std::string, ResolvedRegistryDependency> resolved;
     std::unordered_set<std::string> resolving;

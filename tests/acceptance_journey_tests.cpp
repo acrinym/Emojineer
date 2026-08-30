@@ -33,6 +33,12 @@ void write_text(const std::filesystem::path& path, const std::string& text) {
     output << text;
 }
 
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw std::runtime_error("cannot read test file");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
 // Test 1: Create and publish multiple versions of a library to a local registry
 void test_publish_library_versions() {
     std::cout << "Test: publish library versions to registry...\n";
@@ -161,13 +167,59 @@ void test_publish_library_with_dependency() {
     }
     require(saw_b && saw_a,
             "sync-produced lock must retain store paths and content hashes for direct/transitive registry packages");
+
+    // Corrupt only the transitive authority: lib-a belongs to child_registry, but make
+    // its lock metadata claim the root application's `origin`. Both authorities remain
+    // declared in the lock, so only owner-scoped validation can reject this.
+    const auto valid_lock_text = read_text(app_root / "emojineer.lock");
+    auto wrong_authority_lock = app_lock;
+    std::string root_registry_id;
+    for (const auto& registry : app_lock.registries) {
+        if (registry.alias == "origin" && registry.endpoint == root_endpoint.canonical) {
+            root_registry_id = registry.id;
+            break;
+        }
+    }
+    require(!root_registry_id.empty(), "root registry identity must be present in lock");
+    bool rewrote_transitive_authority = false;
+    for (auto& dep : wrong_authority_lock.dependencies) {
+        if (dep.name != "lib-a") continue;
+        dep.registry_alias = "origin";
+        dep.registry_id = root_registry_id;
+        dep.registry_endpoint = root_endpoint.canonical;
+        rewrote_transitive_authority = true;
+        break;
+    }
+    require(rewrote_transitive_authority, "test must locate transitive lib-a lock entry");
+    write_text(app_root / "emojineer.lock",
+               emojineer::canonical_lock_text(wrong_authority_lock));
+    const auto corrupt_lock_text = read_text(app_root / "emojineer.lock");
+
+    std::filesystem::remove_all(root_registry);
+    std::filesystem::remove_all(child_registry);
+
+    bool offline_sync_rejected_wrong_authority = false;
+    try {
+        emojineer::sync_project(app_root, true);
+    } catch (const std::runtime_error& error) {
+        const std::string message = error.what();
+        offline_sync_rejected_wrong_authority =
+            message.find("authority") != std::string::npos ||
+            message.find("coordinate") != std::string::npos ||
+            message.find("registry") != std::string::npos;
+    }
+    require(offline_sync_rejected_wrong_authority,
+            "offline sync must reject transitive lock provenance bound to the root authority");
+    require(read_text(app_root / "emojineer.lock") == corrupt_lock_text,
+            "rejected offline sync must not rewrite the malformed lock");
+
+    // Restore the valid pre-corruption lock. The registries stay unavailable for every
+    // remaining operation, proving the accepted path is completely materialized/offline.
+    write_text(app_root / "emojineer.lock", valid_lock_text);
     const auto offline_graph = emojineer::resolve_package_graph(
         app_root, app_manifest, emojineer::package_store_root(app_root), true);
     require(offline_graph.find("lib-b") != nullptr && offline_graph.find("lib-a") != nullptr,
             "offline graph must contain direct lib-b and its owned transitive lib-a");
-
-    std::filesystem::remove_all(root_registry);
-    std::filesystem::remove_all(child_registry);
     write_text(app_root / "src/main.emoji",
         "🧩 🚀\n🔗 📜pkg:lib-b/src/main.emoji📜\n📝 🍏 🫴 🤲\n");
     (void)emojineer::compile_file(app_root / "src/main.emoji", {}, app_root);
