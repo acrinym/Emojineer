@@ -1942,11 +1942,12 @@ JsonValue LanguageServer::handleHover(const JsonValue& params) {
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
+    if (!graphemeCol) return JsonValue(nullptr);
 
     // Convert to 1-indexed for lexer (line is 0-indexed in LSP, column is UTF-16 units)
     Position internalPos;
     internalPos.line = line;  // LSP uses 0-indexed lines
-    internalPos.character = graphemeCol.value_or(utf16Char);  // Fallback to UTF-16 if conversion fails
+    internalPos.character = *graphemeCol;  // Fallback to UTF-16 if conversion fails
 
     auto hover = getHover(doc->uri, internalPos);
     if (!hover) return JsonValue(nullptr);
@@ -2158,6 +2159,105 @@ static std::optional<std::string> findIdentifierAtPosition(const std::string& te
     return std::nullopt;
 }
 
+static bool pathHasPrefix(const std::filesystem::path& candidate,
+                          const std::filesystem::path& root) {
+    auto c = candidate.lexically_normal();
+    auto r = root.lexically_normal();
+    auto ci = c.begin();
+    for (auto ri = r.begin(); ri != r.end(); ++ri, ++ci) {
+        if (ci == c.end() || *ci != *ri) return false;
+    }
+    return true;
+}
+
+static const ResolvedPackage* packageOwningPath(const PackageGraph& graph,
+                                                const std::filesystem::path& candidate) {
+    const ResolvedPackage* owner = nullptr;
+    std::size_t bestLength = 0;
+    for (const auto& pkg : graph.packages) {
+        if (pkg.root.empty()) continue;
+        auto normalizedRoot = pkg.root.lexically_normal();
+        if (pathHasPrefix(candidate, normalizedRoot)) {
+            auto length = normalizedRoot.native().size();
+            if (!owner || length > bestLength) {
+                owner = &pkg;
+                bestLength = length;
+            }
+        }
+    }
+    return owner;
+}
+
+static std::set<std::filesystem::path> visibleSourceRoots(
+    const std::filesystem::path& workspaceRoot,
+    const std::optional<ProjectManifest>& manifest,
+    const PackageGraph& graph,
+    const std::filesystem::path& requesterPath) {
+
+    std::set<std::filesystem::path> roots;
+    if (const auto* owner = packageOwningPath(graph, requesterPath)) {
+        roots.insert(owner->root.lexically_normal());
+        for (const auto& dependencyName : owner->dependencies) {
+            if (const auto* dependency = graph.find(dependencyName)) {
+                if (!dependency->root.empty()) {
+                    roots.insert(dependency->root.lexically_normal());
+                }
+            }
+        }
+        return roots;
+    }
+
+    roots.insert(workspaceRoot.lexically_normal());
+    if (manifest) {
+        for (const auto& dependency : manifest->dependencies) {
+            if (const auto* resolved = graph.find(dependency.name)) {
+                if (!resolved->root.empty()) {
+                    roots.insert(resolved->root.lexically_normal());
+                }
+            }
+        }
+    }
+    return roots;
+}
+
+static std::set<std::string> visibleDependencyNames(
+    const std::optional<ProjectManifest>& manifest,
+    const PackageGraph& graph,
+    const std::filesystem::path& requesterPath) {
+
+    std::set<std::string> names;
+    if (const auto* owner = packageOwningPath(graph, requesterPath)) {
+        names.insert(owner->dependencies.begin(), owner->dependencies.end());
+        return names;
+    }
+
+    if (manifest) {
+        for (const auto& dependency : manifest->dependencies) {
+            names.insert(dependency.name);
+        }
+    }
+    return names;
+}
+
+static bool sourcePathIsVisible(
+    const std::filesystem::path& candidate,
+    const std::filesystem::path& workspaceRoot,
+    const PackageGraph& graph,
+    const std::set<std::filesystem::path>& visibleRoots) {
+
+    if (const auto* owner = packageOwningPath(graph, candidate)) {
+        return visibleRoots.count(owner->root.lexically_normal()) != 0;
+    }
+
+    if (!pathHasPrefix(candidate, workspaceRoot)) return false;
+    auto relative = candidate.lexically_normal().lexically_relative(workspaceRoot.lexically_normal());
+    if (!relative.empty()) {
+        auto first = relative.begin();
+        if (first != relative.end() && first->string() == ".emojineer") return false;
+    }
+    return true;
+}
+
 std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& uri, const Position& pos) {
     std::vector<SymbolLocation> results;
 
@@ -2249,6 +2349,14 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
     // Search across other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
+        if (workspaceRoot_ && packageGraph_) {
+            auto visibleRoots = visibleSourceRoots(
+                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
+                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                continue;
+            }
+        }
 
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
@@ -2268,21 +2376,9 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
 
         // Collect authorized package paths from PackageGraph
         // This includes root, local modules, path packages, and materialized registry packages
-        std::set<std::filesystem::path> authorizedPaths;
+        auto authorizedPaths = visibleSourceRoots(
+            root, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
 
-        // Add root directory for local modules
-        authorizedPaths.insert(root);
-
-        // Add all packages from PackageGraph (includes root, path deps, and materialized registry packages)
-        for (const auto& pkg : (*packageGraph_).packages) {
-            // Use the resolved root from PackageGraph
-            if (!pkg.root.empty()) {
-                authorizedPaths.insert(pkg.root);
-            }
-        }
-
-        // Search authorized paths for .emj/.emoji files
-        // Only do one level deep to avoid scanning entire workspace
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
 
@@ -2531,6 +2627,14 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
     // Search across other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
+        if (workspaceRoot_ && packageGraph_) {
+            auto visibleRoots = visibleSourceRoots(
+                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
+                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                continue;
+            }
+        }
 
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
@@ -2551,15 +2655,8 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
         std::filesystem::path root = *workspaceRoot_;
 
         // Collect authorized paths from PackageGraph
-        std::set<std::filesystem::path> authorizedPaths;
-        authorizedPaths.insert(root);
-
-        // Add all packages from PackageGraph
-        for (const auto& pkg : (*packageGraph_).packages) {
-            if (!pkg.root.empty()) {
-                authorizedPaths.insert(pkg.root);
-            }
-        }
+        auto authorizedPaths = visibleSourceRoots(
+            root, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
 
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
@@ -2610,11 +2707,12 @@ JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
+    if (!graphemeCol) return JsonValue(json::makeArray());
 
     // Convert to internal position
     Position internalPos;
     internalPos.line = line;
-    internalPos.character = graphemeCol.value_or(utf16Char);
+    internalPos.character = *graphemeCol;
 
     auto completions = getCompletions(uri, internalPos);
 
@@ -2639,59 +2737,42 @@ JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
 std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& uri, const Position& pos) {
     std::vector<CompletionItem> completions;
 
-    // Get the prefix at the current position for filtering
+    // Get the lexical prefix at the current grapheme position.
     auto doc = getDocument(uri);
     std::string prefix;
     if (doc) {
-        // Get the text up to the current position
-        std::string beforeCursor = doc->text;
-        // Find the line start
-        std::size_t lineStart = 0;
-        std::size_t currentOffset = 0;
-        std::size_t utf8Offset = 0;
+        std::string lineText = getLine(doc->text, pos.line);
+        auto lineGraphemes = segment_graphemes(lineText);
+        if (pos.character <= lineGraphemes.size()) {
+            std::string beforeCursor;
+            for (std::size_t i = 0; i < pos.character; ++i) {
+                beforeCursor += lineGraphemes[i].display;
+            }
 
-        // Count lines until we reach the target line
-        for (std::size_t i = 0; i < doc->text.size() && currentOffset < pos.line; i++) {
-            if (doc->text[i] == '\n') {
-                currentOffset++;
-                if (currentOffset <= pos.line) {
-                    lineStart = i + 1;
+            auto prefixGraphemes = segment_graphemes(beforeCursor);
+            std::size_t begin = prefixGraphemes.size();
+            while (begin > 0) {
+                const auto& g = prefixGraphemes[begin - 1].display;
+                bool delimiter = g.empty();
+                if (!delimiter) {
+                    delimiter = std::all_of(g.begin(), g.end(), [](unsigned char ch) {
+                        return std::isspace(ch) != 0;
+                    });
                 }
+                if (!delimiter && g.size() == 1) {
+                    const char ch = g[0];
+                    delimiter = ch == '(' || ch == ')' || ch == '[' || ch == ']' ||
+                                ch == '{' || ch == '}' || ch == ',' || ch == ':' ||
+                                ch == ';' || ch == '=' || ch == '+' || ch == '-' ||
+                                ch == '*' || ch == '/' || ch == '<' || ch == '>';
+                }
+                if (delimiter) break;
+                --begin;
+            }
+            for (std::size_t i = begin; i < prefixGraphemes.size(); ++i) {
+                prefix += prefixGraphemes[i].display;
             }
         }
-
-        // Now extract the prefix on the current line up to the cursor position
-        std::size_t lineEnd = lineStart;
-        currentOffset = 0;
-        for (std::size_t i = lineStart; i < doc->text.size(); i++) {
-            if (doc->text[i] == '\n') break;
-            // Count grapheme clusters to find cursor position
-            unsigned char byte = static_cast<unsigned char>(doc->text[i]);
-            if ((byte & 0x80) == 0) {
-                // ASCII
-                currentOffset++;
-                if (currentOffset <= pos.character) {
-                    lineEnd = i + 1;
-                }
-            } else {
-                // UTF-8 - decode to count graphemes
-                char32_t cp = 0;
-                std::size_t oldPos = i;
-                if (decodeUtf8CodePoint(doc->text, i, cp)) {
-                    currentOffset += countUtf16UnitsForCodePoint(cp);
-                    if (currentOffset <= pos.character) {
-                        lineEnd = i;
-                    }
-                } else {
-                    currentOffset++;
-                    if (currentOffset <= pos.character) {
-                        lineEnd = i + 1;
-                    }
-                }
-            }
-        }
-
-        prefix = doc->text.substr(lineStart, lineEnd - lineStart);
     }
 
     // Helper to filter by prefix - use string_view for compatibility
@@ -2747,23 +2828,23 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         }
     }
 
-    // Add direct dependencies from PackageGraph (includes all resolved packages)
-    if (packageGraph_) {
-        for (const auto& pkg : (*packageGraph_).packages) {
-            if (matchesPrefix(pkg.name)) {
-                CompletionItem item;
-                item.label = pkg.name;
-                // Detail indicates source kind (path or registry)
-                if (pkg.source_kind == DependencyKind::Path) {
-                    item.detail = "path package";
-                } else if (pkg.source_kind == DependencyKind::Registry) {
-                    item.detail = "registry package";
-                } else {
-                    item.detail = "direct dependency";
-                }
-                item.kind = static_cast<int>(CompletionItemKind::Module);
-                completions.push_back(item);
+    // Add only dependencies visible from the requesting package/root.
+    if (packageGraph_ && workspaceRoot_) {
+        auto dependencyNames = visibleDependencyNames(
+            manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+        for (const auto& dependencyName : dependencyNames) {
+            const auto* pkg = packageGraph_->find(dependencyName);
+            if (!pkg || !matchesPrefix(pkg->name)) continue;
+
+            CompletionItem item;
+            item.label = pkg->name;
+            if (pkg->source_kind == DependencyKind::Path) {
+                item.detail = "path package";
+            } else {
+                item.detail = "registry package";
             }
+            item.kind = static_cast<int>(CompletionItemKind::Module);
+            completions.push_back(item);
         }
     }
 
@@ -2807,6 +2888,14 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
     // Add symbols from other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
+        if (workspaceRoot_ && packageGraph_) {
+            auto visibleRoots = visibleSourceRoots(
+                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
+                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                continue;
+            }
+        }
 
         auto otherProgramOpt = getOrParseProgram(otherUri);
         if (!otherProgramOpt) continue;
@@ -2858,15 +2947,8 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         std::filesystem::path root = *workspaceRoot_;
 
         // Collect authorized paths from PackageGraph
-        std::set<std::filesystem::path> authorizedPaths;
-        authorizedPaths.insert(root);
-
-        // Add all packages from PackageGraph
-        for (const auto& pkg : (*packageGraph_).packages) {
-            if (!pkg.root.empty()) {
-                authorizedPaths.insert(pkg.root);
-            }
-        }
+        auto authorizedPaths = visibleSourceRoots(
+            root, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
 
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
@@ -2953,10 +3035,11 @@ JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
+    if (!graphemeCol) return JsonValue(json::makeArray());
 
     Position internalPos;
     internalPos.line = line;
-    internalPos.character = graphemeCol.value_or(utf16Char);
+    internalPos.character = *graphemeCol;
 
     auto defs = findDefinitions(uri, internalPos);
 
@@ -3037,10 +3120,11 @@ JsonValue LanguageServer::handleReferences(const JsonValue& params) {
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
+    if (!graphemeCol) return JsonValue(json::makeArray());
 
     Position internalPos;
     internalPos.line = line;
-    internalPos.character = graphemeCol.value_or(utf16Char);
+    internalPos.character = *graphemeCol;
 
     auto refs = findReferences(uri, internalPos, includeDeclaration);
 
@@ -3141,36 +3225,51 @@ std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string
     if (!doc) return symbols;
 
     auto programOpt = getOrParseProgram(uri);
-    if (!programOpt) return symbols;
+    auto tokensOpt = getTokens(uri);
+    if (!programOpt || !tokensOpt) return symbols;
     const auto& program = programOpt->get();
+    const auto& tokens = tokensOpt->get();
 
-    // Extract symbols from the program
-    // Estimate column - in Emojineer syntax, identifier typically starts
-    // after the leading emoji keyword (🛠️ for functions, 🐍 for variables)
-    constexpr std::uint32_t estimatedColumn = 2;
+    auto declarationRange = [&](std::size_t line, const std::string& name) -> std::optional<Range> {
+        for (const auto& token : tokens) {
+            if (token.line == line && token.kind == TokenKind::Identifier &&
+                (token.lexeme == name || token.canonical == name)) {
+                return tokenToRange(doc->text, token);
+            }
+        }
+        return std::nullopt;
+    };
 
     for (const auto& stmt : program.statements) {
         if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
+            auto exact = declarationRange(stmt->line, funcDecl->name);
+            if (!exact) continue;
             DocumentSymbol sym;
             sym.name = funcDecl->name;
             sym.kind = static_cast<int>(SymbolKind::Function);
-            // Use actual line from AST, estimate column based on Emojineer syntax, with safe cast
-            std::uint32_t lineNum = safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0);
-            std::uint32_t nameEndCol = estimatedColumn + safeSizeToUint32(funcDecl->name.length());
-            sym.range = { {lineNum, estimatedColumn}, {lineNum, nameEndCol} };
-            sym.selectionRange = { {lineNum, estimatedColumn}, {lineNum, nameEndCol} };
+            sym.range = *exact;
+            sym.selectionRange = *exact;
             sym.detail = "function";
-            symbols.push_back(sym);
-        }
-        else if (auto* varDecl = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
+            symbols.push_back(std::move(sym));
+        } else if (auto* varDecl = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
+            auto exact = declarationRange(stmt->line, varDecl->name);
+            if (!exact) continue;
             DocumentSymbol sym;
             sym.name = varDecl->name;
             sym.kind = static_cast<int>(SymbolKind::Variable);
-            std::uint32_t lineNum = safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0);
-            std::uint32_t nameEndCol = estimatedColumn + safeSizeToUint32(varDecl->name.length());
-            sym.range = { {lineNum, estimatedColumn}, {lineNum, nameEndCol} };
-            sym.selectionRange = { {lineNum, estimatedColumn}, {lineNum, nameEndCol} };
-            symbols.push_back(sym);
+            sym.range = *exact;
+            sym.selectionRange = *exact;
+            symbols.push_back(std::move(sym));
+        } else if (auto* modDecl = dynamic_cast<const ast::ModuleDecl*>(stmt.get())) {
+            auto exact = declarationRange(stmt->line, modDecl->name);
+            if (!exact) continue;
+            DocumentSymbol sym;
+            sym.name = modDecl->name;
+            sym.kind = static_cast<int>(SymbolKind::Module);
+            sym.range = *exact;
+            sym.selectionRange = *exact;
+            sym.detail = "module";
+            symbols.push_back(std::move(sym));
         }
     }
 
@@ -3215,7 +3314,18 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
     std::vector<SymbolInformation> symbols;
 
     // Search across all open documents
+    std::set<std::filesystem::path> workspaceVisibleRoots;
+    if (workspaceRoot_ && packageGraph_) {
+        workspaceVisibleRoots = visibleSourceRoots(
+            *workspaceRoot_, manifest_, *packageGraph_, *workspaceRoot_);
+    }
+
     for (const auto& [uri, doc] : openDocuments_) {
+        if (workspaceRoot_ && packageGraph_ &&
+            !sourcePathIsVisible(std::filesystem::path(uriToPath(uri)),
+                                 *workspaceRoot_, *packageGraph_, workspaceVisibleRoots)) {
+            continue;
+        }
         auto docSymbols = getDocumentSymbols(uri);
         for (const auto& ds : docSymbols) {
             // Filter by query if provided
@@ -3235,15 +3345,8 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
         std::filesystem::path root = *workspaceRoot_;
 
         // Collect authorized paths from PackageGraph
-        std::set<std::filesystem::path> authorizedPaths;
-        authorizedPaths.insert(root);
-
-        // Add all packages from PackageGraph
-        for (const auto& pkg : (*packageGraph_).packages) {
-            if (!pkg.root.empty()) {
-                authorizedPaths.insert(pkg.root);
-            }
-        }
+        auto authorizedPaths = visibleSourceRoots(
+            root, manifest_, *packageGraph_, root);
 
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
@@ -3279,13 +3382,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             for (const auto& token : modTokens) {
                                                 if (token.line == funcDecl->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == funcDecl->name || token.canonical == funcDecl->name)) {
-                                                    Range r;
-                                                    r.start = {safeSizeToUint32(funcDecl->line > 0 ? funcDecl->line - 1 : 0),
-                                                               safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                                                    auto gs = segment_graphemes(token.lexeme);
-                                                    r.end = {safeSizeToUint32(funcDecl->line > 0 ? funcDecl->line - 1 : 0),
-                                                             safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                                                    info.location = {moduleUri, r};
+                                                    info.location = {moduleUri, tokenToRange(source, token)};
                                                     break;
                                                 }
                                             }
@@ -3301,13 +3398,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             for (const auto& token : modTokens) {
                                                 if (token.line == varDecl->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == varDecl->name || token.canonical == varDecl->name)) {
-                                                    Range r;
-                                                    r.start = {safeSizeToUint32(varDecl->line > 0 ? varDecl->line - 1 : 0),
-                                                               safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                                                    auto gs = segment_graphemes(token.lexeme);
-                                                    r.end = {safeSizeToUint32(varDecl->line > 0 ? varDecl->line - 1 : 0),
-                                                             safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                                                    info.location = {moduleUri, r};
+                                                    info.location = {moduleUri, tokenToRange(source, token)};
                                                     break;
                                                 }
                                             }
@@ -3323,13 +3414,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             for (const auto& token : modTokens) {
                                                 if (token.line == modDecl->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == modDecl->name || token.canonical == modDecl->name)) {
-                                                    Range r;
-                                                    r.start = {safeSizeToUint32(modDecl->line > 0 ? modDecl->line - 1 : 0),
-                                                               safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                                                    auto gs = segment_graphemes(token.lexeme);
-                                                    r.end = {safeSizeToUint32(modDecl->line > 0 ? modDecl->line - 1 : 0),
-                                                             safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                                                    info.location = {moduleUri, r};
+                                                    info.location = {moduleUri, tokenToRange(source, token)};
                                                     break;
                                                 }
                                             }
@@ -3345,13 +3430,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             for (const auto& token : modTokens) {
                                                 if (token.line == exportStmt->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == exportStmt->name || token.canonical == exportStmt->name)) {
-                                                    Range r;
-                                                    r.start = {safeSizeToUint32(exportStmt->line > 0 ? exportStmt->line - 1 : 0),
-                                                               safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                                                    auto gs = segment_graphemes(token.lexeme);
-                                                    r.end = {safeSizeToUint32(exportStmt->line > 0 ? exportStmt->line - 1 : 0),
-                                                             safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                                                    info.location = {moduleUri, r};
+                                                    info.location = {moduleUri, tokenToRange(source, token)};
                                                     break;
                                                 }
                                             }
@@ -3615,7 +3694,6 @@ JsonValue LanguageServer::handleRequest(const std::string& method, const JsonVal
     if (method == "textDocument/documentSymbol") return handleDocumentSymbol(params);
     if (method == "workspace/symbol") return handleWorkspaceSymbol(params);
     if (method == "textDocument/formatting") return handleFormatting(params);
-    if (method == "textDocument/rangeFormatting") return handleRangeFormatting(params);
 
     // Unknown method - return -32601 (Method not found)
     throw JsonRpcError(JSONRPC_METHOD_NOT_FOUND, "Method not found: " + method);
