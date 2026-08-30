@@ -4,6 +4,7 @@
 #include "emojineer/module.hpp"
 #include "emojineer/package.hpp"
 #include "emojineer/project.hpp"
+#include "emojineer/source_diagnostic.hpp"
 #include "emojineer/token.hpp"
 
 #include <any>
@@ -47,7 +48,7 @@ struct Range {
 
 struct JsonValue {
     std::any value;
-    
+
     JsonValue() = default;
     JsonValue(std::nullptr_t v) : value(v) {}
     JsonValue(bool v) : value(v) {}
@@ -56,26 +57,26 @@ struct JsonValue {
     JsonValue(unsigned int v) : value(static_cast<double>(v)) {}  // Unsigned integers
     JsonValue(const std::string& v) : value(v) {}
     JsonValue(const char* v) : value(std::string(v)) {}
-    
+
     template<typename T>
     JsonValue(const std::vector<T>& v) : value(v) {}
-    
+
     template<typename T>
     JsonValue(const std::map<std::string, T>& v) : value(v) {}
-    
+
     bool isNull() const { return value.type() == typeid(nullptr); }
     bool isBool() const { return value.type() == typeid(bool); }
     bool isNumber() const { return value.type() == typeid(double); }
     bool isString() const { return value.type() == typeid(std::string); }
     bool isArray() const { return value.type() == typeid(std::vector<JsonValue>); }
     bool isObject() const { return value.type() == typeid(std::map<std::string, JsonValue>); }
-    
+
     template<typename T>
     T get() const { return std::any_cast<T>(value); }
-    
+
     template<typename T>
     const T* getPtr() const { return std::any_cast<T>(&value); }
-    
+
     template<typename T>
     T* getPtr() { return std::any_cast<T>(&value); }
 };
@@ -85,16 +86,16 @@ namespace json {
     inline JsonValue makeArray() {
         return JsonValue(std::vector<JsonValue>{});
     }
-    
+
     inline JsonValue makeObject() {
         return JsonValue(std::map<std::string, JsonValue>{});
     }
-    
+
     inline void arrayPushBack(JsonValue& arr, const JsonValue& item) {
         auto* vec = arr.getPtr<std::vector<JsonValue>>();
         if (vec) vec->push_back(item);
     }
-    
+
     inline void objectSet(JsonValue& obj, const std::string& key, const JsonValue& item) {
         auto* map = obj.getPtr<std::map<std::string, JsonValue>>();
         if (map) (*map)[key] = item;
@@ -288,6 +289,11 @@ struct OpenDocument {
     std::vector<Diagnostic> diagnostics;
 };
 
+struct DiagnosticResult {
+    std::string primaryUri;
+    std::unordered_map<std::string, std::vector<Diagnostic>> diagnosticsByUri;
+};
+
 // Symbol location for definitions/references
 struct SymbolLocation {
     std::string uri;
@@ -295,6 +301,10 @@ struct SymbolLocation {
     std::string name;
     std::string symbolKind;  // "function", "variable", "module", etc.
 };
+
+// Backward compatibility alias - SourceLocationException is now in source_diagnostic.hpp
+// This allows existing code that uses lsp::SourceLocationException to continue working
+using SourceLocationException = ::emojineer::SourceLocationException;
 
 // LSP server main class
 class LanguageServer {
@@ -348,9 +358,18 @@ public:
     Position utf8ToUtf16(const std::string& text, std::size_t utf8Offset) const;
     std::optional<std::size_t> utf16ToUtf8(const std::string& text, std::uint32_t line, std::uint32_t utf16Col) const;
 
+    // Canonical token-to-range conversion: converts a Token's 1-based grapheme
+    // line/column + lexeme into an exact LSP UTF-16 Range against original source.
+    // This is the ONE authoritative way to convert token positions to LSP ranges.
+    Range tokenToRange(const std::string& sourceText, const Token& token) const;
+
     // Diagnostics
     std::vector<Diagnostic> diagnoseDocument(const OpenDocument& doc);
+    DiagnosticResult diagnoseDocumentWithCompile(const OpenDocument& doc);
     void publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics);
+
+    // Overlay-first source provider for compile-based diagnostics.
+    ::emojineer::SourceProvider createSourceProvider() const;
 
     // Workspace management
     void discoverWorkspace(const std::filesystem::path& root);
@@ -386,10 +405,10 @@ public:
     bool initialized_{false};
     bool shutdown_{false};
     std::optional<InitializeResult> serverInfo_;
-    
+
     // Document overlays
     std::unordered_map<std::string, OpenDocument> openDocuments_;
-    
+
     // Workspace state
     std::optional<std::filesystem::path> workspaceRoot_;
     std::optional<ProjectManifest> manifest_;

@@ -33,9 +33,9 @@ class JsonRpcError : public std::runtime_error {
 public:
     JsonRpcError(int code, const std::string& message)
         : std::runtime_error(message), code_(code) {}
-    
+
     int code() const { return code_; }
-    
+
 private:
     int code_;
 };
@@ -132,7 +132,7 @@ std::string parseJsonString(const std::string& json, std::size_t& pos) {
                     std::string hex = json.substr(pos + 1, 4);
                     char32_t codePoint = static_cast<char32_t>(std::stoul(hex, nullptr, 16));
                     pos += 4;
-                    
+
                     // Check for surrogate pair
                     if (codePoint >= 0xD800 && codePoint <= 0xDBFF) {
                         // High surrogate, expect \uXXXX low surrogate
@@ -159,7 +159,7 @@ std::string parseJsonString(const std::string& json, std::size_t& pos) {
                         // Low surrogate without high surrogate - invalid
                         throw std::runtime_error("invalid surrogate: low surrogate without high surrogate");
                     }
-                    
+
                     // Encode as UTF-8
                     if (codePoint < 0x80) {
                         result += static_cast<char>(codePoint);
@@ -202,7 +202,7 @@ JsonValue parseJsonObject(const std::string& json, std::size_t& pos) {
     bool expectCommaOrEnd = false;
     while (pos < json.size()) {
         skipWhitespace(json, pos);
-        
+
         if (expectCommaOrEnd) {
             if (json[pos] == '}') {
                 pos++;
@@ -216,22 +216,22 @@ JsonValue parseJsonObject(const std::string& json, std::size_t& pos) {
             }
             skipWhitespace(json, pos);
         }
-        
+
         // Parse key
         std::string key = parseJsonString(json, pos);
         skipWhitespace(json, pos);
-        
+
         // Expect colon
         if (pos >= json.size() || json[pos] != ':') {
             throw std::runtime_error("expected ':' after object key");
         }
         pos++;
         skipWhitespace(json, pos);
-        
+
         // Parse value
         JsonValue value = parseJsonValue(json, pos);
         json::objectSet(obj, key, value);
-        
+
         expectCommaOrEnd = true;
     }
     // If we exit the loop without finding }, it's an error
@@ -269,7 +269,7 @@ JsonValue parseJsonArray(const std::string& json, std::size_t& pos) {
 JsonValue parseJsonValue(const std::string& json, std::size_t& pos) {
     skipWhitespace(json, pos);
     if (pos >= json.size()) throw std::runtime_error("unexpected end of input");
-    
+
     switch (json[pos]) {
         case '{': return parseJsonObject(json, pos);
         case '[': return parseJsonArray(json, pos);
@@ -286,8 +286,8 @@ JsonValue parseJsonValue(const std::string& json, std::size_t& pos) {
         default:
             if (json[pos] == '-' || std::isdigit(static_cast<unsigned char>(json[pos]))) {
                 std::string numStr;
-                while (pos < json.size() && (std::isdigit(static_cast<unsigned char>(json[pos])) || json[pos] == '.' || 
-                                             json[pos] == '-' || json[pos] == '+' || 
+                while (pos < json.size() && (std::isdigit(static_cast<unsigned char>(json[pos])) || json[pos] == '.' ||
+                                             json[pos] == '-' || json[pos] == '+' ||
                                              json[pos] == 'e' || json[pos] == 'E')) {
                     numStr += json[pos++];
                 }
@@ -330,20 +330,20 @@ static void encodeUnicodeEscape(std::ostringstream& out, char32_t cp) {
 // Returns true on success, false on invalid UTF-8.
 static bool decodeUtf8CodePoint(const std::string& text, std::size_t& pos, char32_t& codePoint) {
     if (pos >= text.size()) return false;
-    
+
     unsigned char byte = static_cast<unsigned char>(text[pos]);
-    
+
     // Single byte (ASCII)
     if ((byte & 0x80) == 0) {
         codePoint = byte;
         pos += 1;
         return true;
     }
-    
+
     // Determine sequence length from first byte
     int seqLen = 0;
     char32_t cp = 0;
-    
+
     if ((byte & 0xE0) == 0xC0) {
         seqLen = 2;
         cp = byte & 0x1F;
@@ -357,26 +357,26 @@ static bool decodeUtf8CodePoint(const std::string& text, std::size_t& pos, char3
         // Invalid leading byte
         return false;
     }
-    
+
     // Check we have enough bytes
     if (pos + seqLen > text.size()) return false;
-    
+
     // Decode continuation bytes
     for (int i = 1; i < seqLen; i++) {
         unsigned char cb = static_cast<unsigned char>(text[pos + i]);
         if ((cb & 0xC0) != 0x80) return false;  // Not a continuation byte
         cp = (cp << 6) | (cb & 0x3F);
     }
-    
+
     // Validate code point
     if (cp > 0x10FFFF) return false;  // Out of Unicode range
     if (cp >= 0xD800 && cp <= 0xDFFF) return false;  // Surrogates invalid in UTF-8
-    
+
     // Reject overlong encodings - each sequence length has a minimum code point
     if (seqLen == 2 && cp < 0x80) return false;   // 2-byte must encode >= U+0080
     if (seqLen == 3 && cp < 0x800) return false;  // 3-byte must encode >= U+0800
     if (seqLen == 4 && cp < 0x10000) return false; // 4-byte must encode >= U+10000
-    
+
     codePoint = cp;
     pos += seqLen;
     return true;
@@ -390,7 +390,7 @@ static void escapeJsonString(const std::string& s, std::ostringstream& out) {
     while (pos < s.size()) {
         char32_t codePoint = 0;
         std::size_t oldPos = pos;
-        
+
         if (decodeUtf8CodePoint(s, pos, codePoint)) {
             // Handle the Unicode code point
             switch (codePoint) {
@@ -455,7 +455,7 @@ void jsonValueToString(const JsonValue& value, std::ostringstream& out) {
     } else if (value.isBool()) {
         out << (value.get<bool>() ? "true" : "false");
     } else if (value.isNumber()) {
-        // Use deterministic number formatting: no scientific notation, 
+        // Use deterministic number formatting: no scientific notation,
         // no trailing zeros for integers, precise decimal for floats
         double num = value.get<double>();
         // Check if the number is effectively an integer
@@ -533,8 +533,8 @@ static std::string percentEncodePath(const std::string& s) {
     for (unsigned char c : s) {
         // In file URI path: don't encode A-Z a-z 0-9 / : - _ . ~
         // Encode everything else
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || 
-            (c >= '0' && c <= '9') || c == '/' || c == ':' || 
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '/' || c == ':' ||
             c == '-' || c == '_' || c == '.' || c == '~') {
             result += c;
         } else {
@@ -550,10 +550,10 @@ static std::string percentEncodePath(const std::string& s) {
 std::string LanguageServer::uriToPath(const std::string& uri) const {
     if (uri.rfind("file://", 0) == 0) {
         std::string path = uri.substr(7);
-        
+
         // Decode percent-encoded characters
         path = percentDecode(path);
-        
+
         // Handle Windows paths (e.g., /C:/Users/... or C:/Users/...)
         if (path.size() >= 3 && path[0] == '/' && path[2] == ':') {
             path = path.substr(1); // Remove leading slash from /C:/
@@ -561,7 +561,7 @@ std::string LanguageServer::uriToPath(const std::string& uri) const {
             // Already has drive letter like C:\
             // Keep as-is
         }
-        
+
         return path;
     }
     // Only accept file:// URIs - reject other URI schemes for security
@@ -570,23 +570,23 @@ std::string LanguageServer::uriToPath(const std::string& uri) const {
 
 std::string LanguageServer::pathToUri(const std::filesystem::path& path) const {
     std::string pathStr = path.string();
-    
+
     // Convert backslashes to forward slashes for URI
     std::replace(pathStr.begin(), pathStr.end(), '\\', '/');
-    
+
     // Percent-encode special characters (but not / or : for file URIs)
     pathStr = percentEncodePath(pathStr);
-    
+
     // On Windows, add leading slash if not present (e.g., C:/... -> /C:/...)
     if (pathStr.size() >= 2 && pathStr[1] == ':') {
         pathStr = "/" + pathStr;
     }
-    
+
     // Handle UNC paths (\\server\share) - encode as file:////server/share
     if (pathStr.size() >= 2 && pathStr[0] == '/' && pathStr[1] == '/') {
         // Already has leading slashes - keep them
     }
-    
+
     return "file://" + pathStr;
 }
 
@@ -599,41 +599,75 @@ std::optional<OpenDocument> LanguageServer::getDocument(const std::string& uri) 
 }
 
 void LanguageServer::openDocument(const std::string& uri, const std::string& text, int version) {
-    // Invalidate cached parsed program for this document
-    parsedPrograms_.erase(uri);
-    
     OpenDocument doc;
     doc.uri = uri;
     doc.path = uriToPath(uri);
     doc.text = text;
     doc.version = version;
-    
-    // Insert document FIRST so it's available for overlay during diagnosis
+
+    // Install the document FIRST (before diagnostics)
     openDocuments_[uri] = doc;
-    
-    // Now diagnose with the document in the overlay store
-    doc.diagnostics = diagnoseDocument(doc);
-    openDocuments_[uri].diagnostics = doc.diagnostics;
-    publishDiagnostics(uri, doc.diagnostics);
+
+    // Invalidate parse caches for this document
+    parsedPrograms_.erase(uri);
+    diagnosticsCache_.erase(uri);
+
+    // Use compile-based diagnostics if workspace is available
+    if (workspaceRoot_) {
+        auto result = diagnoseDocumentWithCompile(doc);
+        // Store primary document diagnostics in the document
+        auto it = result.diagnosticsByUri.find(uri);
+        if (it != result.diagnosticsByUri.end()) {
+            doc.diagnostics = std::move(it->second);
+        }
+        // Update the stored document with diagnostics
+        openDocuments_[uri] = doc;
+        // Publish diagnostics for all URIs
+        for (auto& [diagUri, diags] : result.diagnosticsByUri) {
+            publishDiagnostics(diagUri, diags);
+        }
+    } else {
+        doc.diagnostics = diagnoseDocument(doc);
+        // Update the stored document with diagnostics
+        openDocuments_[uri] = doc;
+        publishDiagnostics(uri, doc.diagnostics);
+    }
 }
 
 void LanguageServer::updateDocument(const std::string& uri, const std::string& text, int version) {
-    // Invalidate cached parsed program for this document
-    parsedPrograms_.erase(uri);
-    
     auto it = openDocuments_.find(uri);
     if (it != openDocuments_.end()) {
+        // Update the document text first
         it->second.text = text;
         it->second.version = version;
-        it->second.diagnostics = diagnoseDocument(it->second);
-        publishDiagnostics(uri, it->second.diagnostics);
+
+        // Invalidate parse caches for this document
+        parsedPrograms_.erase(uri);
+        diagnosticsCache_.erase(uri);
+
+        // Use compile-based diagnostics if workspace is available
+        if (workspaceRoot_) {
+            auto result = diagnoseDocumentWithCompile(it->second);
+            // Store primary document diagnostics in the document
+            auto resultIt = result.diagnosticsByUri.find(uri);
+            if (resultIt != result.diagnosticsByUri.end()) {
+                it->second.diagnostics = std::move(resultIt->second);
+            }
+            // Publish diagnostics for all URIs
+            for (auto& [diagUri, diags] : result.diagnosticsByUri) {
+                publishDiagnostics(diagUri, diags);
+            }
+        } else {
+            it->second.diagnostics = diagnoseDocument(it->second);
+            publishDiagnostics(uri, it->second.diagnostics);
+        }
     }
 }
 
 void LanguageServer::saveDocument(const std::string& uri) {
     // Invalidate cached parsed program for this document (re-diagnose)
     parsedPrograms_.erase(uri);
-    
+
     auto it = openDocuments_.find(uri);
     if (it != openDocuments_.end()) {
         it->second.diagnostics = diagnoseDocument(it->second);
@@ -654,6 +688,23 @@ static std::uint32_t countUtf16UnitsForCodePoint(char32_t cp) {
     return 1;  // Invalid, but return something reasonable
 }
 
+// Count total UTF-16 code units in a UTF-8 string
+static std::size_t countUtf16Units(const std::string& utf8Str) {
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while (pos < utf8Str.size()) {
+        char32_t cp = 0;
+        if (decodeUtf8CodePoint(utf8Str, pos, cp)) {
+            count += countUtf16UnitsForCodePoint(cp);
+        } else {
+            // Invalid UTF-8, count as one unit
+            count += 1;
+            pos += 1;
+        }
+    }
+    return count;
+}
+
 // Convert UTF-8 byte index to UTF-16 position (line, column)
 // This properly handles UTF-8 sequences as atomic units and counts UTF-16
 // code units per Unicode scalar value.
@@ -661,13 +712,13 @@ Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Of
     Position pos;
     std::size_t utf8Pos = 0;
     std::uint32_t utf16Col = 0;
-    
+
     // Clamp offset to text length
     utf8Offset = std::min(utf8Offset, text.size());
-    
+
     while (utf8Pos < utf8Offset) {
         // Handle CRLF: check for \r\n sequence
-        if (utf8Pos + 1 < text.size() && 
+        if (utf8Pos + 1 < text.size() &&
             text[utf8Pos] == '\r' && text[utf8Pos + 1] == '\n') {
             // Check if CRLF fits within the requested offset
             if (utf8Pos + 2 <= utf8Offset) {
@@ -680,9 +731,9 @@ Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Of
             }
             continue;
         }
-        
+
         unsigned char byte = static_cast<unsigned char>(text[utf8Pos]);
-        
+
         if (byte == '\n') {
             pos.line++;
             utf16Col = 0;
@@ -707,7 +758,7 @@ Position LanguageServer::utf8ToUtf16(const std::string& text, std::size_t utf8Of
             }
         }
     }
-    
+
     pos.character = utf16Col;
     return pos;
 }
@@ -718,25 +769,25 @@ static Position computeEndPosition(const std::string& text) {
     if (text.empty()) {
         return {0, 0};
     }
-    
+
     // Use utf8ToUtf16 with the full text length to get end position
     // This properly handles all line ending cases
     Position pos;
     std::size_t utf8Pos = 0;
     std::uint32_t utf16Col = 0;
-    
+
     while (utf8Pos < text.size()) {
         // Handle CRLF: check for \r\n sequence
-        if (utf8Pos + 1 < text.size() && 
+        if (utf8Pos + 1 < text.size() &&
             text[utf8Pos] == '\r' && text[utf8Pos + 1] == '\n') {
             pos.line++;
             utf16Col = 0;
             utf8Pos += 2;
             continue;
         }
-        
+
         unsigned char byte = static_cast<unsigned char>(text[utf8Pos]);
-        
+
         if (byte == '\n') {
             pos.line++;
             utf16Col = 0;
@@ -761,7 +812,7 @@ static Position computeEndPosition(const std::string& text) {
             }
         }
     }
-    
+
     pos.character = utf16Col;
     return pos;
 }
@@ -797,7 +848,7 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
     std::uint32_t currentLine = 0;
     std::uint32_t currentCol = 0;
     std::size_t utf8Offset = 0;
-    
+
     // First, count total lines to validate line number
     // Line endings: \r\n (windows), \n (unix), \r (old mac)
     // Count CRLF exactly once as a single line ending
@@ -822,15 +873,15 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
     }
     // Account for last line without newline
     totalLines++;
-    
+
     // Reject out-of-range line number
     if (line >= totalLines) {
         return std::nullopt;  // Invalid position
     }
-    
+
     while (utf8Offset < text.size()) {
         // Handle CRLF: check for \r\n sequence
-        if (utf8Offset + 1 < text.size() && 
+        if (utf8Offset + 1 < text.size() &&
             text[utf8Offset] == '\r' && text[utf8Offset + 1] == '\n') {
             if (currentLine == line) {
                 // At end of target line after CRLF
@@ -841,9 +892,9 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
             utf8Offset += 2;
             continue;
         }
-        
+
         unsigned char byte = static_cast<unsigned char>(text[utf8Offset]);
-        
+
         if (byte == '\n') {
             if (currentLine == line) {
                 // At end of target line
@@ -863,14 +914,14 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
             utf8Offset++;
             continue;
         }
-        
+
         if (currentLine == line) {
             // Decode the UTF-8 code point to get its UTF-16 length
             char32_t codePoint = 0;
             std::size_t oldPos = utf8Offset;
             if (decodeUtf8CodePoint(text, utf8Offset, codePoint)) {
                 std::uint32_t units = countUtf16UnitsForCodePoint(codePoint);
-                
+
                 // Check for invalid surrogate pair positions:
                 // For characters needing 2 UTF-16 units (surrogate pairs), valid positions are:
                 // - 0 to units-1: within the character (returns start of character)
@@ -883,7 +934,7 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
                         return std::nullopt;
                     }
                 }
-                
+
                 // Now handle the position
                 if (currentCol + units <= utf16Col) {
                     // Position is after this character
@@ -914,12 +965,12 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
             }
         }
     }
-    
+
     // At end of text
     if (currentLine == line && currentCol <= utf16Col) {
         return utf8Offset;
     }
-    
+
     return std::nullopt;
 }
 
@@ -928,13 +979,13 @@ std::uint32_t graphemeColumnToUtf16Column(const std::string& line, std::size_t g
     std::uint32_t utf16Col = 0;
     std::size_t graphemeCount = 0;
     std::size_t pos = 0;
-    
+
     while (pos < line.size() && graphemeCount < graphemeIndex) {
         // Handle line endings
         if (line[pos] == '\n' || (line[pos] == '\r' && (pos + 1 >= line.size() || line[pos + 1] != '\n'))) {
             break;
         }
-        
+
         // Decode UTF-8 code point
         char32_t codePoint = 0;
         std::size_t oldPos = pos;
@@ -948,7 +999,7 @@ std::uint32_t graphemeColumnToUtf16Column(const std::string& line, std::size_t g
             graphemeCount++;
         }
     }
-    
+
     return utf16Col;
 }
 
@@ -958,7 +1009,7 @@ std::uint32_t graphemeToUtf16Column(const std::string& text, std::size_t lineSta
     std::uint32_t utf16Col = 0;
     std::size_t graphemeCount = 0;
     std::size_t pos = lineStart;
-    
+
     while (pos < text.size() && graphemeCount < graphemeIndex) {
         // Handle line endings
         if (pos < text.size() - 1 && text[pos] == '\r' && text[pos + 1] == '\n') {
@@ -971,7 +1022,7 @@ std::uint32_t graphemeToUtf16Column(const std::string& text, std::size_t lineSta
         if (text[pos] == '\r') {
             break;
         }
-        
+
         // Decode UTF-8 code point
         char32_t codePoint = 0;
         std::size_t oldPos = pos;
@@ -985,7 +1036,7 @@ std::uint32_t graphemeToUtf16Column(const std::string& text, std::size_t lineSta
             graphemeCount++;
         }
     }
-    
+
     return utf16Col;
 }
 
@@ -994,11 +1045,11 @@ std::string getLine(const std::string& text, std::uint32_t lineNum) {
     if (text.empty() && lineNum == 0) {
         return "";
     }
-    
+
     std::uint32_t currentLine = 0;
     std::size_t lineStart = 0;
     std::size_t i = 0;
-    
+
     while (i < text.size()) {
         if (currentLine == lineNum) {
             // Found the line, find its end
@@ -1046,13 +1097,13 @@ std::optional<std::size_t> utf16ColumnToGraphemeColumn(const std::string& line, 
     std::uint32_t currentUtf16 = 0;
     std::size_t graphemeCount = 0;
     std::size_t pos = 0;
-    
+
     while (pos < line.size()) {
         // Handle line endings
         if (line[pos] == '\n' || (line[pos] == '\r' && (pos + 1 >= line.size() || line[pos + 1] != '\n'))) {
             break;
         }
-        
+
         char32_t codePoint = 0;
         std::size_t oldPos = pos;
         if (!decodeUtf8CodePoint(line, pos, codePoint)) {
@@ -1065,9 +1116,9 @@ std::optional<std::size_t> utf16ColumnToGraphemeColumn(const std::string& line, 
             graphemeCount++;
             continue;
         }
-        
+
         std::uint32_t units = countUtf16UnitsForCodePoint(codePoint);
-        
+
         // Check for invalid surrogate pair positions
         if (units == 2) {
             if (currentUtf16 == utf16Col) {
@@ -1084,16 +1135,16 @@ std::optional<std::size_t> utf16ColumnToGraphemeColumn(const std::string& line, 
                 return graphemeCount;
             }
         }
-        
+
         currentUtf16 += units;
         graphemeCount++;
     }
-    
+
     // At end of line
     if (currentUtf16 <= utf16Col) {
         return graphemeCount;
     }
-    
+
     return std::nullopt;
 }
 
@@ -1103,7 +1154,7 @@ std::optional<std::size_t> utf16ColumnToLineOffset(const std::string& line, std:
     std::uint32_t currentUtf16 = 0;
     std::size_t pos = 0;
     bool inSurrogatePair = false;
-    
+
     while (pos < line.size()) {
         // Handle line endings within the line check
         if (line[pos] == '\n' || (line[pos] == '\r' && (pos + 1 >= line.size() || line[pos + 1] != '\n'))) {
@@ -1113,7 +1164,7 @@ std::optional<std::size_t> utf16ColumnToLineOffset(const std::string& line, std:
             }
             break;
         }
-        
+
         char32_t codePoint = 0;
         std::size_t oldPos = pos;
         if (!decodeUtf8CodePoint(line, pos, codePoint)) {
@@ -1125,9 +1176,9 @@ std::optional<std::size_t> utf16ColumnToLineOffset(const std::string& line, std:
             currentUtf16++;
             continue;
         }
-        
+
         std::uint32_t units = countUtf16UnitsForCodePoint(codePoint);
-        
+
         // Check if we're trying to land in the middle of a surrogate pair
         if (units == 2) {
             if (currentUtf16 == utf16Col) {
@@ -1148,15 +1199,15 @@ std::optional<std::size_t> utf16ColumnToLineOffset(const std::string& line, std:
                 return oldPos;
             }
         }
-        
+
         currentUtf16 += units;
     }
-    
+
     // At end of line
     if (currentUtf16 <= utf16Col) {
         return pos;
     }
-    
+
     return std::nullopt;
 }
 
@@ -1166,7 +1217,7 @@ std::optional<std::size_t> utf16PositionToUtf8Offset(const std::string& text, st
     // First, find the start of the target line
     std::uint32_t currentLine = 0;
     std::size_t lineStart = 0;
-    
+
     for (std::size_t i = 0; i < text.size(); i++) {
         if (currentLine == line) {
             break;
@@ -1183,27 +1234,27 @@ std::optional<std::size_t> utf16PositionToUtf8Offset(const std::string& text, st
             lineStart = i + 1;
         }
     }
-    
+
     if (currentLine != line) {
         // Line not found
         return std::nullopt;
     }
-    
+
     // Now find the byte offset within that line
     // Find the end of the line
     std::size_t lineEnd = lineStart;
     while (lineEnd < text.size() && text[lineEnd] != '\n' && text[lineEnd] != '\r') {
         lineEnd++;
     }
-    
+
     // Extract just this line
     std::string lineStr = text.substr(lineStart, lineEnd - lineStart);
-    
+
     auto offset = utf16ColumnToLineOffset(lineStr, utf16Col);
     if (!offset) {
         return std::nullopt;
     }
-    
+
     return lineStart + *offset;
 }
 
@@ -1226,28 +1277,28 @@ SourceProvider LanguageServer::getSourceProvider() {
 std::optional<std::reference_wrapper<ast::Program>> LanguageServer::getOrParseProgram(const std::string& uri) {
     auto doc = getDocument(uri);
     if (!doc) return std::nullopt;
-    
+
     // Check cache first
     auto it = parsedPrograms_.find(uri);
     if (it != parsedPrograms_.end()) {
         return std::ref(*it->second);
     }
-    
+
     // Parse the document
     try {
         CustomEmojiRegistry reg = registry_;
         Lexer lexer(doc->text, reg);
         auto tokens = lexer.tokenize();
-        
+
         // Cache the tokens for accurate position information
         auto tokenResult = parsedTokens_.emplace(uri, std::move(tokens));
         const std::vector<Token>& cachedTokens = tokenResult.first->second;
-        
+
         // Create a copy of tokens for the parser (parser takes ownership)
         std::vector<Token> parserTokens = cachedTokens;
         Parser parser(std::move(parserTokens));
         auto program = parser.parse();
-        
+
         // Cache the parsed program - use unique_ptr to avoid copying unique_ptr members
         auto result = parsedPrograms_.emplace(uri, std::make_unique<ast::Program>(std::move(program)));
         return std::ref(*result.first->second);
@@ -1260,7 +1311,7 @@ std::optional<std::reference_wrapper<const std::vector<Token>>> LanguageServer::
     // First ensure we have tokens (by parsing the program which caches tokens)
     auto programOpt = getOrParseProgram(uri);
     if (!programOpt) return std::nullopt;
-    
+
     // Now check the tokens cache
     auto it = parsedTokens_.find(uri);
     if (it != parsedTokens_.end()) {
@@ -1272,7 +1323,7 @@ std::optional<std::reference_wrapper<const std::vector<Token>>> LanguageServer::
 std::optional<std::uint32_t> LanguageServer::findIdentifierColumn(const ast::Stmt& stmt, const std::string& identifierName, const std::vector<Token>& tokens) {
     // Find the token that matches the identifier name on the same line as the statement
     std::size_t stmtLine = stmt.line;
-    
+
     for (const auto& token : tokens) {
         if (token.line == stmtLine && token.kind == TokenKind::Identifier) {
             if (token.canonical == identifierName || token.lexeme == identifierName) {
@@ -1291,7 +1342,7 @@ static std::pair<std::size_t, std::size_t> findTokenBoundsForLine(
     std::size_t bestColumn = 0;
     std::size_t bestEndColumn = 0;
     std::size_t minColumn = std::numeric_limits<std::size_t>::max();
-    
+
     // First pass: find the leftmost token on this line
     for (const auto& token : tokens) {
         if (token.line == targetLine) {
@@ -1307,7 +1358,7 @@ static std::pair<std::size_t, std::size_t> findTokenBoundsForLine(
             }
         }
     }
-    
+
     return {bestColumn, bestEndColumn};
 }
 
@@ -1339,387 +1390,316 @@ static const ast::Stmt* findStmtAtLine(const ast::Program& program, std::size_t 
     return nullptr;
 }
 
+Range LanguageServer::tokenToRange(const std::string& sourceText, const Token& token) const {
+    Range range;
+
+    // Handle EOF token - return empty range at document end
+    if (token.kind == TokenKind::Eof) {
+        // Return position at end of last line
+        range.start.line = static_cast<std::uint32_t>(token.line - 1);
+        range.start.character = 0;
+        range.end = range.start;
+        return range;
+    }
+
+    // Step 1: Find the start of the token's line in the original source
+    // Handle LF, CRLF, and lone CR line endings
+    std::size_t lineStart = 0;
+    std::size_t currentLine = 1;
+
+    for (std::size_t i = 0; i < sourceText.size(); ++i) {
+        if (currentLine == token.line) {
+            lineStart = i;
+            break;
+        }
+
+        // Handle line endings
+        if (sourceText[i] == '\r') {
+            if (i + 1 < sourceText.size() && sourceText[i + 1] == '\n') {
+                // CRLF - skip both characters
+                ++currentLine;
+                ++i; // Extra increment to skip \n
+            } else {
+                // Lone CR
+                ++currentLine;
+            }
+        } else if (sourceText[i] == '\n') {
+            ++currentLine;
+        }
+    }
+
+    // If we didn't find the line, token is past end of text
+    if (currentLine < token.line) {
+        // Token line is beyond text - return position at last line end
+        // Count the actual number of lines in the text
+        std::size_t lineCount = 1;  // At minimum there's line 1
+        for (std::size_t i = 0; i < sourceText.size(); ++i) {
+            if (sourceText[i] == '\n') {
+                ++lineCount;
+            }
+        }
+        range.start.line = static_cast<std::uint32_t>(lineCount - 1);
+        range.start.character = 0;
+        range.end = range.start;
+        return range;
+    }
+
+    // Step 2: Find the end of the token's line
+    std::size_t lineEnd = lineStart;
+    while (lineEnd < sourceText.size()) {
+        if (sourceText[lineEnd] == '\n' || sourceText[lineEnd] == '\r') {
+            break;
+        }
+        ++lineEnd;
+    }
+
+    // Extract the line text
+    std::string lineText = sourceText.substr(lineStart, lineEnd - lineStart);
+
+    // Step 3: Segment the line into graphemes and count UTF-16 units before token.column
+    // token.column is 1-based grapheme column
+    auto graphemes = segment_graphemes(lineText);
+
+    std::uint32_t utf16Column = 0;
+    std::size_t graphemeIndex = 0;
+
+    for (const auto& g : graphemes) {
+        if (graphemeIndex >= token.column - 1) {
+            // Reached or passed the token's column
+            break;
+        }
+        // Count UTF-16 units for this grapheme
+        utf16Column += static_cast<std::uint32_t>(countUtf16Units(g.display));
+        ++graphemeIndex;
+    }
+
+    range.start.line = static_cast<std::uint32_t>(token.line - 1);
+    range.start.character = utf16Column;
+
+    // Step 4: Compute end position by traversing the token's lexeme
+    // We need to find where the token ends in the original source
+    // Approach: start from the position we calculated and find the token's lexeme in the source
+
+    // For multiline tokens (like strings), we need special handling
+    if (token.lexeme.find('\n') != std::string::npos ||
+        token.lexeme.find('\r') != std::string::npos) {
+        // Multiline token - calculate end position by traversing the lexeme
+        // Count lines and UTF-16 columns in the lexeme
+        std::uint32_t endLine = range.start.line;
+        std::uint32_t endColumn = range.start.character;
+
+        auto lexemeGraphemes = segment_graphemes(token.lexeme);
+        for (const auto& g : lexemeGraphemes) {
+            if (g.display == "\n") {
+                ++endLine;
+                endColumn = 0;
+            } else if (g.display == "\r") {
+                // Lone CR - count as one line ending
+                ++endLine;
+                endColumn = 0;
+            } else {
+                endColumn += static_cast<std::uint32_t>(countUtf16Units(g.display));
+            }
+        }
+
+        range.end.line = endLine;
+        range.end.character = endColumn;
+    } else {
+        // Single-line token - find end column by adding UTF-16 units of lexeme
+        range.end.character = range.start.character + static_cast<std::uint32_t>(countUtf16Units(token.lexeme));
+        range.end.line = range.start.line;
+    }
+
+    return range;
+}
+
 std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc) {
     std::vector<Diagnostic> diagnostics;
-    
+
     if (doc.text.empty()) return diagnostics;
-    
-    // Get document path and module identity
-    std::filesystem::path docPath = uriToPath(doc.uri);
-    std::string identity = docPath.empty() ? "main" : docPath.filename().string();
-    
-    // Source-bound module/package/lock diagnostics: Check for lock staleness first
-    // This provides early feedback about lock file issues
-    if (workspaceRoot_ && manifest_) {
-        auto lock_path = *workspaceRoot_ / "emojineer.lock";
-        
-        // Check if lock exists but is stale
-        if (std::filesystem::exists(lock_path) && lock_) {
-            bool is_stale = false;
-            try {
-                auto current_manifest = getProjectManifest(*workspaceRoot_);
-                if (current_manifest) {
-                    is_stale = emojineer::is_lock_stale(*workspaceRoot_, *current_manifest, *lock_);
-                }
-            } catch (...) {
-                // If we can't determine staleness, skip this check
-            }
-            
-            if (is_stale) {
-                // Report lock stale as a diagnostic on the first line
-                Diagnostic lockDiag;
-                lockDiag.range = {{0, 0}, {0, 1}};
-                lockDiag.severity = 2;  // Warning
-                lockDiag.message = "emojineer.lock is stale; run 'emji lock' to synchronize";
-                lockDiag.source = "emojineer";
-                diagnostics.push_back(lockDiag);
-            }
-        }
-        
-        // Check package graph resolution issues
-        if (!packageGraph_) {
-            try {
-                // Try to resolve the package graph and report any issues
-                if (manifest_) {
-                    auto store_root = emojineer::package_store_root(*workspaceRoot_);
-                    packageGraph_ = emojineer::resolve_package_graph(*workspaceRoot_, *manifest_, store_root, true);
-                }
-            } catch (const std::exception& e) {
-                // Report package resolution errors
-                Diagnostic pkgDiag;
-                pkgDiag.range = {{0, 0}, {0, 1}};
-                pkgDiag.severity = 1;  // Error
-                pkgDiag.message = std::string("package resolution: ") + e.what();
-                pkgDiag.source = "emojineer";
-                diagnostics.push_back(pkgDiag);
-            }
-        }
-    }
-    
-    // Use authoritative lex_source which returns position info directly without throwing
-    LexResult lexResult = lex_source(doc.text, registry_);
-    
-    // If lexer failed, use the authoritative position from lexResult
-    if (!lexResult.error_message.empty()) {
-        std::size_t line = lexResult.error_line;
-        std::size_t column = lexResult.error_column;
-        
-        // Use tokens even from partial lexing if available
-        std::vector<Token>& tokens = lexResult.tokens;
-        
-        Position startPos;
-        Position endPos;
-        
-        if (!tokens.empty()) {
-            // Use tokens to find exact bounds
-            auto [tokenStartCol, tokenEndCol] = findTokenBoundsForLine(tokens, line);
-            if (tokenStartCol > 0) {
-                startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-                startPos.character = safeSizeToUint32(tokenStartCol > 0 ? tokenStartCol - 1 : 0);
-                endPos.line = startPos.line;
-                endPos.character = safeSizeToUint32(tokenEndCol > 0 ? tokenEndCol - 1 : tokenStartCol);
-            } else {
-                // Fallback: use error column (grapheme-based from lexer) and grapheme count for end
-                // Keep internal positions grapheme-based - publishDiagnostics will convert to UTF-16
-                startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-                startPos.character = safeSizeToUint32(column > 0 ? column - 1 : 0);
-                std::string lineStr = getLine(doc.text, static_cast<std::size_t>(startPos.line));
-                if (!lineStr.empty()) {
-                    // Use grapheme count for end position (grapheme-based like lexer)
-                    // Keep in grapheme columns - UTF-16 conversion happens in publishDiagnostics
-                    auto gs = segment_graphemes(lineStr);
-                    endPos.line = startPos.line;
-                    endPos.character = safeSizeToUint32(gs.size());
-                } else {
-                    endPos = startPos;
-                    endPos.character = startPos.character + 1;
-                }
-            }
-        } else {
-            // No tokens - use the authoritative position from lexResult
-            // Keep internal positions grapheme-based - publishDiagnostics will convert to UTF-16
-            startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-            startPos.character = safeSizeToUint32(column > 0 ? column - 1 : 0);
-            std::string lineStr = getLine(doc.text, static_cast<std::size_t>(startPos.line));
-            if (!lineStr.empty()) {
-                // Use grapheme count for end position (grapheme-based like lexer)
-                // Keep in grapheme columns - UTF-16 conversion happens in publishDiagnostics
-                auto gs = segment_graphemes(lineStr);
-                endPos.line = startPos.line;
-                endPos.character = safeSizeToUint32(gs.size());
-            } else {
-                endPos = startPos;
-                endPos.character = startPos.character + 1;
-            }
-        }
-        
-        Diagnostic diag;
-        diag.range = {startPos, endPos};
-        diag.severity = 1;
-        diag.message = lexResult.error_message;
-        diag.source = "emojineer";
-        diagnostics.push_back(diag);
-        
-        // Return early since lexer failed - no point continuing to parse
-        return diagnostics;
-    }
-    
-    // Lexing succeeded - we have authoritative tokens
-    std::vector<Token>& tokens = lexResult.tokens;
-    
-    // Now try to parse and get authoritative AST positions
-    auto parseResult = parse_source_for_diagnostics(doc.text, registry_, identity);
-    
-    // If parsing failed, use authoritative position from parseResult
-    if (!parseResult || !parseResult->error_message.empty()) {
-        std::size_t line = 1;
-        std::size_t column = 1;
-        
-        if (parseResult) {
-            line = parseResult->error_line;
-            column = parseResult->error_column;
-        }
-        
-        // Use tokens to find exact bounds
-        auto [tokenStartCol, tokenEndCol] = findTokenBoundsForLine(tokens, line);
-        
-        Position startPos;
-        Position endPos;
-        
-        if (tokenStartCol > 0) {
-            startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-            startPos.character = safeSizeToUint32(tokenStartCol > 0 ? tokenStartCol - 1 : 0);
-            endPos.line = startPos.line;
-            endPos.character = safeSizeToUint32(tokenEndCol > 0 ? tokenEndCol - 1 : tokenStartCol);
-        } else {
-            // Fallback: use error column (grapheme-based from parser) and grapheme count for end
-            // Keep internal positions grapheme-based - publishDiagnostics will convert to UTF-16
-            startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-            startPos.character = safeSizeToUint32(column > 0 ? column - 1 : 0);
-            std::string lineStr = getLine(doc.text, static_cast<std::size_t>(startPos.line));
-            if (!lineStr.empty()) {
-                // Use grapheme count for end position (grapheme-based like lexer)
-                // Keep in grapheme columns - UTF-16 conversion happens in publishDiagnostics
-                auto gs = segment_graphemes(lineStr);
-                endPos.line = startPos.line;
-                endPos.character = safeSizeToUint32(gs.size());
-            } else {
-                endPos = startPos;
-                endPos.character = startPos.character + 1;
-            }
-        }
-        
-        Diagnostic diag;
-        diag.range = {startPos, endPos};
-        diag.severity = 1;
-        diag.message = parseResult ? parseResult->error_message : "parse error";
-        diag.source = "emojineer";
-        diagnostics.push_back(diag);
-        
-        // Return early since parsing failed
-        return diagnostics;
-    }
-    
-    // Parsing succeeded - we have authoritative AST
-    const ast::Program& program = parseResult->program;
-    
-    // Now try to compile and link the module
+
     try {
-        // Get the document path from the URI
-        std::filesystem::path docPath = uriToPath(doc.uri);
-        
-        // Determine module root: use workspace root if available, otherwise use document's parent
-        std::filesystem::path moduleRoot;
-        if (workspaceRoot_) {
-            moduleRoot = *workspaceRoot_;
-        } else if (!docPath.empty()) {
-            moduleRoot = docPath.parent_path();
+        // First check lexer-level issues
+        Lexer lexer(doc.text, registry_);
+        auto tokens = lexer.tokenize();
+
+        // Check for lexer errors (unexpected characters, etc.)
+        for (const auto& token : tokens) {
+            if (token.kind == TokenKind::Eof) continue;
+
+            // Check for unknown tokens or issues - token.lexeme being empty is sometimes an indicator
+            // For now, we just validate tokenization works
         }
-        
-        // Get the SourceProvider that handles overlay for open documents
-        SourceProvider sourceProvider = getSourceProvider();
-        
-        // Use the sovereign compile_file path with the SourceProvider
-        Chunk result = compile_file(docPath, registry_, moduleRoot, sourceProvider);
-        
-        // If compilation succeeds, no diagnostics to report.
-    } catch (const SourceError& e) {
-        // Use authoritative structured error position from SourceError
-        std::size_t line = e.line();
-        std::size_t column = e.column();
-        std::string errorMsg = e.what();
-        
-        // Use authoritative AST position if available
-        Position startPos;
-        Position endPos;
-        
-        // Try to find AST node at this line for authoritative position
-        const ast::Stmt* stmt = findStmtAtLine(program, line);
-        
-        if (stmt) {
-            // Use AST node line (authoritative)
-            startPos.line = safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0);
-            
-            // For import statements, use import-specific token bounds for authoritative range
-            std::pair<std::size_t, std::size_t> tokenBounds;
-            if (dynamic_cast<const ast::ImportStmt*>(stmt)) {
-                tokenBounds = findImportTokenBoundsForLine(tokens, stmt->line);
-            } else {
-                tokenBounds = findTokenBoundsForLine(tokens, stmt->line);
-            }
-            
-            auto [tokenStartCol, tokenEndCol] = tokenBounds;
-            if (tokenStartCol > 0) {
-                startPos.character = safeSizeToUint32(tokenStartCol > 0 ? tokenStartCol - 1 : 0);
-                endPos.line = startPos.line;
-                endPos.character = safeSizeToUint32(tokenEndCol > 0 ? tokenEndCol - 1 : tokenStartCol);
-            } else {
-                // Fallback: use error column (grapheme-based) and grapheme count for end
-                // Keep in grapheme columns - UTF-16 conversion happens in publishDiagnostics
-                startPos.character = safeSizeToUint32(column > 0 ? column - 1 : 0);
-                std::string lineStr = getLine(doc.text, static_cast<std::size_t>(startPos.line));
-                if (!lineStr.empty()) {
-                    auto gs = segment_graphemes(lineStr);
-                    endPos.line = startPos.line;
-                    endPos.character = safeSizeToUint32(gs.size());
-                } else {
-                    endPos = startPos;
-                    endPos.character = startPos.character + 1;
-                }
-            }
-        } else if (!tokens.empty()) {
-            // Fall back to tokens
-            auto [tokenStartCol, tokenEndCol] = findTokenBoundsForLine(tokens, line);
-            if (tokenStartCol > 0) {
-                startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-                startPos.character = safeSizeToUint32(tokenStartCol > 0 ? tokenStartCol - 1 : 0);
-                endPos.line = startPos.line;
-                endPos.character = safeSizeToUint32(tokenEndCol > 0 ? tokenEndCol - 1 : tokenStartCol);
-            } else {
-                // Fallback: use error column (grapheme-based) and grapheme count for end
-                // Keep in grapheme columns - UTF-16 conversion happens in publishDiagnostics
-                startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-                startPos.character = safeSizeToUint32(column > 0 ? column - 1 : 0);
-                std::string lineStr = getLine(doc.text, static_cast<std::size_t>(startPos.line));
-                if (!lineStr.empty()) {
-                    auto gs = segment_graphemes(lineStr);
-                    endPos.line = startPos.line;
-                    endPos.character = safeSizeToUint32(gs.size());
-                } else {
-                    endPos = startPos;
-                    endPos.character = startPos.character + 1;
-                }
-            }
-        } else {
-            // Use structured error position - fallback to grapheme count
-            // Keep in grapheme columns - UTF-16 conversion happens in publishDiagnostics
-            startPos.line = safeSizeToUint32(line > 0 ? line - 1 : 0);
-            startPos.character = safeSizeToUint32(column > 0 ? column - 1 : 0);
-            std::string lineStr = getLine(doc.text, static_cast<std::size_t>(startPos.line));
-            if (!lineStr.empty()) {
-                auto gs = segment_graphemes(lineStr);
-                endPos.line = startPos.line;
-                endPos.character = safeSizeToUint32(gs.size());
-            } else {
-                endPos = startPos;
-                endPos.character = startPos.character + 1;
-            }
-        }
-        
+
+        // Parse the document
+        Parser parser(std::move(tokens));
+        auto program = parser.parse();
+
+        // Compile to check semantic errors
+        Compiler compiler;
+        compiler.compile(program);
+
+    } catch (const lsp::SourceLocationException& sle) {
+        // Use typed source location for exact UTF-16 range
         Diagnostic diag;
-        diag.range = {startPos, endPos};
-        diag.severity = 1;
-        diag.message = errorMsg;
+        diag.severity = 1;  // Error
+        diag.message = sle.message;
         diag.source = "emojineer";
+
+        // Create a synthetic token from the exception info for canonical range conversion
+        Token errorToken;
+        errorToken.kind = TokenKind::Identifier;
+        errorToken.line = sle.line;
+        errorToken.column = sle.column;
+        errorToken.lexeme = sle.tokenLexeme;
+
+        // Use canonical helper to convert to UTF-16 range
+        diag.range = tokenToRange(doc.text, errorToken);
+
         diagnostics.push_back(diag);
     } catch (const std::exception& e) {
-        // Fallback for generic exceptions: use tokens for deterministic position
-        // Do NOT scrape exception strings - use authoritative token positions instead
-        std::string errorMsg = e.what();
-        
-        Position startPos;
-        Position endPos;
-        
-        if (!tokens.empty()) {
-            // Use tokens to find a reasonable error position - use the last token as fallback
-            // This provides deterministic behavior without inventing ranges from exception strings
-            std::size_t lastLine = 0;
-            std::size_t lastColumn = 1;
-            for (const auto& tok : tokens) {
-                if (tok.line >= lastLine) {
-                    lastLine = tok.line;
-                    // Use grapheme count for column (matching lexer semantics)
-                    auto gs = segment_graphemes(tok.lexeme);
-                    lastColumn = tok.column + gs.size();
-                }
-            }
-            
-            // Use the last known token position as the error location
-            startPos.line = safeSizeToUint32(lastLine > 0 ? lastLine - 1 : 0);
-            startPos.character = safeSizeToUint32(lastColumn > 0 ? lastColumn - 1 : 0);
-            
-            // Find token bounds for this line to get accurate range
-            auto [tokenStartCol, tokenEndCol] = findTokenBoundsForLine(tokens, lastLine);
-            if (tokenStartCol > 0) {
-                startPos.character = safeSizeToUint32(tokenStartCol > 0 ? tokenStartCol - 1 : 0);
-                endPos.line = startPos.line;
-                endPos.character = safeSizeToUint32(tokenEndCol > 0 ? tokenEndCol - 1 : tokenStartCol);
-            } else {
-                // Fallback: use grapheme count for end position
-                // Keep in grapheme columns - UTF-16 conversion happens in publishDiagnostics
-                std::string lineStr = getLine(doc.text, static_cast<std::size_t>(startPos.line));
-                if (!lineStr.empty()) {
-                    auto gs = segment_graphemes(lineStr);
-                    endPos.line = startPos.line;
-                    endPos.character = safeSizeToUint32(gs.size());
-                } else {
-                    endPos = startPos;
-                    endPos.character = startPos.character + 1;
-                }
-            }
-        } else {
-            // No tokens available - use document start as fallback
-            // Do not invent ranges for unknown positions
-            startPos = {0, 0};
-            endPos = {0, 1};
-        }
-        
+        // Generic non-source exception - emit safe document-level diagnostic
+        // without inventing coordinates from the message
         Diagnostic diag;
-        diag.range = {startPos, endPos};
-        diag.severity = 1;
-        diag.message = errorMsg;
+        diag.range = {{0, 0}, {0, 1}};  // Safe default: start of document
+        diag.severity = 1;  // Error
+        diag.message = e.what();
         diag.source = "emojineer";
         diagnostics.push_back(diag);
     }
-    
+
     return diagnostics;
+}
+
+::emojineer::SourceProvider LanguageServer::createSourceProvider() const {
+    // Create a source provider that checks open documents first before reading from disk
+    return [this](const std::filesystem::path& path) -> std::optional<std::string> {
+        // Convert path to URI and check if document is open
+        std::string uri = pathToUri(path);
+        auto it = openDocuments_.find(uri);
+        if (it != openDocuments_.end()) {
+            return it->second.text;
+        }
+        // Not in overlay, return nullopt to fall back to disk
+        return std::nullopt;
+    };
+}
+
+DiagnosticResult LanguageServer::diagnoseDocumentWithCompile(const OpenDocument& doc) {
+    DiagnosticResult result;
+    result.primaryUri = doc.uri;
+
+    if (doc.text.empty()) return result;
+
+    // If we have a workspace root, use compile_file with the source provider
+    // to get proper module/package graph diagnostics
+    if (workspaceRoot_) {
+        try {
+            auto sourceProvider = createSourceProvider();
+
+            // Try to compile the document using the sovereign module system
+            // This will catch module/import/package errors
+            Chunk chunk = compile_file(doc.path, registry_, *workspaceRoot_, sourceProvider);
+
+            // If we get here, compilation succeeded without errors
+            // The chunk contains the compiled bytecode
+
+        } catch (const lsp::SourceLocationException& sle) {
+            // Use typed source location for exact UTF-16 range
+            Diagnostic diag;
+            diag.severity = 1;  // Error
+            diag.message = sle.message;
+            diag.source = "emojineer";
+
+            // Determine the source text for the diagnostic
+            // If sourcePath is set, the error is from an imported module
+            std::string sourceText = doc.text;
+            std::string targetUri = doc.uri;  // Default to entry document URI
+
+            if (!sle.sourcePath.empty()) {
+                // Error is from an imported module - get source from that path
+                targetUri = pathToUri(sle.sourcePath);
+
+                // Try to get the source from open documents first, then fall back to disk
+                auto it = openDocuments_.find(targetUri);
+                if (it != openDocuments_.end()) {
+                    sourceText = it->second.text;
+                } else if (std::filesystem::exists(sle.sourcePath)) {
+                    // Fall back to reading from disk
+                    try {
+                        sourceText = readFile(sle.sourcePath);
+                    } catch (...) {
+                        // If we can't read the file, fall back to entry document
+                        sourceText = doc.text;
+                        targetUri = doc.uri;
+                    }
+                }
+            }
+
+            // Create a synthetic token from the exception info for canonical range conversion
+            Token errorToken;
+            errorToken.kind = TokenKind::Identifier;
+            errorToken.line = sle.line;
+            errorToken.column = sle.column;
+            errorToken.lexeme = sle.tokenLexeme;
+
+            // Use canonical helper to convert to UTF-16 range against the correct source
+            diag.range = tokenToRange(sourceText, errorToken);
+
+            // Add to the correct URI group
+            result.diagnosticsByUri[targetUri].push_back(diag);
+
+            // If this is an imported source error, also add empty diagnostics to entry
+            // to trigger the notification (the actual error is under imported URI)
+            if (targetUri != doc.uri) {
+                // Primary URI gets empty diagnostics (error is under imported URI)
+                result.diagnosticsByUri[doc.uri];
+            } else {
+                result.primaryUri = doc.uri;
+            }
+        } catch (const std::exception& e) {
+            // Generic non-source exception - emit safe document-level diagnostic
+            Diagnostic diag;
+            diag.range = {{0, 0}, {0, 1}};  // Safe default: start of document
+            diag.severity = 1;  // Error
+            diag.message = e.what();
+            diag.source = "emojineer";
+            result.diagnosticsByUri[doc.uri].push_back(diag);
+        }
+    } else {
+        // No workspace root - fall back to simple diagnostics
+        auto diags = diagnoseDocument(doc);
+        result.diagnosticsByUri[doc.uri] = std::move(diags);
+    }
+
+    return result;
 }
 
 void LanguageServer::publishDiagnostics(const std::string& uri, const std::vector<Diagnostic>& diagnostics) {
     auto params = json::makeObject();
     json::objectSet(params, "uri", JsonValue(uri));
-    
+
     // Get the document for position conversion
     auto doc = getDocument(uri);
     std::string docText;
     if (doc) {
         docText = doc->text;
     }
-    
+
     auto diagJson = json::makeArray();
     for (const auto& d : diagnostics) {
         auto diag = json::makeObject();
-        
+
         // Convert positions from internal (grapheme) to LSP (UTF-16)
         // Internal positions are 0-indexed lines, grapheme columns
         // LSP expects 0-indexed lines, UTF-16 columns
-        
+
         std::string startLineStr = getLine(docText, d.range.start.line);
         std::uint32_t utf16StartChar = graphemeColumnToUtf16Column(startLineStr, d.range.start.character);
-        
+
         std::string endLineStr = getLine(docText, d.range.end.line);
         std::uint32_t utf16EndChar = graphemeColumnToUtf16Column(endLineStr, d.range.end.character);
-        
+
         // Diagnostic assertion: validate UTF-16 positions for supplementary-plane emojis
         // Check if the range spans a supplementary-plane emoji/CER token (code point >= U+10000)
         if (!startLineStr.empty() && d.range.start.line == d.range.end.line) {
@@ -1728,7 +1708,7 @@ void LanguageServer::publishDiagnostics(const std::string& uri, const std::vecto
             bool foundSupplementaryInRange = false;
             std::uint32_t computedUtf16Start = 0;
             std::uint32_t computedUtf16End = 0;
-            
+
             // Use < instead of <= to match graphemeColumnToUtf16Column semantics
             while (pos < startLineStr.size() && graphemeIdx < d.range.end.character) {
                 char32_t codePoint = 0;
@@ -1750,16 +1730,16 @@ void LanguageServer::publishDiagnostics(const std::string& uri, const std::vecto
                     graphemeIdx++;
                 }
             }
-            
+
             // Assert: for supplementary-plane tokens, computed UTF-16 must match published UTF-16
             if (foundSupplementaryInRange) {
                 // The assertion validates exact UTF-16 positions, not just range presence
-                assert(utf16StartChar == computedUtf16Start && 
+                assert(utf16StartChar == computedUtf16Start &&
                        utf16EndChar == computedUtf16End &&
                        "UTF-16 position assertion failed for supplementary-plane emoji/CER token");
             }
         }
-        
+
         auto range = json::makeObject();
         auto start = json::makeObject();
         json::objectSet(start, "line", JsonValue(static_cast<double>(d.range.start.line)));
@@ -1770,15 +1750,15 @@ void LanguageServer::publishDiagnostics(const std::string& uri, const std::vecto
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
         json::objectSet(diag, "range", range);
-        
+
         json::objectSet(diag, "severity", JsonValue(static_cast<double>(d.severity)));
         json::objectSet(diag, "message", JsonValue(d.message));
         if (d.source) json::objectSet(diag, "source", JsonValue(*d.source));
-        
+
         json::arrayPushBack(diagJson, diag);
     }
     json::objectSet(params, "diagnostics", diagJson);
-    
+
     // Send proper LSP notification through stdout with Content-Length framing
     auto notificationObj = json::makeObject();
     json::objectSet(notificationObj, "jsonrpc", JsonValue(std::string("2.0")));
@@ -1825,7 +1805,7 @@ void LanguageServer::discoverWorkspace(const std::filesystem::path& root) {
 
 JsonValue LanguageServer::handleInitialize(const JsonValue& params) {
     initialized_ = true;
-    
+
     const auto* paramsObj = params.getPtr<std::map<std::string, JsonValue>>();
     if (paramsObj) {
         auto rootUriIt = paramsObj->find("rootUri");
@@ -1839,30 +1819,30 @@ JsonValue LanguageServer::handleInitialize(const JsonValue& params) {
             }
         }
     }
-    
+
     auto result = json::makeObject();
     auto caps = json::makeObject();
     json::objectSet(caps, "textDocumentSync", JsonValue(1));
     json::objectSet(caps, "hoverProvider", JsonValue(true));
-    
+
     auto compOpts = json::makeObject();
     json::objectSet(compOpts, "resolveProvider", JsonValue(false));
     json::objectSet(caps, "completionProvider", compOpts);
-    
+
     json::objectSet(caps, "definitionProvider", JsonValue(true));
     json::objectSet(caps, "referencesProvider", JsonValue(true));
     json::objectSet(caps, "documentSymbolProvider", JsonValue(true));
     json::objectSet(caps, "workspaceSymbolProvider", JsonValue(true));
     json::objectSet(caps, "documentFormattingProvider", JsonValue(true));
-    json::objectSet(caps, "documentRangeFormattingProvider", JsonValue(true));
-    
+    json::objectSet(caps, "documentRangeFormattingProvider", JsonValue(false));
+
     json::objectSet(result, "capabilities", caps);
-    
+
     auto serverInfo = json::makeObject();
     json::objectSet(serverInfo, "name", JsonValue("emojineer-lsp"));
     json::objectSet(serverInfo, "version", JsonValue("0.17.0"));
     json::objectSet(result, "serverInfo", serverInfo);
-    
+
     return result;
 }
 
@@ -1878,13 +1858,13 @@ void LanguageServer::handleExit(const JsonValue& params) {
 void LanguageServer::handleDidOpenTextDocument(const JsonValue& params) {
     auto paramsObj = getJsonObject(params, "textDocument");
     if (paramsObj.isNull()) return;
-    
-    std::string uri = getJsonObject(paramsObj, "uri").getPtr<std::string>() ? 
+
+    std::string uri = getJsonObject(paramsObj, "uri").getPtr<std::string>() ?
                       *getJsonObject(paramsObj, "uri").getPtr<std::string>() : "";
     double version = getJsonNumber(getJsonObject(paramsObj, "version"));
     std::string text = getJsonObject(paramsObj, "text").getPtr<std::string>() ?
                        *getJsonObject(paramsObj, "text").getPtr<std::string>() : "";
-    
+
     if (!uri.empty()) {
         openDocument(uri, text, static_cast<int>(version));
     }
@@ -1893,17 +1873,17 @@ void LanguageServer::handleDidOpenTextDocument(const JsonValue& params) {
 void LanguageServer::handleDidChangeTextDocument(const JsonValue& params) {
     auto paramsObj = getJsonObject(params, "textDocument");
     if (paramsObj.isNull()) return;
-    
+
     std::string uri = getJsonObject(paramsObj, "uri").getPtr<std::string>() ?
                       *getJsonObject(paramsObj, "uri").getPtr<std::string>() : "";
     double version = getJsonNumber(getJsonObject(paramsObj, "version"));
-    
+
     auto changes = getJsonObject(params, "contentChanges");
     auto arr = getJsonArray(changes);
     if (!arr.empty()) {
         // For full-sync mode, we take the last content change's full text.
         const auto& lastChange = arr[arr.size() - 1];
-        
+
         // Check for range field - in full-sync mode, reject any event carrying range
         auto rangeField = getJsonObject(lastChange, "range");
         if (!rangeField.isNull()) {
@@ -1911,11 +1891,11 @@ void LanguageServer::handleDidChangeTextDocument(const JsonValue& params) {
             // Reject it entirely as per LSP spec
             return;
         }
-        
+
         // Get the text field - always apply including empty text for full-sync
         auto textField = getJsonObject(lastChange, "text");
         std::string text = getJsonString(textField);
-        
+
         if (!uri.empty()) {
             // Always apply the text field, including empty text for full document replacement
             updateDocument(uri, text, static_cast<int>(version));
@@ -1926,7 +1906,7 @@ void LanguageServer::handleDidChangeTextDocument(const JsonValue& params) {
 void LanguageServer::handleDidSaveTextDocument(const JsonValue& params) {
     auto paramsObj = getJsonObject(params, "textDocument");
     if (paramsObj.isNull()) return;
-    
+
     std::string uri = getJsonObject(paramsObj, "uri").getPtr<std::string>() ?
                       *getJsonObject(paramsObj, "uri").getPtr<std::string>() : "";
     if (!uri.empty()) {
@@ -1937,7 +1917,7 @@ void LanguageServer::handleDidSaveTextDocument(const JsonValue& params) {
 void LanguageServer::handleDidCloseTextDocument(const JsonValue& params) {
     auto paramsObj = getJsonObject(params, "textDocument");
     if (paramsObj.isNull()) return;
-    
+
     std::string uri = getJsonObject(paramsObj, "uri").getPtr<std::string>() ?
                       *getJsonObject(paramsObj, "uri").getPtr<std::string>() : "";
     if (!uri.empty()) {
@@ -1951,26 +1931,26 @@ JsonValue LanguageServer::handleHover(const JsonValue& params) {
     // Extract URI from textDocument
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
-    
+
     auto doc = getDocument(uri);
     if (!doc) return JsonValue(nullptr);
-    
+
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
-    
+
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
-    
+
     // Convert to 1-indexed for lexer (line is 0-indexed in LSP, column is UTF-16 units)
     Position internalPos;
     internalPos.line = line;  // LSP uses 0-indexed lines
     internalPos.character = graphemeCol.value_or(utf16Char);  // Fallback to UTF-16 if conversion fails
-    
+
     auto hover = getHover(doc->uri, internalPos);
     if (!hover) return JsonValue(nullptr);
-    
+
     auto result = json::makeObject();
     if (hover->contents) {
         auto contents = json::makeObject();
@@ -1984,19 +1964,19 @@ JsonValue LanguageServer::handleHover(const JsonValue& params) {
 std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Position& pos) {
     auto doc = getDocument(uri);
     if (!doc) return std::nullopt;
-    
+
     try {
         Lexer lexer(doc->text, registry_);
         auto tokens = lexer.tokenize();
-        
+
         // Convert position: pos.character is already a grapheme column (0-indexed)
         // Token columns are 1-indexed grapheme columns
         std::size_t targetLine = pos.line + 1;
         std::size_t targetGraphemeCol = pos.character + 1;  // Convert to 1-indexed for lexer
-        
+
         for (const auto& token : tokens) {
             if (token.kind == TokenKind::Eof) continue;
-            
+
             // Check if position is within this token's range
             if (token.line == targetLine) {
                 // token.column is 1-indexed GRAPHEME column
@@ -2004,12 +1984,12 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
                 // Count graphemes in the lexeme
                 auto gs = segment_graphemes(token.lexeme);
                 std::size_t tokenGraphemeCount = gs.size();
-                
+
                 // Check if target grapheme column is within token span
                 if (targetGraphemeCol >= token.column && targetGraphemeCol < token.column + tokenGraphemeCount) {
                     Hover hover;
                     hover.contents = MarkupContent{"markdown", ""};
-                    
+
                     const auto& defs = registry_.definitions();
                     for (const auto& def : defs) {
                         if (def.kind == token.kind) {
@@ -2017,19 +1997,19 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
                             return hover;
                         }
                     }
-                    
+
                     if (token.kind == TokenKind::Identifier) {
                         hover.contents->value = "Identifier: `" + token.lexeme + "`";
                         return hover;
                     }
-                    
+
                     hover.contents->value = "Token: " + token_kind_name(token.kind);
                     return hover;
                 }
             }
         }
     } catch (...) {}
-    
+
     return std::nullopt;
 }
 
@@ -2063,10 +2043,10 @@ static bool isIdentifierPart(char32_t cp) {
 static std::pair<char32_t, std::size_t> decodeUtf8(const std::string& str, std::size_t pos) {
     if (pos >= str.size()) return {0, 0};
     unsigned char byte = static_cast<unsigned char>(str[pos]);
-    
+
     char32_t cp = 0;
     std::size_t len = 1;
-    
+
     if ((byte & 0x80) == 0) {
         // ASCII
         cp = byte;
@@ -2085,14 +2065,14 @@ static std::pair<char32_t, std::size_t> decodeUtf8(const std::string& str, std::
     } else {
         return {0, 0}; // Invalid
     }
-    
+
     // Read continuation bytes
     for (std::size_t i = 1; i < len && pos + i < str.size(); i++) {
         unsigned char cont = static_cast<unsigned char>(str[pos + i]);
         if ((cont & 0xC0) != 0x80) return {0, 0}; // Invalid continuation
         cp = (cp << 6) | (cont & 0x3F);
     }
-    
+
     return {cp, len};
 }
 
@@ -2100,7 +2080,7 @@ static std::optional<std::string> findIdentifierAtPosition(const std::string& te
     // pos.character is a grapheme column (0-indexed)
     // Convert to 1-indexed for easier comparison with grapheme segments
     std::size_t targetGraphemeCol = pos.character + 1;
-    
+
     // Get the line at the position
     std::size_t lineStart = 0;
     std::size_t currentLine = 0;
@@ -2111,37 +2091,37 @@ static std::optional<std::string> findIdentifierAtPosition(const std::string& te
         }
         if (text[i] == '\n') currentLine++;
     }
-    
+
     // Find the end of this line
     std::size_t lineEnd = lineStart;
     while (lineEnd < text.size() && text[lineEnd] != '\n' && text[lineEnd] != '\r') {
         lineEnd++;
     }
-    
+
     // Extract the line
     std::string line = text.substr(lineStart, lineEnd - lineStart);
-    
+
     // Segment the line into graphemes
     auto graphemes = segment_graphemes(line);
-    
+
     // Check if position is within the line
     if (targetGraphemeCol == 0 || targetGraphemeCol > graphemes.size()) {
         return std::nullopt;
     }
-    
+
     // Find the byte offset for the target grapheme column
     std::size_t byteOffset = 0;
     for (std::size_t g = 0; g < targetGraphemeCol - 1 && g < graphemes.size(); g++) {
         byteOffset += graphemes[g].display.size();
     }
-    
+
     // Now find the identifier at this byte offset
     if (byteOffset >= line.size()) return std::nullopt;
-    
+
     // Check if we're at a valid identifier start
     // Get the code point at byteOffset
     auto [startCp, startLen] = decodeUtf8(line, byteOffset);
-    
+
     if (!isIdentifierStart(startCp)) {
         // Maybe we're in the middle of an identifier, try to go back
         std::size_t backPos = byteOffset;
@@ -2159,19 +2139,19 @@ static std::optional<std::string> findIdentifierAtPosition(const std::string& te
         }
         byteOffset = backPos;
     }
-    
+
     // Extract the identifier - collect consecutive identifier graphemes
     std::string identifier;
     std::size_t curPos = byteOffset;
     while (curPos < line.size()) {
         auto [cp, len] = decodeUtf8(line, curPos);
         if (cp == 0 || !isIdentifierPart(cp)) break;
-        
+
         // Add the display form (grapheme) to identifier
         identifier += line.substr(curPos, len);
         curPos += len;
     }
-    
+
     if (!identifier.empty()) {
         return identifier;
     }
@@ -2180,40 +2160,40 @@ static std::optional<std::string> findIdentifierAtPosition(const std::string& te
 
 std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& uri, const Position& pos) {
     std::vector<SymbolLocation> results;
-    
+
     auto doc = getDocument(uri);
     if (!doc) return results;
-    
+
     // Find what identifier is at the cursor position
     auto identifier = findIdentifierAtPosition(doc->text, pos);
     if (!identifier) return results;
-    
+
     // Get tokens for accurate position information
     auto tokensOpt = getTokens(uri);
     if (!tokensOpt) return results;
     const auto& tokens = tokensOpt->get();
-    
+
     // Parse the document
     auto programOpt = getOrParseProgram(uri);
     if (!programOpt) return results;
     const auto& program = programOpt->get();
-    
+
     // Helper to compute grapheme count from a string
     auto countGraphemes = [](const std::string& s) -> std::size_t {
         auto gs = segment_graphemes(s);
         return gs.size();
     };
-    
+
     // Helper function to search for definitions in a program and add to results
     auto searchInProgram = [&](const std::string& searchUri, const ast::Program& searchProgram, const std::vector<Token>& searchTokens) {
         for (const auto& stmt : searchProgram.statements) {
             std::optional<std::uint32_t> actualColumn;
-            
+
             // Check for function declarations
             if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
                 if (funcDecl->name == *identifier) {
                     actualColumn = findIdentifierColumn(*stmt, funcDecl->name, searchTokens);
-                    
+
                     SymbolLocation loc;
                     loc.uri = searchUri;
                     std::uint32_t startCol = actualColumn.value_or(2);
@@ -2230,7 +2210,7 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
             else if (auto* varDecl = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
                 if (varDecl->name == *identifier) {
                     actualColumn = findIdentifierColumn(*stmt, varDecl->name, searchTokens);
-                    
+
                     SymbolLocation loc;
                     loc.uri = searchUri;
                     std::uint32_t startCol = actualColumn.value_or(2);
@@ -2247,7 +2227,7 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
             else if (auto* modDecl = dynamic_cast<const ast::ModuleDecl*>(stmt.get())) {
                 if (modDecl->name == *identifier) {
                     actualColumn = findIdentifierColumn(*stmt, modDecl->name, searchTokens);
-                    
+
                     SymbolLocation loc;
                     loc.uri = searchUri;
                     std::uint32_t startCol = actualColumn.value_or(2);
@@ -2262,37 +2242,37 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
             }
         }
     };
-    
+
     // Search in current document first
     searchInProgram(uri, program, tokens);
-    
+
     // Search across other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
-        
+
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
         const auto& otherTokens = otherTokensOpt->get();
-        
+
         auto otherProgramOpt = getOrParseProgram(otherUri);
         if (!otherProgramOpt) continue;
         const auto& otherProgram = otherProgramOpt->get();
-        
+
         searchInProgram(otherUri, otherProgram, otherTokens);
     }
-    
+
     // Search in local modules from the filesystem (if workspace is available)
     // Use canonical PackageGraph for authorized source universe
     if (workspaceRoot_ && packageGraph_) {
         std::filesystem::path root = *workspaceRoot_;
-        
+
         // Collect authorized package paths from PackageGraph
         // This includes root, local modules, path packages, and materialized registry packages
         std::set<std::filesystem::path> authorizedPaths;
-        
+
         // Add root directory for local modules
         authorizedPaths.insert(root);
-        
+
         // Add all packages from PackageGraph (includes root, path deps, and materialized registry packages)
         for (const auto& pkg : (*packageGraph_).packages) {
             // Use the resolved root from PackageGraph
@@ -2300,25 +2280,25 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
                 authorizedPaths.insert(pkg.root);
             }
         }
-        
+
         // Search authorized paths for .emj/.emoji files
         // Only do one level deep to avoid scanning entire workspace
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
-            
+
             // Skip .emojineer directory (contains package cache)
             if (authorizedPath.filename() == ".emojineer") continue;
-            
+
             try {
                 if (std::filesystem::is_directory(authorizedPath)) {
                     for (const auto& entry : std::filesystem::directory_iterator(authorizedPath)) {
-                        if (entry.is_regular_file() && 
+                        if (entry.is_regular_file() &&
                             (entry.path().extension() == ".emj" || entry.path().extension() == ".emoji")) {
                             std::string moduleUri = pathToUri(entry.path());
-                            
+
                             // Skip if already searched
                             if (openDocuments_.count(moduleUri)) continue;
-                            
+
                             try {
                                 std::string source = readFile(entry.path());
                                 CustomEmojiRegistry reg = registry_;
@@ -2326,7 +2306,7 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
                                 auto modTokens = lexer.tokenize();
                                 Parser parser(std::move(modTokens));
                                 auto modProgram = parser.parse();
-                                
+
                                 searchInProgram(moduleUri, modProgram, {});
                             } catch (...) {
                                 // Skip files that can't be parsed
@@ -2336,7 +2316,7 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
                 } else if (authorizedPath.extension() == ".emj" || authorizedPath.extension() == ".emoji") {
                     // It's a file at root level
                     std::string moduleUri = pathToUri(authorizedPath);
-                    
+
                     if (!openDocuments_.count(moduleUri)) {
                         try {
                             std::string source = readFile(authorizedPath);
@@ -2345,7 +2325,7 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
                             auto modTokens = lexer.tokenize();
                             Parser parser(std::move(modTokens));
                             auto modProgram = parser.parse();
-                            
+
                             searchInProgram(moduleUri, modProgram, {});
                         } catch (...) {
                             // Skip files that can't be parsed
@@ -2357,7 +2337,7 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
             }
         }
     }
-    
+
     return results;
 }
 
@@ -2454,7 +2434,7 @@ void findReferencesInStmt(const ast::Stmt& stmt, const std::string& target,
     } else if (auto* modDecl = dynamic_cast<const ast::ModuleDecl*>(&stmt)) {
         if (modDecl->name == target) isDefinition = true;
     }
-    
+
     // If this is a definition and we're not including declarations, skip
     if (isDefinition && !includeDeclaration) {
         // But still search for references within the definition body
@@ -2475,7 +2455,7 @@ void findReferencesInStmt(const ast::Stmt& stmt, const std::string& target,
             }
         }
     }
-    
+
     // Assignment - check the name
     if (auto* assign = dynamic_cast<const ast::Assignment*>(&stmt)) {
         if (assign->name == target) {
@@ -2525,75 +2505,75 @@ void findReferencesInStmt(const ast::Stmt& stmt, const std::string& target,
 
 std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& uri, const Position& pos, bool includeDeclaration) {
     std::vector<SymbolLocation> results;
-    
+
     auto doc = getDocument(uri);
     if (!doc) return results;
-    
+
     // Find what identifier is at the cursor position
     auto identifier = findIdentifierAtPosition(doc->text, pos);
     if (!identifier) return results;
-    
+
     // Get tokens for accurate position information
     auto tokensOpt = getTokens(uri);
     if (!tokensOpt) return results;
     const auto& tokens = tokensOpt->get();
-    
+
     // Parse the document
     auto programOpt = getOrParseProgram(uri);
     if (!programOpt) return results;
     const auto& program = programOpt->get();
-    
+
     // Search for references to this identifier in current document
     for (const auto& stmt : program.statements) {
         findReferencesInStmt(*stmt, *identifier, uri, results, tokens, includeDeclaration);
     }
-    
+
     // Search across other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
-        
+
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
         const auto& otherTokens = otherTokensOpt->get();
-        
+
         auto otherProgramOpt = getOrParseProgram(otherUri);
         if (!otherProgramOpt) continue;
         const auto& otherProgram = otherProgramOpt->get();
-        
+
         for (const auto& stmt : otherProgram.statements) {
             findReferencesInStmt(*stmt, *identifier, otherUri, results, otherTokens, includeDeclaration);
         }
     }
-    
+
     // Search in local modules from the filesystem (same logic as definitions)
     // Use canonical PackageGraph for authorized source universe
     if (workspaceRoot_ && packageGraph_) {
         std::filesystem::path root = *workspaceRoot_;
-        
+
         // Collect authorized paths from PackageGraph
         std::set<std::filesystem::path> authorizedPaths;
         authorizedPaths.insert(root);
-        
+
         // Add all packages from PackageGraph
         for (const auto& pkg : (*packageGraph_).packages) {
             if (!pkg.root.empty()) {
                 authorizedPaths.insert(pkg.root);
             }
         }
-        
+
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
             if (authorizedPath.filename() == ".emojineer") continue;
-            
+
             try {
                 if (std::filesystem::is_directory(authorizedPath)) {
                     for (const auto& entry : std::filesystem::directory_iterator(authorizedPath)) {
-                        if (entry.is_regular_file() && 
+                        if (entry.is_regular_file() &&
                             (entry.path().extension() == ".emj" || entry.path().extension() == ".emoji")) {
                             std::string moduleUri = pathToUri(entry.path());
-                            
+
                             if (openDocuments_.count(moduleUri)) continue;
-                            
+
                             try {
                                 std::string source = readFile(entry.path());
                                 CustomEmojiRegistry reg = registry_;
@@ -2601,7 +2581,7 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
                                 auto modTokens = lexer.tokenize();
                                 Parser parser(std::move(modTokens));
                                 auto modProgram = parser.parse();
-                                
+
                                 for (const auto& stmt : modProgram.statements) {
                                     findReferencesInStmt(*stmt, *identifier, moduleUri, results, modTokens, includeDeclaration);
                                 }
@@ -2612,35 +2592,35 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
             } catch (...) {}
         }
     }
-    
+
     return results;
 }
 
 JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
-    
+
     auto doc = getDocument(uri);
     if (!doc) return JsonValue(json::makeArray());
-    
+
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
-    
+
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
-    
+
     // Convert to internal position
     Position internalPos;
     internalPos.line = line;
     internalPos.character = graphemeCol.value_or(utf16Char);
-    
+
     auto completions = getCompletions(uri, internalPos);
-    
+
     auto result = json::makeObject();
     json::objectSet(result, "isIncomplete", JsonValue(false));
-    
+
     auto items = json::makeArray();
     for (const auto& item : completions) {
         auto itemJson = json::makeObject();
@@ -2652,13 +2632,13 @@ JsonValue LanguageServer::handleCompletion(const JsonValue& params) {
         json::arrayPushBack(items, itemJson);
     }
     json::objectSet(result, "items", items);
-    
+
     return result;
 }
 
 std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& uri, const Position& pos) {
     std::vector<CompletionItem> completions;
-    
+
     // Get the prefix at the current position for filtering
     auto doc = getDocument(uri);
     std::string prefix;
@@ -2669,7 +2649,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         std::size_t lineStart = 0;
         std::size_t currentOffset = 0;
         std::size_t utf8Offset = 0;
-        
+
         // Count lines until we reach the target line
         for (std::size_t i = 0; i < doc->text.size() && currentOffset < pos.line; i++) {
             if (doc->text[i] == '\n') {
@@ -2679,7 +2659,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
                 }
             }
         }
-        
+
         // Now extract the prefix on the current line up to the cursor position
         std::size_t lineEnd = lineStart;
         currentOffset = 0;
@@ -2710,16 +2690,16 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
                 }
             }
         }
-        
+
         prefix = doc->text.substr(lineStart, lineEnd - lineStart);
     }
-    
+
     // Helper to filter by prefix - use string_view for compatibility
     auto matchesPrefix = [&prefix](std::string_view s) {
         if (prefix.empty()) return true;
         return s.rfind(prefix, 0) == 0;
     };
-    
+
     const std::vector<std::pair<std::string, std::string>> keywords = {
         {"🧑‍💻", "variable declaration"},
         {"📤", "export statement"},
@@ -2736,7 +2716,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
         {"✅", "boolean true"},
         {"❌", "boolean false"},
     };
-    
+
     for (const auto& [emoji, desc] : keywords) {
         if (matchesPrefix(emoji)) {
             CompletionItem item;
@@ -2746,7 +2726,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             completions.push_back(item);
         }
     }
-    
+
     for (const auto& def : registry_.definitions()) {
         if (!def.custom && matchesPrefix(def.alias)) {
             CompletionItem item;
@@ -2756,7 +2736,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             completions.push_back(item);
         }
     }
-    
+
     for (const auto& module : standard_modules()) {
         if (matchesPrefix(module.specifier)) {
             CompletionItem item;
@@ -2766,7 +2746,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             completions.push_back(item);
         }
     }
-    
+
     // Add direct dependencies from PackageGraph (includes all resolved packages)
     if (packageGraph_) {
         for (const auto& pkg : (*packageGraph_).packages) {
@@ -2786,7 +2766,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             }
         }
     }
-    
+
     // Add user-defined symbols from current document
     if (doc) {
         auto programOpt = getOrParseProgram(uri);
@@ -2823,15 +2803,15 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             }
         }
     }
-    
+
     // Add symbols from other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
-        
+
         auto otherProgramOpt = getOrParseProgram(otherUri);
         if (!otherProgramOpt) continue;
         const auto& otherProgram = otherProgramOpt->get();
-        
+
         for (const auto& stmt : otherProgram.statements) {
             if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
                 if (matchesPrefix(funcDecl->name)) {
@@ -2871,37 +2851,37 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             }
         }
     }
-    
+
     // Add symbols from authorized filesystem modules (same as definitions/references)
     // Use canonical PackageGraph for authorized source universe
     if (workspaceRoot_ && packageGraph_) {
         std::filesystem::path root = *workspaceRoot_;
-        
+
         // Collect authorized paths from PackageGraph
         std::set<std::filesystem::path> authorizedPaths;
         authorizedPaths.insert(root);
-        
+
         // Add all packages from PackageGraph
         for (const auto& pkg : (*packageGraph_).packages) {
             if (!pkg.root.empty()) {
                 authorizedPaths.insert(pkg.root);
             }
         }
-        
+
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
             if (authorizedPath.filename() == ".emojineer") continue;
-            
+
             try {
                 if (std::filesystem::is_directory(authorizedPath)) {
                     for (const auto& entry : std::filesystem::directory_iterator(authorizedPath)) {
-                        if (entry.is_regular_file() && 
+                        if (entry.is_regular_file() &&
                             (entry.path().extension() == ".emj" || entry.path().extension() == ".emoji")) {
                             std::string moduleUri = pathToUri(entry.path());
-                            
+
                             // Skip if already in open documents
                             if (openDocuments_.count(moduleUri)) continue;
-                            
+
                             try {
                                 std::string source = readFile(entry.path());
                                 CustomEmojiRegistry reg = registry_;
@@ -2909,7 +2889,7 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
                                 auto modTokens = lexer.tokenize();
                                 Parser parser(std::move(modTokens));
                                 auto modProgram = parser.parse();
-                                
+
                                 for (const auto& stmt : modProgram.statements) {
                                     if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
                                         if (matchesPrefix(funcDecl->name)) {
@@ -2955,36 +2935,36 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             } catch (...) {}
         }
     }
-    
+
     return completions;
 }
 
 JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
-    
+
     auto doc = getDocument(uri);
     if (!doc) return JsonValue(json::makeArray());
-    
+
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
-    
+
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
-    
+
     Position internalPos;
     internalPos.line = line;
     internalPos.character = graphemeCol.value_or(utf16Char);
-    
+
     auto defs = findDefinitions(uri, internalPos);
-    
+
     auto result = json::makeArray();
     for (const auto& def : defs) {
         auto loc = json::makeObject();
         json::objectSet(loc, "uri", JsonValue(def.uri));
-        
+
         // Get the target document's text for proper position conversion
         // This supports cross-file navigation by using each target's own overlay/file
         auto targetDoc = getDocument(def.uri);
@@ -3000,29 +2980,29 @@ JsonValue LanguageServer::handleDefinition(const JsonValue& params) {
                 }
             } catch (...) {}
         }
-        
+
         // Convert grapheme positions to UTF-16 for output
         std::string defLineStr = getLine(targetText.empty() ? doc->text : targetText, def.range.start.line);
         std::uint32_t utf16StartChar = graphemeColumnToUtf16Column(defLineStr, def.range.start.character);
-        
+
         auto range = json::makeObject();
         auto start = json::makeObject();
         json::objectSet(start, "line", JsonValue(static_cast<double>(def.range.start.line)));
         json::objectSet(start, "character", JsonValue(static_cast<double>(utf16StartChar)));
-        
+
         std::string defEndLineStr = getLine(targetText.empty() ? doc->text : targetText, def.range.end.line);
         std::uint32_t utf16EndChar = graphemeColumnToUtf16Column(defEndLineStr, def.range.end.character);
-        
+
         auto end = json::makeObject();
         json::objectSet(end, "line", JsonValue(static_cast<double>(def.range.end.line)));
         json::objectSet(end, "character", JsonValue(static_cast<double>(utf16EndChar)));
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
         json::objectSet(loc, "range", range);
-        
+
         json::arrayPushBack(result, loc);
     }
-    
+
     return result;
 }
 
@@ -3043,32 +3023,32 @@ JsonValue LanguageServer::handleReferences(const JsonValue& params) {
             }
         }
     }
-    
+
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
-    
+
     auto doc = getDocument(uri);
     if (!doc) return JsonValue(json::makeArray());
-    
+
     auto posObj = getJsonObject(params, "position");
     std::uint32_t line = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "line")));
     std::uint32_t utf16Char = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(posObj, "character")));
-    
+
     // Convert UTF-16 position to grapheme position for lexer
     std::string lineStr = getLine(doc->text, line);
     auto graphemeCol = utf16ColumnToGraphemeColumn(lineStr, utf16Char);
-    
+
     Position internalPos;
     internalPos.line = line;
     internalPos.character = graphemeCol.value_or(utf16Char);
-    
+
     auto refs = findReferences(uri, internalPos, includeDeclaration);
-    
+
     auto result = json::makeArray();
     for (const auto& ref : refs) {
         auto loc = json::makeObject();
         json::objectSet(loc, "uri", JsonValue(ref.uri));
-        
+
         // Get the target document's text for proper position conversion
         // This supports cross-file navigation by using each target's own overlay/file
         auto targetDoc = getDocument(ref.uri);
@@ -3084,44 +3064,44 @@ JsonValue LanguageServer::handleReferences(const JsonValue& params) {
                 }
             } catch (...) {}
         }
-        
+
         // Convert grapheme positions to UTF-16 for output
         std::string refLineStr = getLine(targetText.empty() ? doc->text : targetText, ref.range.start.line);
         std::uint32_t utf16StartChar = graphemeColumnToUtf16Column(refLineStr, ref.range.start.character);
-        
+
         auto range = json::makeObject();
         auto start = json::makeObject();
         json::objectSet(start, "line", JsonValue(static_cast<double>(ref.range.start.line)));
         json::objectSet(start, "character", JsonValue(static_cast<double>(utf16StartChar)));
-        
+
         std::string refEndLineStr = getLine(targetText.empty() ? doc->text : targetText, ref.range.end.line);
         std::uint32_t utf16EndChar = graphemeColumnToUtf16Column(refEndLineStr, ref.range.end.character);
-        
+
         auto end = json::makeObject();
         json::objectSet(end, "line", JsonValue(static_cast<double>(ref.range.end.line)));
         json::objectSet(end, "character", JsonValue(static_cast<double>(utf16EndChar)));
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
         json::objectSet(loc, "range", range);
-        
+
         json::arrayPushBack(result, loc);
     }
-    
+
     return result;
 }
 
 JsonValue LanguageServer::handleDocumentSymbol(const JsonValue& params) {
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
-    
+
     auto symbols = getDocumentSymbols(uri);
-    
+
     auto result = json::makeArray();
     for (const auto& sym : symbols) {
         auto symJson = json::makeObject();
         json::objectSet(symJson, "name", JsonValue(sym.name));
         if (sym.kind) json::objectSet(symJson, "kind", JsonValue(static_cast<double>(*sym.kind)));
-        
+
         // Range
         auto range = json::makeObject();
         auto start = json::makeObject();
@@ -3133,7 +3113,7 @@ JsonValue LanguageServer::handleDocumentSymbol(const JsonValue& params) {
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
         json::objectSet(symJson, "range", range);
-        
+
         // Selection range
         auto selRange = json::makeObject();
         auto selStart = json::makeObject();
@@ -3145,30 +3125,30 @@ JsonValue LanguageServer::handleDocumentSymbol(const JsonValue& params) {
         json::objectSet(selRange, "start", selStart);
         json::objectSet(selRange, "end", selEnd);
         json::objectSet(symJson, "selectionRange", selRange);
-        
+
         if (sym.detail) json::objectSet(symJson, "detail", JsonValue(*sym.detail));
-        
+
         json::arrayPushBack(result, symJson);
     }
-    
+
     return result;
 }
 
 std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string& uri) {
     std::vector<DocumentSymbol> symbols;
-    
+
     auto doc = getDocument(uri);
     if (!doc) return symbols;
-    
+
     auto programOpt = getOrParseProgram(uri);
     if (!programOpt) return symbols;
     const auto& program = programOpt->get();
-    
+
     // Extract symbols from the program
-    // Estimate column - in Emojineer syntax, identifier typically starts 
+    // Estimate column - in Emojineer syntax, identifier typically starts
     // after the leading emoji keyword (🛠️ for functions, 🐍 for variables)
     constexpr std::uint32_t estimatedColumn = 2;
-    
+
     for (const auto& stmt : program.statements) {
         if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
             DocumentSymbol sym;
@@ -3193,22 +3173,22 @@ std::vector<DocumentSymbol> LanguageServer::getDocumentSymbols(const std::string
             symbols.push_back(sym);
         }
     }
-    
+
     return symbols;
 }
 
 JsonValue LanguageServer::handleWorkspaceSymbol(const JsonValue& params) {
     auto queryObj = getJsonObject(params, "query");
     std::string query = getJsonString(queryObj);
-    
+
     auto symbols = getWorkspaceSymbols(query);
-    
+
     auto result = json::makeArray();
     for (const auto& sym : symbols) {
         auto symJson = json::makeObject();
         json::objectSet(symJson, "name", JsonValue(sym.name));
         if (sym.kind) json::objectSet(symJson, "kind", JsonValue(static_cast<double>(*sym.kind)));
-        
+
         auto loc = json::makeObject();
         json::objectSet(loc, "uri", JsonValue(sym.location.uri));
         auto range = json::makeObject();
@@ -3222,18 +3202,18 @@ JsonValue LanguageServer::handleWorkspaceSymbol(const JsonValue& params) {
         json::objectSet(range, "end", end);
         json::objectSet(loc, "range", range);
         json::objectSet(symJson, "location", loc);
-        
+
         if (sym.containerName) json::objectSet(symJson, "containerName", JsonValue(*sym.containerName));
-        
+
         json::arrayPushBack(result, symJson);
     }
-    
+
     return result;
 }
 
 std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::string& query) {
     std::vector<SymbolInformation> symbols;
-    
+
     // Search across all open documents
     for (const auto& [uri, doc] : openDocuments_) {
         auto docSymbols = getDocumentSymbols(uri);
@@ -3248,37 +3228,37 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
             }
         }
     }
-    
+
     // Search in local modules from the filesystem (same logic as definitions/references)
     // Use canonical PackageGraph for authorized source universe
     if (workspaceRoot_ && packageGraph_) {
         std::filesystem::path root = *workspaceRoot_;
-        
+
         // Collect authorized paths from PackageGraph
         std::set<std::filesystem::path> authorizedPaths;
         authorizedPaths.insert(root);
-        
+
         // Add all packages from PackageGraph
         for (const auto& pkg : (*packageGraph_).packages) {
             if (!pkg.root.empty()) {
                 authorizedPaths.insert(pkg.root);
             }
         }
-        
+
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
             if (authorizedPath.filename() == ".emojineer") continue;
-            
+
             try {
                 if (std::filesystem::is_directory(authorizedPath)) {
                     for (const auto& entry : std::filesystem::directory_iterator(authorizedPath)) {
-                        if (entry.is_regular_file() && 
+                        if (entry.is_regular_file() &&
                             (entry.path().extension() == ".emj" || entry.path().extension() == ".emoji")) {
                             std::string moduleUri = pathToUri(entry.path());
-                            
+
                             // Skip if already in open documents (already searched)
                             if (openDocuments_.count(moduleUri)) continue;
-                            
+
                             try {
                                 std::string source = readFile(entry.path());
                                 CustomEmojiRegistry reg = registry_;
@@ -3286,7 +3266,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                 auto modTokens = lexer.tokenize();
                                 Parser parser(std::move(modTokens));
                                 auto modProgram = parser.parse();
-                                
+
                                 // Extract symbols from this program
                                 for (const auto& stmt : modProgram.statements) {
                                     if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
@@ -3294,13 +3274,13 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             SymbolInformation info;
                                             info.name = funcDecl->name;
                                             info.kind = static_cast<int>(SymbolKind::Function);
-                                            
+
                                             // Find token for range
                                             for (const auto& token : modTokens) {
                                                 if (token.line == funcDecl->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == funcDecl->name || token.canonical == funcDecl->name)) {
                                                     Range r;
-                                                    r.start = {safeSizeToUint32(funcDecl->line > 0 ? funcDecl->line - 1 : 0), 
+                                                    r.start = {safeSizeToUint32(funcDecl->line > 0 ? funcDecl->line - 1 : 0),
                                                                safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
                                                     auto gs = segment_graphemes(token.lexeme);
                                                     r.end = {safeSizeToUint32(funcDecl->line > 0 ? funcDecl->line - 1 : 0),
@@ -3317,7 +3297,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             SymbolInformation info;
                                             info.name = varDecl->name;
                                             info.kind = static_cast<int>(SymbolKind::Variable);
-                                            
+
                                             for (const auto& token : modTokens) {
                                                 if (token.line == varDecl->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == varDecl->name || token.canonical == varDecl->name)) {
@@ -3339,7 +3319,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             SymbolInformation info;
                                             info.name = modDecl->name;
                                             info.kind = static_cast<int>(SymbolKind::Module);
-                                            
+
                                             for (const auto& token : modTokens) {
                                                 if (token.line == modDecl->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == modDecl->name || token.canonical == modDecl->name)) {
@@ -3361,7 +3341,7 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                             SymbolInformation info;
                                             info.name = exportStmt->name;
                                             info.kind = static_cast<int>(SymbolKind::Variable);
-                                            
+
                                             for (const auto& token : modTokens) {
                                                 if (token.line == exportStmt->line && token.kind == TokenKind::Identifier &&
                                                     (token.lexeme == exportStmt->name || token.canonical == exportStmt->name)) {
@@ -3386,35 +3366,35 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
             } catch (...) {}
         }
     }
-    
+
     return symbols;
 }
 
 JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
-    
+
     auto doc = getDocument(uri);
     if (!doc) return json::makeArray();
-    
+
     // Use the source_tools formatter
     try {
         std::string formatted = format_source(doc->text, registry_);
-        
+
         // If no changes, return empty array
         if (formatted == doc->text) {
             return json::makeArray();
         }
-        
+
         auto result = json::makeArray();
         auto edit = json::makeObject();
-        
+
         // Full document range - from {0, 0} to actual EOF
         auto range = json::makeObject();
         auto start = json::makeObject();
         json::objectSet(start, "line", JsonValue(0.0));
         json::objectSet(start, "character", JsonValue(0.0));
-        
+
         // Compute true UTF-16 EOF position
         // Count lines and last line's UTF-16 length
         // Handle all line endings: LF, CRLF, CR
@@ -3423,7 +3403,7 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
         std::size_t i = 0;
         while (i < doc->text.size()) {
             auto [cp, len] = decodeUtf8(doc->text, i);
-            
+
             // Check for CRLF first
             if (cp == '\r' && i + len < doc->text.size()) {
                 auto [nextCp, nextLen] = decodeUtf8(doc->text, i + len);
@@ -3435,7 +3415,7 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
                     continue;
                 }
             }
-            
+
             // Handle CR (not followed by LF)
             if (cp == '\r') {
                 lineCount++;
@@ -3443,7 +3423,7 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
                 i += len;
                 continue;
             }
-            
+
             // Handle LF
             if (cp == '\n') {
                 lineCount++;
@@ -3451,13 +3431,13 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
                 i += len;
                 continue;
             }
-            
+
             // Regular character - count UTF-16 units
             // Count UTF-16 units (BMP = 1, supplementary = 2)
             lastLineUtf16Col += (cp >= 0x10000) ? 2 : 1;
             i += len;
         }
-        
+
         // Determine if document ends with a line terminator
         bool endsWithLineTerminator = false;
         if (!doc->text.empty()) {
@@ -3472,7 +3452,7 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
                 endsWithLineTerminator = true;
             }
         }
-        
+
         // If document ends with line terminator, the EOF is at the start of a new empty line
         // Otherwise, EOF is at the end of the last content line
         if (endsWithLineTerminator) {
@@ -3485,16 +3465,16 @@ JsonValue LanguageServer::handleFormatting(const JsonValue& params) {
         } else {
             // Empty document - EOF is at {0, 0}
         }
-        
+
         auto end = json::makeObject();
         json::objectSet(end, "line", JsonValue(static_cast<double>(lineCount)));
         json::objectSet(end, "character", JsonValue(static_cast<double>(lastLineUtf16Col)));
-        
+
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
         json::objectSet(edit, "range", range);
         json::objectSet(edit, "newText", JsonValue(formatted));
-        
+
         json::arrayPushBack(result, edit);
         return result;
     } catch (...) {
@@ -3507,7 +3487,7 @@ static std::vector<std::string> splitIntoLines(const std::string& text) {
     std::vector<std::string> lines;
     std::size_t start = 0;
     std::size_t i = 0;
-    
+
     while (i < text.size()) {
         if (text[i] == '\r') {
             if (i + 1 < text.size() && text[i + 1] == '\n') {
@@ -3529,90 +3509,90 @@ static std::vector<std::string> splitIntoLines(const std::string& text) {
             i++;
         }
     }
-    
+
     // Add remaining content (last line without newline or empty string if ends with newline)
     if (start < text.size() || text.empty()) {
         lines.push_back(text.substr(start));
     }
-    
+
     return lines;
 }
 
 JsonValue LanguageServer::handleRangeFormatting(const JsonValue& params) {
     auto textDoc = getJsonObject(params, "textDocument");
     std::string uri = getJsonString(getJsonObject(textDoc, "uri"));
-    
+
     auto doc = getDocument(uri);
     if (!doc) return json::makeArray();
-    
+
     // Extract the range from params
     auto rangeObj = getJsonObject(params, "range");
     if (rangeObj.isNull()) {
         // No range provided, fall back to full document formatting
         return handleFormatting(params);
     }
-    
+
     // Parse range start
     auto startObj = getJsonObject(rangeObj, "start");
     std::uint32_t startLine = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(startObj, "line")));
     std::uint32_t startChar = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(startObj, "character")));
-    
+
     // Parse range end
     auto endObj = getJsonObject(rangeObj, "end");
     std::uint32_t endLine = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(endObj, "line")));
     std::uint32_t endChar = static_cast<std::uint32_t>(getJsonNumber(getJsonObject(endObj, "character")));
-    
+
     try {
         // Get the text lines
         std::vector<std::string> lines = splitIntoLines(doc->text);
-        
+
         if (startLine >= lines.size() || endLine >= lines.size()) {
             return json::makeArray();
         }
-        
+
         // Convert UTF-16 positions to UTF-8 offsets using the FULL document
         // This fixes the bug where passing line index > 0 with a single-line slice
         // would incorrectly count lines within the slice
         auto startOffset = utf16ToUtf8(doc->text, startLine, startChar);
         auto endOffset = utf16ToUtf8(doc->text, endLine, endChar);
-        
+
         if (!startOffset || !endOffset) {
             return json::makeArray();
         }
-        
+
         // The offsets are already absolute since we used the full document
         std::size_t absoluteStart = *startOffset;
         std::size_t absoluteEnd = *endOffset;
-        
+
         // Extract the range text
         std::string rangeText = doc->text.substr(absoluteStart, absoluteEnd - absoluteStart);
-        
+
         // Format just the range text
         std::string formattedRange = format_source(rangeText, registry_);
-        
+
         // If no changes, return empty array
         if (formattedRange == rangeText) {
             return json::makeArray();
         }
-        
+
         auto result = json::makeArray();
         auto edit = json::makeObject();
-        
+
         // Return the range exactly as specified in the request
         auto range = json::makeObject();
         auto start = json::makeObject();
         json::objectSet(start, "line", JsonValue(static_cast<double>(startLine)));
         json::objectSet(start, "character", JsonValue(static_cast<double>(startChar)));
-        
+
         auto end = json::makeObject();
         json::objectSet(end, "line", JsonValue(static_cast<double>(endLine)));
         json::objectSet(end, "character", JsonValue(static_cast<double>(endChar)));
-        
+
         json::objectSet(range, "start", start);
         json::objectSet(range, "end", end);
         json::objectSet(edit, "range", range);
         json::objectSet(edit, "newText", JsonValue(formattedRange));
-        
+
         json::arrayPushBack(result, edit);
         return result;
     } catch (...) {
@@ -3625,7 +3605,7 @@ JsonValue LanguageServer::handleRequest(const std::string& method, const JsonVal
     if (shutdown_) {
         throw JsonRpcError(JSONRPC_INVALID_REQUEST, "Server is shut down");
     }
-    
+
     if (method == "initialize") return handleInitialize(params);
     if (method == "shutdown") return handleShutdown(params);
     if (method == "textDocument/hover") return handleHover(params);
@@ -3636,7 +3616,7 @@ JsonValue LanguageServer::handleRequest(const std::string& method, const JsonVal
     if (method == "workspace/symbol") return handleWorkspaceSymbol(params);
     if (method == "textDocument/formatting") return handleFormatting(params);
     if (method == "textDocument/rangeFormatting") return handleRangeFormatting(params);
-    
+
     // Unknown method - return -32601 (Method not found)
     throw JsonRpcError(JSONRPC_METHOD_NOT_FOUND, "Method not found: " + method);
 }
@@ -3657,7 +3637,7 @@ void LanguageServer::handleMessage(const JsonValue& message) {
         // Invalid request - not an object
         throw JsonRpcError(-32600, "Invalid JSON-RPC request: not an object");
     }
-    
+
     // Check for "jsonrpc" version field - must be exactly "2.0"
     auto jsonrpcIt = obj->find("jsonrpc");
     if (jsonrpcIt == obj->end() || !jsonrpcIt->second.isString()) {
@@ -3667,7 +3647,7 @@ void LanguageServer::handleMessage(const JsonValue& message) {
     if (jsonrpc != "2.0") {
         throw JsonRpcError(-32600, "Invalid JSON-RPC version: expected \"2.0\"");
     }
-    
+
     // Check for "method" field - must be a string
     auto methodIt = obj->find("method");
     if (methodIt == obj->end()) {
@@ -3680,14 +3660,14 @@ void LanguageServer::handleMessage(const JsonValue& message) {
         // This is a response object, not a request - ignore it
         return;
     }
-    
+
     if (!methodIt->second.isString()) {
         throw JsonRpcError(-32600, "Invalid JSON-RPC request: method must be a string");
     }
     std::string method = getJsonString(methodIt->second);
     const JsonValue& params = getJsonObject(message, "params");
     const JsonValue& idVal = getJsonObject(message, "id");
-    
+
     // Support both integer and string request IDs
     std::optional<int> intId;
     std::optional<std::string> stringId;
@@ -3702,13 +3682,13 @@ void LanguageServer::handleMessage(const JsonValue& message) {
             hasInvalidId = true;
         }
     }
-    
+
     // If there's an invalid ID, it's a request (has id), so return error
     if (hasInvalidId) {
         // Return -32600 Invalid Request with null id
         throw JsonRpcError(-32600, "Invalid JSON-RPC request: id must be a string or number");
     }
-    
+
     // Handle the response - prefer string IDs if present
     if (stringId || intId) {
         try {
@@ -3747,18 +3727,18 @@ void LanguageServer::handleMessage(const JsonValue& message) {
 int LanguageServer::run() {
     // Persistent buffer for carry-over data between reads
     std::string buffer;
-    
+
     while (true) {
         // Read headers until we find Content-Length
         std::string headers;
-        
+
         // First, try to find complete headers in buffer
         size_t headerEnd = buffer.find("\r\n\r\n");
         size_t headerEndAlt = buffer.find("\n\n");  // Alternative: just \n\n
-        
+
         bool hasCompleteHeaders = false;
         size_t headerBreakPos = 0;
-        
+
         if (headerEnd != std::string::npos) {
             hasCompleteHeaders = true;
             headerBreakPos = headerEnd + 4;  // After \r\n\r\n
@@ -3768,7 +3748,7 @@ int LanguageServer::run() {
             headerBreakPos = headerEndAlt + 2;  // After \n\n
             headers = buffer.substr(0, headerEndAlt);
         }
-        
+
         // If we don't have complete headers, read more data
         while (!hasCompleteHeaders) {
             char ch;
@@ -3780,11 +3760,11 @@ int LanguageServer::run() {
                 break;
             }
             buffer += ch;
-            
+
             // Check for complete headers again
             headerEnd = buffer.find("\r\n\r\n");
             headerEndAlt = buffer.find("\n\n");
-            
+
             if (headerEnd != std::string::npos) {
                 hasCompleteHeaders = true;
                 headerBreakPos = headerEnd + 4;
@@ -3795,15 +3775,15 @@ int LanguageServer::run() {
                 headers = buffer.substr(0, headerEndAlt);
             }
         }
-        
+
         if (!hasCompleteHeaders) {
             // Couldn't read complete headers
             break;
         }
-        
+
         // Keep any excess data in buffer for next message
         buffer = buffer.substr(headerBreakPos);
-        
+
         // Parse Content-Length header
         size_t contentLength = 0;
         {
@@ -3824,12 +3804,12 @@ int LanguageServer::run() {
                 }
             }
         }
-        
+
         if (contentLength == 0) {
             // No valid Content-Length, skip and continue
             continue;
         }
-        
+
         // Ensure we have enough data in buffer for the body
         while (buffer.size() < contentLength) {
             char ch;
@@ -3839,16 +3819,16 @@ int LanguageServer::run() {
             }
             buffer += ch;
         }
-        
+
         if (buffer.size() < contentLength) {
             // Incomplete message, break
             break;
         }
-        
+
         // Extract the body and keep any excess
         std::string body = buffer.substr(0, contentLength);
         buffer = buffer.substr(contentLength);  // Carry over any excess for next message
-        
+
         // Process the message
         try {
             auto json = parseJson(body);
@@ -3898,7 +3878,7 @@ std::string formatJsonRpcResponse(const JsonValue& result, std::optional<int> id
     json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
     json::objectSet(obj, "result", result);
     if (id) json::objectSet(obj, "id", JsonValue(static_cast<double>(*id)));
-    
+
     std::string body = toJson(obj);
     std::ostringstream out;
     out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
@@ -3908,14 +3888,14 @@ std::string formatJsonRpcResponse(const JsonValue& result, std::optional<int> id
 std::string formatJsonRpcError(int code, const std::string& message, std::optional<int> id) {
     auto obj = json::makeObject();
     json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
-    
+
     auto error = json::makeObject();
     json::objectSet(error, "code", JsonValue(static_cast<double>(code)));
     json::objectSet(error, "message", JsonValue(message));
     json::objectSet(obj, "error", error);
-    
+
     if (id) json::objectSet(obj, "id", JsonValue(static_cast<double>(*id)));
-    
+
     std::string body = toJson(obj);
     std::ostringstream out;
     out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
@@ -3928,7 +3908,7 @@ std::string formatJsonRpcResponseStringId(const JsonValue& result, const std::st
     json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
     json::objectSet(obj, "result", result);
     json::objectSet(obj, "id", JsonValue(id));
-    
+
     std::string body = toJson(obj);
     std::ostringstream out;
     out << "Content-Length: " << body.size() << "\r\n\r\n" << body;
@@ -3938,14 +3918,14 @@ std::string formatJsonRpcResponseStringId(const JsonValue& result, const std::st
 std::string formatJsonRpcErrorStringId(int code, const std::string& message, const std::string& id) {
     auto obj = json::makeObject();
     json::objectSet(obj, "jsonrpc", JsonValue(std::string("2.0")));
-    
+
     auto error = json::makeObject();
     json::objectSet(error, "code", JsonValue(static_cast<double>(code)));
     json::objectSet(error, "message", JsonValue(message));
     json::objectSet(obj, "error", error);
-    
+
     json::objectSet(obj, "id", JsonValue(id));
-    
+
     std::string body = toJson(obj);
     std::ostringstream out;
     out << "Content-Length: " << body.size() << "\r\n\r\n" << body;

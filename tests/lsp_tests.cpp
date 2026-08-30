@@ -781,8 +781,8 @@ struct LspTestWorkspace {
                    << "📤 🌟\n";
         pathPkgLib.close();
         
-        // Create registry package using materialize_package API (not hand-authored)
-        auto storeRoot = rootPath / ".emojineer" / "packages";
+        // Registry package fixture content. The store root is declared once below,
+        // immediately before materialization.
         
         // Fixed: 🧩 🧮 (valid identifier), 🧠 (not starting with Add token), 🍇 (valid identifier), bare 🏁
         std::string regPkgLibContent = 
