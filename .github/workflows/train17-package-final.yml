@@ -26,6 +26,7 @@ jobs:
         run: |
           python3 .github/scripts/train17_offline_sync_authority_repair.py
           python3 .github/scripts/train17_offline_sync_no_network_fix.py
+          python3 .github/scripts/train17_offline_path_fixture_fix.py
       - name: Verify patch
         run: git diff --check
       - name: Clean configure, build, and full CTest
@@ -38,6 +39,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/project.cpp src/package.cpp tests/acceptance_journey_tests.cpp
+          git add src/project.cpp src/package.cpp tests/project_tests.cpp tests/acceptance_journey_tests.cpp
           git commit -m "Train 17: enforce strict authority during offline sync"
           git push origin HEAD:train-17-package-foundation-repair
