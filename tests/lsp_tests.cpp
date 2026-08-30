@@ -1760,7 +1760,49 @@ void test_e2e_real_shutdown_exit();
 void test_e2e_real_mixed_workspace();
 #endif
 
+
+// Regression: Diagnostic ranges produced by tokenToRange are already LSP UTF-16
+// coordinates and must survive publication unchanged, including for an imported
+// source URI that is not open as an editor overlay.
+void test_publish_diagnostics_preserves_canonical_utf16_ranges() {
+    LanguageServer server;
+    const std::string source = "🍎 abc";
+
+    Token token;
+    token.kind = TokenKind::Identifier;
+    token.line = 1;
+    token.column = 3; // Grapheme column after 🍎 + space.
+    token.lexeme = "abc";
+    token.canonical = "abc";
+
+    Diagnostic diagnostic;
+    diagnostic.range = server.tokenToRange(source, token);
+    diagnostic.severity = 1;
+    diagnostic.message = "utf16 range regression";
+    diagnostic.source = "emojineer";
+
+    // 🍎 occupies two UTF-16 code units, then the space occupies one.
+    assert(diagnostic.range.start.line == 0);
+    assert(diagnostic.range.start.character == 3);
+    assert(diagnostic.range.end.line == 0);
+    assert(diagnostic.range.end.character == 6);
+
+    std::ostringstream captured;
+    auto* original = std::cout.rdbuf(captured.rdbuf());
+    server.publishDiagnostics("file:///imported-not-open.emoji", {diagnostic});
+    std::cout.rdbuf(original);
+
+    const std::string framed = captured.str();
+    assert(framed.find("Content-Length:") == 0);
+    assert(framed.find("textDocument/publishDiagnostics") != std::string::npos);
+    assert(framed.find("\"character\":3") != std::string::npos &&
+           "published diagnostic must preserve UTF-16 start character");
+    assert(framed.find("\"character\":6") != std::string::npos &&
+           "published diagnostic must preserve UTF-16 end character");
+}
+
 int main() {
+    test_publish_diagnostics_preserves_canonical_utf16_ranges();
     std::cout << "=== Emojineer LSP Protocol Tests ===" << std::endl;
     
     test_lexer_emoji();

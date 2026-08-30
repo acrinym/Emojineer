@@ -1679,76 +1679,23 @@ void LanguageServer::publishDiagnostics(const std::string& uri, const std::vecto
     auto params = json::makeObject();
     json::objectSet(params, "uri", JsonValue(uri));
 
-    // Get the document for position conversion
-    auto doc = getDocument(uri);
-    std::string docText;
-    if (doc) {
-        docText = doc->text;
-    }
-
+    // Diagnostic::range is already expressed in canonical LSP UTF-16 coordinates.
+    // Preserve it byte-for-byte instead of interpreting its character offsets as
+    // grapheme columns a second time. This is also required for diagnostics owned
+    // by imported sources that are not open as editor overlays.
     auto diagJson = json::makeArray();
     for (const auto& d : diagnostics) {
         auto diag = json::makeObject();
 
-        // Convert positions from internal (grapheme) to LSP (UTF-16)
-        // Internal positions are 0-indexed lines, grapheme columns
-        // LSP expects 0-indexed lines, UTF-16 columns
-
-        std::string startLineStr = getLine(docText, d.range.start.line);
-        std::uint32_t utf16StartChar = graphemeColumnToUtf16Column(startLineStr, d.range.start.character);
-
-        std::string endLineStr = getLine(docText, d.range.end.line);
-        std::uint32_t utf16EndChar = graphemeColumnToUtf16Column(endLineStr, d.range.end.character);
-
-        // Diagnostic assertion: validate UTF-16 positions for supplementary-plane emojis
-        // Check if the range spans a supplementary-plane emoji/CER token (code point >= U+10000)
-        if (!startLineStr.empty() && d.range.start.line == d.range.end.line) {
-            std::size_t graphemeIdx = 0;
-            std::size_t pos = 0;
-            bool foundSupplementaryInRange = false;
-            std::uint32_t computedUtf16Start = 0;
-            std::uint32_t computedUtf16End = 0;
-
-            // Use < instead of <= to match graphemeColumnToUtf16Column semantics
-            while (pos < startLineStr.size() && graphemeIdx < d.range.end.character) {
-                char32_t codePoint = 0;
-                std::size_t oldPos = pos;
-                if (decodeUtf8CodePoint(startLineStr, pos, codePoint)) {
-                    // Check if this grapheme is in the range [start, end)
-                    if (graphemeIdx >= d.range.start.character && graphemeIdx < d.range.end.character) {
-                        if (codePoint >= 0x10000) {
-                            foundSupplementaryInRange = true;
-                        }
-                    }
-                    if (graphemeIdx < d.range.start.character) {
-                        computedUtf16Start += countUtf16UnitsForCodePoint(codePoint);
-                    }
-                    computedUtf16End += countUtf16UnitsForCodePoint(codePoint);
-                    graphemeIdx++;
-                } else {
-                    pos = oldPos + 1;
-                    graphemeIdx++;
-                }
-            }
-
-            // Assert: for supplementary-plane tokens, computed UTF-16 must match published UTF-16
-            if (foundSupplementaryInRange) {
-                // The assertion validates exact UTF-16 positions, not just range presence
-                assert(utf16StartChar == computedUtf16Start &&
-                       utf16EndChar == computedUtf16End &&
-                       "UTF-16 position assertion failed for supplementary-plane emoji/CER token");
-            }
-        }
-
         auto range = json::makeObject();
-        auto start = json::makeObject();
-        json::objectSet(start, "line", JsonValue(static_cast<double>(d.range.start.line)));
-        json::objectSet(start, "character", JsonValue(static_cast<double>(utf16StartChar)));
-        auto end = json::makeObject();
-        json::objectSet(end, "line", JsonValue(static_cast<double>(d.range.end.line)));
-        json::objectSet(end, "character", JsonValue(static_cast<double>(utf16EndChar)));
-        json::objectSet(range, "start", start);
-        json::objectSet(range, "end", end);
+        auto startPosition = json::makeObject();
+        json::objectSet(startPosition, "line", JsonValue(static_cast<double>(d.range.start.line)));
+        json::objectSet(startPosition, "character", JsonValue(static_cast<double>(d.range.start.character)));
+        auto endPosition = json::makeObject();
+        json::objectSet(endPosition, "line", JsonValue(static_cast<double>(d.range.end.line)));
+        json::objectSet(endPosition, "character", JsonValue(static_cast<double>(d.range.end.character)));
+        json::objectSet(range, "start", startPosition);
+        json::objectSet(range, "end", endPosition);
         json::objectSet(diag, "range", range);
 
         json::objectSet(diag, "severity", JsonValue(static_cast<double>(d.severity)));
@@ -1759,7 +1706,6 @@ void LanguageServer::publishDiagnostics(const std::string& uri, const std::vecto
     }
     json::objectSet(params, "diagnostics", diagJson);
 
-    // Send proper LSP notification through stdout with Content-Length framing
     auto notificationObj = json::makeObject();
     json::objectSet(notificationObj, "jsonrpc", JsonValue(std::string("2.0")));
     json::objectSet(notificationObj, "method", JsonValue(std::string("textDocument/publishDiagnostics")));
