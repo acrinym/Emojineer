@@ -1,4 +1,4 @@
-name: Train 17 LSP Diagnostic Reconciliation
+name: Train 17 LSP Position and Symbol Repair
 
 'on':
   push:
@@ -23,10 +23,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libicu-dev libcurl4-openssl-dev
-      - name: Apply typed diagnostic reconciliation
-        run: |
-          python3 .github/scripts/train17_lsp_diagnostic_reconcile.py
-          python3 .github/scripts/train17_lsp_test_compile_fix.py
+      - name: Apply exact position and symbol repair
+        run: python3 .github/scripts/train17_lsp_position_symbol_repair.py
       - name: Verify patch
         run: git diff --check
       - name: Clean configure, build, and full CTest
@@ -39,6 +37,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add include/emojineer/lsp.hpp src/lsp.cpp tests/lsp_tests.cpp
-          git commit -m "Train 17 LSP: reconcile typed diagnostics"
+          git add src/lsp.cpp
+          git commit -m "Train 17 LSP: enforce exact positions and symbols"
           git push origin HEAD:train-17-lsp-semantics-repair
