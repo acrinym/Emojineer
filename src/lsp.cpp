@@ -178,12 +178,15 @@ JsonValue parseJsonObject(const std::string& json, std::size_t& pos) {
         return obj;
     }
     bool expectCommaOrEnd = false;
+    bool closed = false;
     while (pos < json.size()) {
         skipWhitespace(json, pos);
+        if (pos >= json.size()) break;
         
         if (expectCommaOrEnd) {
             if (json[pos] == '}') {
                 pos++;
+                closed = true;
                 break;
             }
             if (json[pos] == ',') {
@@ -212,6 +215,7 @@ JsonValue parseJsonObject(const std::string& json, std::size_t& pos) {
         
         expectCommaOrEnd = true;
     }
+    if (!closed) throw std::runtime_error("unterminated object");
     return obj;
 }
 
@@ -224,16 +228,20 @@ JsonValue parseJsonArray(const std::string& json, std::size_t& pos) {
         pos++;
         return arr;
     }
+    bool closed = false;
     while (pos < json.size()) {
         skipWhitespace(json, pos);
+        if (pos >= json.size()) break;
         json::arrayPushBack(arr, parseJsonValue(json, pos));
         skipWhitespace(json, pos);
         if (pos < json.size() && json[pos] == ']') {
             pos++;
+            closed = true;
             break;
         }
         if (pos < json.size() && json[pos] == ',') pos++;
     }
+    if (!closed) throw std::runtime_error("unterminated array");
     return arr;
 }
 
@@ -1159,12 +1167,6 @@ std::vector<Diagnostic> LanguageServer::diagnoseDocument(const OpenDocument& doc
         return std::nullopt;
     };
 }
-
-// Result type for diagnoseDocumentWithCompile - groups diagnostics by URI
-struct DiagnosticResult {
-    std::string primaryUri;  // URI to publish primary diagnostics under (entry document)
-    std::map<std::string, std::vector<Diagnostic>> diagnosticsByUri;  // URI -> diagnostics
-};
 
 DiagnosticResult LanguageServer::diagnoseDocumentWithCompile(const OpenDocument& doc) {
     DiagnosticResult result;

@@ -5,6 +5,7 @@
 #include "emojineer/lexer.hpp"
 #include "emojineer/package.hpp"
 #include "emojineer/parser.hpp"
+#include "emojineer/project.hpp"
 #include "emojineer/source_diagnostic.hpp"
 #include "emojineer/stdlib.hpp"
 
@@ -797,7 +798,8 @@ Chunk compile_file(const std::filesystem::path& raw_entry,
 
     std::optional<PackageGraph> package_graph;
     if (std::filesystem::is_regular_file(root / "emojineer.toml")) {
-        package_graph = resolve_package_graph(root);
+        const auto manifest = load_project_manifest(root / "emojineer.toml");
+        package_graph = resolve_package_graph(root, manifest, package_store_root(root), true);
     }
 
     ModuleLinker linker(root, std::move(registry), std::move(package_graph), std::move(source_provider));

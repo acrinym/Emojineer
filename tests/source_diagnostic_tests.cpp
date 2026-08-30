@@ -313,7 +313,7 @@ void test_combining_sequence() {
 }
 
 // Test: ZWJ sequence handling with UTF-16 units
-void test_zzw_sequence() {
+void test_zwj_sequence() {
     std::cout << "Testing ZWJ sequence handling..." << std::endl;
     
     // Family emoji: 👨‍👩‍👧‍👦 (man, ZWJ, woman, ZWJ, girl, ZWJ, girl)
