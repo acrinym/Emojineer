@@ -12,10 +12,22 @@ if block.count(needle) != 1:
     raise SystemExit("offline path fixture setup anchor mismatch")
 block = block.replace(needle, replacement, 1)
 
+needle = '''    lock_out << "lock_version = \\\"3\\\"\\n";\n'''
+replacement = '''    lock_out << "lock_version = 3\\n";\n'''
+if block.count(needle) != 1:
+    raise SystemExit("offline path fixture lock version anchor mismatch")
+block = block.replace(needle, replacement, 1)
+
 needle = '''    lock_out << "endpoint = \\\"https://registry.example.com\\\"\\n";\n'''
 replacement = '''    lock_out << "endpoint = \\\"" << endpoint.canonical << "\\\"\\n";\n'''
 if block.count(needle) != 1:
     raise SystemExit(f"offline path fixture registry endpoint anchor mismatch: {block.count(needle)}")
+block = block.replace(needle, replacement, 1)
+
+needle = '''    lock_out << "registry_alias = \\\"origin\\\"\\n";\n'''
+replacement = '''    lock_out << "registry = \\\"origin\\\"\\n";\n'''
+if block.count(needle) != 1:
+    raise SystemExit("offline path fixture canonical registry field anchor mismatch")
 block = block.replace(needle, replacement, 1)
 
 needle = '''    lock_out << "registry_endpoint = \\\"https://registry.example.com\\\"\\n";\n'''
@@ -32,4 +44,4 @@ block = block.replace(needle, replacement, 1)
 
 text = text[:start] + block + text[end:]
 path.write_text(text)
-print("applied: offline path-dependency fixture uses canonical owner endpoint")
+print("applied: offline path-dependency fixture uses canonical v3 authority fields")
