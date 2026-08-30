@@ -2258,105 +2258,76 @@ static bool sourcePathIsVisible(
     return true;
 }
 
+static std::optional<Range> exactIdentifierTokenRange(
+    const LanguageServer& server,
+    const std::string& source,
+    const std::vector<Token>& tokens,
+    std::size_t astLine,
+    const std::string& identifier) {
+    for (const auto& token : tokens) {
+        if (token.line == astLine && token.kind == TokenKind::Identifier &&
+            (token.lexeme == identifier || token.canonical == identifier)) {
+            return server.tokenToRange(source, token);
+        }
+    }
+    return std::nullopt;
+}
+
 std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& uri, const Position& pos) {
     std::vector<SymbolLocation> results;
 
     auto doc = getDocument(uri);
     if (!doc) return results;
 
-    // Find what identifier is at the cursor position
     auto identifier = findIdentifierAtPosition(doc->text, pos);
     if (!identifier) return results;
 
-    // Get tokens for accurate position information
     auto tokensOpt = getTokens(uri);
     if (!tokensOpt) return results;
     const auto& tokens = tokensOpt->get();
 
-    // Parse the document
     auto programOpt = getOrParseProgram(uri);
     if (!programOpt) return results;
     const auto& program = programOpt->get();
 
-    // Helper to compute grapheme count from a string
-    auto countGraphemes = [](const std::string& s) -> std::size_t {
-        auto gs = segment_graphemes(s);
-        return gs.size();
-    };
-
-    // Helper function to search for definitions in a program and add to results
-    auto searchInProgram = [&](const std::string& searchUri, const ast::Program& searchProgram, const std::vector<Token>& searchTokens) {
+    auto searchInProgram = [&](const std::string& searchUri,
+                               const std::string& searchSource,
+                               const ast::Program& searchProgram,
+                               const std::vector<Token>& searchTokens) {
         for (const auto& stmt : searchProgram.statements) {
-            std::optional<std::uint32_t> actualColumn;
-
-            // Check for function declarations
+            std::string declarationName;
+            std::string symbolKind;
             if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
-                if (funcDecl->name == *identifier) {
-                    actualColumn = findIdentifierColumn(*stmt, funcDecl->name, searchTokens);
-
-                    SymbolLocation loc;
-                    loc.uri = searchUri;
-                    std::uint32_t startCol = actualColumn.value_or(2);
-                    loc.range.start = {safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0), startCol};
-                    // Use grapheme count instead of byte length, with safe cast
-                    std::uint32_t nameEndCol = startCol + safeSizeToUint32(countGraphemes(funcDecl->name));
-                    loc.range.end = {safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0), nameEndCol};
-                    loc.name = funcDecl->name;
-                    loc.symbolKind = "function";
-                    results.push_back(loc);
-                }
-            }
-            // Check for variable declarations
-            else if (auto* varDecl = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
-                if (varDecl->name == *identifier) {
-                    actualColumn = findIdentifierColumn(*stmt, varDecl->name, searchTokens);
-
-                    SymbolLocation loc;
-                    loc.uri = searchUri;
-                    std::uint32_t startCol = actualColumn.value_or(2);
-                    loc.range.start = {safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0), startCol};
-                    // Use grapheme count instead of byte length, with safe cast
-                    std::uint32_t nameEndCol = startCol + safeSizeToUint32(countGraphemes(varDecl->name));
-                    loc.range.end = {safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0), nameEndCol};
-                    loc.name = varDecl->name;
-                    loc.symbolKind = "variable";
-                    results.push_back(loc);
-                }
-            }
-            // Check for module declarations
-            else if (auto* modDecl = dynamic_cast<const ast::ModuleDecl*>(stmt.get())) {
-                if (modDecl->name == *identifier) {
-                    actualColumn = findIdentifierColumn(*stmt, modDecl->name, searchTokens);
-
-                    SymbolLocation loc;
-                    loc.uri = searchUri;
-                    std::uint32_t startCol = actualColumn.value_or(2);
-                    loc.range.start = {safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0), startCol};
-                    // Use grapheme count instead of byte length, with safe cast
-                    std::uint32_t nameEndCol = startCol + safeSizeToUint32(countGraphemes(modDecl->name));
-                    loc.range.end = {safeSizeToUint32(stmt->line > 0 ? stmt->line - 1 : 0), nameEndCol};
-                    loc.name = modDecl->name;
-                    loc.symbolKind = "module";
-                    results.push_back(loc);
-                }
-            }
-        }
-    };
-
-    // Search in current document first
-    searchInProgram(uri, program, tokens);
-
-    // Search across other open documents (local modules)
-    for (const auto& [otherUri, otherDoc] : openDocuments_) {
-        if (otherUri == uri) continue;  // Skip current document
-        if (workspaceRoot_ && packageGraph_) {
-            auto visibleRoots = visibleSourceRoots(
-                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
-            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
-                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                declarationName = funcDecl->name;
+                symbolKind = "function";
+            } else if (auto* varDecl = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
+                declarationName = varDecl->name;
+                symbolKind = "variable";
+            } else if (auto* modDecl = dynamic_cast<const ast::ModuleDecl*>(stmt.get())) {
+                declarationName = modDecl->name;
+                symbolKind = "module";
+            } else {
                 continue;
             }
+
+            if (declarationName != *identifier) continue;
+            auto exact = exactIdentifierTokenRange(
+                *this, searchSource, searchTokens, stmt->line, declarationName);
+            if (!exact) continue;
+
+            SymbolLocation loc;
+            loc.uri = searchUri;
+            loc.range = *exact;
+            loc.name = declarationName;
+            loc.symbolKind = symbolKind;
+            results.push_back(std::move(loc));
         }
+    };
+
+    searchInProgram(uri, doc->text, program, tokens);
+
+    for (const auto& [otherUri, otherDoc] : openDocuments_) {
+        if (otherUri == uri) continue;
         if (workspaceRoot_ && packageGraph_) {
             auto visibleRoots = visibleSourceRoots(
                 *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
@@ -2368,76 +2339,49 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
 
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
-        const auto& otherTokens = otherTokensOpt->get();
-
         auto otherProgramOpt = getOrParseProgram(otherUri);
         if (!otherProgramOpt) continue;
-        const auto& otherProgram = otherProgramOpt->get();
-
-        searchInProgram(otherUri, otherProgram, otherTokens);
+        searchInProgram(otherUri, otherDoc.text, otherProgramOpt->get(), otherTokensOpt->get());
     }
 
-    // Search in local modules from the filesystem (if workspace is available)
-    // Use canonical PackageGraph for authorized source universe
     if (workspaceRoot_ && packageGraph_) {
-        std::filesystem::path root = *workspaceRoot_;
-
-        // Collect authorized package paths from PackageGraph
-        // This includes root, local modules, path packages, and materialized registry packages
+        const std::filesystem::path root = *workspaceRoot_;
         auto authorizedPaths = visibleSourceRoots(
             root, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
 
+        auto searchFile = [&](const std::filesystem::path& path) {
+            if (!std::filesystem::is_regular_file(path) ||
+                (path.extension() != ".emj" && path.extension() != ".emoji")) {
+                return;
+            }
+            const std::string moduleUri = pathToUri(path);
+            if (openDocuments_.count(moduleUri)) return;
+            try {
+                std::string source = readFile(path);
+                CustomEmojiRegistry reg = registry_;
+                Lexer lexer(source, reg);
+                auto modTokens = lexer.tokenize();
+                auto parserTokens = modTokens;
+                Parser parser(std::move(parserTokens));
+                auto modProgram = parser.parse();
+                searchInProgram(moduleUri, source, modProgram, modTokens);
+            } catch (...) {
+                // An unreadable or unparsable candidate is not a definition source.
+            }
+        };
+
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
-
-            // Skip .emojineer directory (contains package cache)
-            if (authorizedPath.filename() == ".emojineer") continue;
-
             try {
                 if (std::filesystem::is_directory(authorizedPath)) {
                     for (const auto& entry : std::filesystem::directory_iterator(authorizedPath)) {
-                        if (entry.is_regular_file() &&
-                            (entry.path().extension() == ".emj" || entry.path().extension() == ".emoji")) {
-                            std::string moduleUri = pathToUri(entry.path());
-
-                            // Skip if already searched
-                            if (openDocuments_.count(moduleUri)) continue;
-
-                            try {
-                                std::string source = readFile(entry.path());
-                                CustomEmojiRegistry reg = registry_;
-                                Lexer lexer(source, reg);
-                                auto modTokens = lexer.tokenize();
-                                Parser parser(std::move(modTokens));
-                                auto modProgram = parser.parse();
-
-                                searchInProgram(moduleUri, modProgram, {});
-                            } catch (...) {
-                                // Skip files that can't be parsed
-                            }
-                        }
+                        searchFile(entry.path());
                     }
-                } else if (authorizedPath.extension() == ".emj" || authorizedPath.extension() == ".emoji") {
-                    // It's a file at root level
-                    std::string moduleUri = pathToUri(authorizedPath);
-
-                    if (!openDocuments_.count(moduleUri)) {
-                        try {
-                            std::string source = readFile(authorizedPath);
-                            CustomEmojiRegistry reg = registry_;
-                            Lexer lexer(source, reg);
-                            auto modTokens = lexer.tokenize();
-                            Parser parser(std::move(modTokens));
-                            auto modProgram = parser.parse();
-
-                            searchInProgram(moduleUri, modProgram, {});
-                        } catch (...) {
-                            // Skip files that can't be parsed
-                        }
-                    }
+                } else {
+                    searchFile(authorizedPath);
                 }
             } catch (...) {
-                // Skip paths we can't access
+                // Keep semantic requests resilient to inaccessible authorized roots.
             }
         }
     }
@@ -2445,196 +2389,81 @@ std::vector<SymbolLocation> LanguageServer::findDefinitions(const std::string& u
     return results;
 }
 
-// Helper to find references in expressions - forward declaration
-// Note: findReferencesInStmt is defined later in this file
-void findReferencesInStmt(const ast::Stmt& stmt, const std::string& target,
-                         const std::string& uri, std::vector<SymbolLocation>& results,
-                         const std::vector<Token>& tokens, bool includeDeclaration);
-
-// Helper to find references in expressions - uses tokens for accurate ranges
-static void findReferencesInExpr(const ast::Expr& expr, const std::string& target,
-                          const std::string& uri, std::vector<SymbolLocation>& results,
-                          const std::vector<Token>& tokens) {
-    if (auto* varExpr = dynamic_cast<const ast::VariableExpr*>(&expr)) {
-        if (varExpr->name == target) {
-            // Find the token for this variable reference
-            for (const auto& token : tokens) {
-                if (token.line == expr.line && token.kind == TokenKind::Identifier &&
-                    (token.lexeme == target || token.canonical == target)) {
-                    SymbolLocation loc;
-                    loc.uri = uri;
-                    // Use grapheme column from token (0-indexed for internal), with safe cast
-                    loc.range.start = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                    // Compute end column using grapheme count
-                    auto gs = segment_graphemes(token.lexeme);
-                    loc.range.end = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                    loc.name = varExpr->name;
-                    loc.symbolKind = "variable";
-                    results.push_back(loc);
-                    return; // Found the token, no need to continue
-                }
-            }
-            // Fallback if token not found
-            SymbolLocation loc;
-            loc.uri = uri;
-            loc.range.start = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), 0};
-            loc.range.end = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), safeSizeToUint32(target.length())};
-            loc.name = varExpr->name;
-            loc.symbolKind = "variable";
-            results.push_back(loc);
+static std::set<std::pair<std::size_t, std::size_t>> declarationTokenPositions(
+    const ast::Program& program,
+    const std::vector<Token>& tokens,
+    const std::string& target) {
+    std::set<std::pair<std::size_t, std::size_t>> positions;
+    for (const auto& stmt : program.statements) {
+        std::string declarationName;
+        if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
+            declarationName = funcDecl->name;
+        } else if (auto* varDecl = dynamic_cast<const ast::VarDecl*>(stmt.get())) {
+            declarationName = varDecl->name;
+        } else if (auto* modDecl = dynamic_cast<const ast::ModuleDecl*>(stmt.get())) {
+            declarationName = modDecl->name;
+        } else {
+            continue;
         }
-    }
-    else if (auto* callExpr = dynamic_cast<const ast::CallExpr*>(&expr)) {
-        if (callExpr->callee == target) {
-            // Find the token for this function call
-            for (const auto& token : tokens) {
-                if (token.line == expr.line && token.kind == TokenKind::Identifier &&
-                    (token.lexeme == target || token.canonical == target)) {
-                    SymbolLocation loc;
-                    loc.uri = uri;
-                    loc.range.start = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                    auto gs = segment_graphemes(token.lexeme);
-                    loc.range.end = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                    loc.name = callExpr->callee;
-                    loc.symbolKind = "function";
-                    results.push_back(loc);
-                    return;
-                }
-            }
-            // Fallback
-            SymbolLocation loc;
-            loc.uri = uri;
-            loc.range.start = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), 0};
-            loc.range.end = {safeSizeToUint32(expr.line > 0 ? expr.line - 1 : 0), safeSizeToUint32(target.length())};
-            loc.name = callExpr->callee;
-            loc.symbolKind = "function";
-            results.push_back(loc);
-        }
-        // Recurse into arguments
-        for (const auto& arg : callExpr->arguments) {
-            findReferencesInExpr(*arg, target, uri, results, tokens);
-        }
-    }
-    // Recurse into binary expressions
-    else if (auto* binExpr = dynamic_cast<const ast::BinaryExpr*>(&expr)) {
-        findReferencesInExpr(*binExpr->left, target, uri, results, tokens);
-        findReferencesInExpr(*binExpr->right, target, uri, results, tokens);
-    }
-    else if (auto* unaryExpr = dynamic_cast<const ast::UnaryExpr*>(&expr)) {
-        findReferencesInExpr(*unaryExpr->right, target, uri, results, tokens);
-    }
-}
-
-// Helper to find references in statements
-void findReferencesInStmt(const ast::Stmt& stmt, const std::string& target,
-                         const std::string& uri, std::vector<SymbolLocation>& results,
-                         const std::vector<Token>& tokens, bool includeDeclaration) {
-    // Check if this is a definition of the target
-    bool isDefinition = false;
-    if (auto* funcDecl = dynamic_cast<const ast::FunctionDecl*>(&stmt)) {
-        if (funcDecl->name == target) isDefinition = true;
-    } else if (auto* varDecl = dynamic_cast<const ast::VarDecl*>(&stmt)) {
-        if (varDecl->name == target) isDefinition = true;
-    } else if (auto* modDecl = dynamic_cast<const ast::ModuleDecl*>(&stmt)) {
-        if (modDecl->name == target) isDefinition = true;
-    }
-
-    // If this is a definition and we're not including declarations, skip
-    if (isDefinition && !includeDeclaration) {
-        // But still search for references within the definition body
-    } else if (isDefinition && includeDeclaration) {
-        // Add the definition as a reference
+        if (declarationName != target) continue;
         for (const auto& token : tokens) {
-            if (token.line == stmt.line && token.kind == TokenKind::Identifier &&
+            if (token.line == stmt->line && token.kind == TokenKind::Identifier &&
                 (token.lexeme == target || token.canonical == target)) {
-                SymbolLocation loc;
-                loc.uri = uri;
-                loc.range.start = {safeSizeToUint32(stmt.line > 0 ? stmt.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                auto gs = segment_graphemes(token.lexeme);
-                loc.range.end = {safeSizeToUint32(stmt.line > 0 ? stmt.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                loc.name = target;
-                loc.symbolKind = "variable";
-                results.push_back(loc);
+                positions.emplace(token.line, token.column);
                 break;
             }
         }
     }
+    return positions;
+}
 
-    // Assignment - check the name
-    if (auto* assign = dynamic_cast<const ast::Assignment*>(&stmt)) {
-        if (assign->name == target) {
-            // Find the token for this assignment target
-            for (const auto& token : tokens) {
-                if (token.line == stmt.line && token.kind == TokenKind::Identifier &&
-                    (token.lexeme == target || token.canonical == target)) {
-                    SymbolLocation loc;
-                    loc.uri = uri;
-                    loc.range.start = {safeSizeToUint32(stmt.line > 0 ? stmt.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0)};
-                    auto gs = segment_graphemes(token.lexeme);
-                    loc.range.end = {safeSizeToUint32(stmt.line > 0 ? stmt.line - 1 : 0), safeSizeToUint32(token.column > 0 ? token.column - 1 : 0) + safeSizeToUint32(gs.size())};
-                    loc.name = assign->name;
-                    loc.symbolKind = "variable";
-                    results.push_back(loc);
-                    break;
-                }
-            }
+static void collectExactReferences(
+    const LanguageServer& server,
+    const std::string& uri,
+    const std::string& source,
+    const ast::Program& program,
+    const std::vector<Token>& tokens,
+    const std::string& target,
+    bool includeDeclaration,
+    std::vector<SymbolLocation>& results) {
+    const auto declarations = declarationTokenPositions(program, tokens, target);
+    for (const auto& token : tokens) {
+        if (token.kind != TokenKind::Identifier ||
+            (token.lexeme != target && token.canonical != target)) {
+            continue;
         }
-        findReferencesInExpr(*assign->value, target, uri, results, tokens);
-    }
-    // Print/Return statements - check expression
-    else if (auto* print = dynamic_cast<const ast::PrintStmt*>(&stmt)) {
-        findReferencesInExpr(*print->expression, target, uri, results, tokens);
-    }
-    else if (auto* ret = dynamic_cast<const ast::ReturnStmt*>(&stmt)) {
-        findReferencesInExpr(*ret->expression, target, uri, results, tokens);
-    }
-    // If statement
-    else if (auto* ifStmt = dynamic_cast<const ast::IfStmt*>(&stmt)) {
-        findReferencesInExpr(*ifStmt->condition, target, uri, results, tokens);
-        for (const auto& s : ifStmt->then_branch) {
-            if (s) findReferencesInStmt(*s, target, uri, results, tokens, includeDeclaration);
-        }
-        for (const auto& s : ifStmt->else_branch) {
-            if (s) findReferencesInStmt(*s, target, uri, results, tokens, includeDeclaration);
-        }
-    }
-    // While statement
-    else if (auto* whileStmt = dynamic_cast<const ast::WhileStmt*>(&stmt)) {
-        findReferencesInExpr(*whileStmt->condition, target, uri, results, tokens);
-        for (const auto& s : whileStmt->body) {
-            if (s) findReferencesInStmt(*s, target, uri, results, tokens, includeDeclaration);
-        }
+        const bool isDeclaration = declarations.count({token.line, token.column}) != 0;
+        if (isDeclaration && !includeDeclaration) continue;
+
+        SymbolLocation loc;
+        loc.uri = uri;
+        loc.range = server.tokenToRange(source, token);
+        loc.name = target;
+        loc.symbolKind = isDeclaration ? "declaration" : "reference";
+        results.push_back(std::move(loc));
     }
 }
 
-std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& uri, const Position& pos, bool includeDeclaration) {
+std::vector<SymbolLocation> LanguageServer::findReferences(
+    const std::string& uri,
+    const Position& pos,
+    bool includeDeclaration) {
     std::vector<SymbolLocation> results;
 
     auto doc = getDocument(uri);
     if (!doc) return results;
-
-    // Find what identifier is at the cursor position
     auto identifier = findIdentifierAtPosition(doc->text, pos);
     if (!identifier) return results;
 
-    // Get tokens for accurate position information
     auto tokensOpt = getTokens(uri);
     if (!tokensOpt) return results;
-    const auto& tokens = tokensOpt->get();
-
-    // Parse the document
     auto programOpt = getOrParseProgram(uri);
     if (!programOpt) return results;
-    const auto& program = programOpt->get();
+    collectExactReferences(*this, uri, doc->text, programOpt->get(), tokensOpt->get(),
+                           *identifier, includeDeclaration, results);
 
-    // Search for references to this identifier in current document
-    for (const auto& stmt : program.statements) {
-        findReferencesInStmt(*stmt, *identifier, uri, results, tokens, includeDeclaration);
-    }
-
-    // Search across other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
-        if (otherUri == uri) continue;  // Skip current document
+        if (otherUri == uri) continue;
         if (workspaceRoot_ && packageGraph_) {
             auto visibleRoots = visibleSourceRoots(
                 *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
@@ -2643,66 +2472,54 @@ std::vector<SymbolLocation> LanguageServer::findReferences(const std::string& ur
                 continue;
             }
         }
-        if (workspaceRoot_ && packageGraph_) {
-            auto visibleRoots = visibleSourceRoots(
-                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
-            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
-                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
-                continue;
-            }
-        }
-
         auto otherTokensOpt = getTokens(otherUri);
         if (!otherTokensOpt) continue;
-        const auto& otherTokens = otherTokensOpt->get();
-
         auto otherProgramOpt = getOrParseProgram(otherUri);
         if (!otherProgramOpt) continue;
-        const auto& otherProgram = otherProgramOpt->get();
-
-        for (const auto& stmt : otherProgram.statements) {
-            findReferencesInStmt(*stmt, *identifier, otherUri, results, otherTokens, includeDeclaration);
-        }
+        collectExactReferences(*this, otherUri, otherDoc.text, otherProgramOpt->get(),
+                               otherTokensOpt->get(), *identifier, includeDeclaration, results);
     }
 
-    // Search in local modules from the filesystem (same logic as definitions)
-    // Use canonical PackageGraph for authorized source universe
     if (workspaceRoot_ && packageGraph_) {
-        std::filesystem::path root = *workspaceRoot_;
-
-        // Collect authorized paths from PackageGraph
+        const std::filesystem::path root = *workspaceRoot_;
         auto authorizedPaths = visibleSourceRoots(
             root, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
 
+        auto searchFile = [&](const std::filesystem::path& path) {
+            if (!std::filesystem::is_regular_file(path) ||
+                (path.extension() != ".emj" && path.extension() != ".emoji")) {
+                return;
+            }
+            const std::string moduleUri = pathToUri(path);
+            if (openDocuments_.count(moduleUri)) return;
+            try {
+                std::string source = readFile(path);
+                CustomEmojiRegistry reg = registry_;
+                Lexer lexer(source, reg);
+                auto modTokens = lexer.tokenize();
+                auto parserTokens = modTokens;
+                Parser parser(std::move(parserTokens));
+                auto modProgram = parser.parse();
+                collectExactReferences(*this, moduleUri, source, modProgram, modTokens,
+                                       *identifier, includeDeclaration, results);
+            } catch (...) {
+                // Ignore unreadable or unparsable candidates.
+            }
+        };
+
         for (const auto& authorizedPath : authorizedPaths) {
             if (!std::filesystem::exists(authorizedPath)) continue;
-            if (authorizedPath.filename() == ".emojineer") continue;
-
             try {
                 if (std::filesystem::is_directory(authorizedPath)) {
                     for (const auto& entry : std::filesystem::directory_iterator(authorizedPath)) {
-                        if (entry.is_regular_file() &&
-                            (entry.path().extension() == ".emj" || entry.path().extension() == ".emoji")) {
-                            std::string moduleUri = pathToUri(entry.path());
-
-                            if (openDocuments_.count(moduleUri)) continue;
-
-                            try {
-                                std::string source = readFile(entry.path());
-                                CustomEmojiRegistry reg = registry_;
-                                Lexer lexer(source, reg);
-                                auto modTokens = lexer.tokenize();
-                                Parser parser(std::move(modTokens));
-                                auto modProgram = parser.parse();
-
-                                for (const auto& stmt : modProgram.statements) {
-                                    findReferencesInStmt(*stmt, *identifier, moduleUri, results, modTokens, includeDeclaration);
-                                }
-                            } catch (...) {}
-                        }
+                        searchFile(entry.path());
                     }
+                } else {
+                    searchFile(authorizedPath);
                 }
-            } catch (...) {}
+            } catch (...) {
+                // Keep references resilient to inaccessible authorized roots.
+            }
         }
     }
 
@@ -2904,6 +2721,14 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
     // Add symbols from other open documents (local modules)
     for (const auto& [otherUri, otherDoc] : openDocuments_) {
         if (otherUri == uri) continue;  // Skip current document
+        if (workspaceRoot_ && packageGraph_) {
+            auto visibleRoots = visibleSourceRoots(
+                *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
+            if (!sourcePathIsVisible(std::filesystem::path(uriToPath(otherUri)),
+                                     *workspaceRoot_, *packageGraph_, visibleRoots)) {
+                continue;
+            }
+        }
         if (workspaceRoot_ && packageGraph_) {
             auto visibleRoots = visibleSourceRoots(
                 *workspaceRoot_, manifest_, *packageGraph_, std::filesystem::path(uriToPath(uri)));
