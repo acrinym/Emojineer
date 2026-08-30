@@ -19,6 +19,13 @@ def replace_region(text: str, start: str, end: str, replacement: str) -> str:
     b = text.index(end, a)
     return text[:a] + replacement + text[b:]
 
+
+def clean_ws(text: str) -> str:
+    had_newline = text.endswith("\n")
+    cleaned = "\n".join(line.rstrip() for line in text.splitlines())
+    return cleaned + ("\n" if had_newline else "")
+
+
 parent_h = git_show("include/emojineer/lsp.hpp")
 cur_h_path = Path("include/emojineer/lsp.hpp")
 cur_h = cur_h_path.read_text()
@@ -43,7 +50,7 @@ new_diag = "    // Diagnostics\n    std::vector<Diagnostic> diagnoseDocument(con
 if old_diag not in cur_h:
     raise SystemExit("header diagnostic declaration anchor mismatch")
 cur_h = cur_h.replace(old_diag, new_diag, 1)
-cur_h_path.write_text(cur_h)
+cur_h_path.write_text(clean_ws(cur_h))
 
 parent_cpp = git_show("src/lsp.cpp")
 cur_cpp_path = Path("src/lsp.cpp")
@@ -73,5 +80,5 @@ cur_cpp = replace_region(cur_cpp, "std::vector<Diagnostic> LanguageServer::diagn
 cur_cpp = cur_cpp.replace('json::objectSet(caps, "documentRangeFormattingProvider", JsonValue(true));',
                           'json::objectSet(caps, "documentRangeFormattingProvider", JsonValue(false));')
 
-cur_cpp_path.write_text(cur_cpp)
+cur_cpp_path.write_text(clean_ws(cur_cpp))
 print("reconciled current typed diagnostics, grouped source URIs, canonical token ranges, and range-format capability")
