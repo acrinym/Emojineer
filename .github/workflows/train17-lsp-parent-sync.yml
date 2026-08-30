@@ -1,4 +1,4 @@
-name: Train 17 LSP Parent Integration
+name: Train 17 LSP Combined Qualification
 
 'on':
   push:
@@ -7,34 +7,24 @@ name: Train 17 LSP Parent Integration
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  integrate-parent:
-    if: ${{ github.actor != 'github-actions[bot]' }}
+  qualify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: train-17-lsp-semantics-repair
-      - name: Merge exact repaired Train 17 parent
+      - name: Verify repaired parent ancestry
+        run: git merge-base --is-ancestor fb992e03733ac757fe4f3f102b899ab1b5193877 HEAD
+      - name: Install build dependencies
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin train-17-language-server
-          test "$(git rev-parse origin/train-17-language-server)" = "fb992e03733ac757fe4f3f102b899ab1b5193877"
-          set +e
-          git merge --no-edit origin/train-17-language-server
-          merge_rc=$?
-          set -e
-          if [ "$merge_rc" -ne 0 ]; then
-            conflicts="$(git diff --name-only --diff-filter=U | sort)"
-            expected=$'include/emojineer/lsp.hpp\nsrc/lsp.cpp\ntests/lsp_tests.cpp'
-            test "$conflicts" = "$expected"
-            git checkout --ours -- include/emojineer/lsp.hpp src/lsp.cpp tests/lsp_tests.cpp
-            git add include/emojineer/lsp.hpp src/lsp.cpp tests/lsp_tests.cpp
-            git commit --no-edit
-          fi
-          git merge-base --is-ancestor fb992e03733ac757fe4f3f102b899ab1b5193877 HEAD
-          git push origin HEAD:train-17-lsp-semantics-repair
+          sudo apt-get update
+          sudo apt-get install -y libicu-dev libcurl4-openssl-dev
+      - name: Clean configure, build, and full CTest
+        run: |
+          rm -rf build
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j2
+          ctest --test-dir build --output-on-failure
+      - name: Record exact head
+        run: echo "QUALIFIED_HEAD=$(git rev-parse HEAD)"
