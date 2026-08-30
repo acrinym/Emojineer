@@ -1,0 +1,63 @@
+name: Train 17 Final Exact-Current Qualification
+
+'on':
+  push:
+    branches:
+      - train-17-language-server
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair-debug-release:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact final lineage
+        run: git merge-base --is-ancestor 7c51ba25638ff24ed5cbbc7f1f1382eb4fce2ee6 HEAD
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libicu-dev libcurl4-openssl-dev
+      - name: Apply exact-current product repair
+        run: python3 .github/scripts/train17_final_coderabbit_repair.py
+      - name: Verify patch hygiene
+        run: git diff --check
+      - name: Debug configure, build, and full CTest
+        run: |
+          rm -rf build-debug
+          cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build-debug -j2
+          ctest --test-dir build-debug --output-on-failure
+      - name: Release configure, build, and full CTest
+        run: |
+          rm -rf build-release
+          cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-release -j2
+          ctest --test-dir build-release --output-on-failure
+      - name: Commit qualified product repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            include/emojineer/lsp.hpp \
+            include/emojineer/source_diagnostic.hpp \
+            src/lsp.cpp \
+            src/module.cpp \
+            src/package.cpp \
+            src/package_artifact.cpp \
+            src/project.cpp \
+            tests/lsp_tests.cpp \
+            tests/package_artifact_tests.cpp \
+            tests/project_tests.cpp \
+            tests/source_diagnostic_tests.cpp
+          if git diff --cached --quiet; then
+            echo "No product delta remains."
+            exit 0
+          fi
+          git commit -m "Train 17: close final exact-current correctness gaps"
+          git push origin HEAD:train-17-language-server
