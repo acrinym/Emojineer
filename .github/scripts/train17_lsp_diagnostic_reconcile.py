@@ -30,6 +30,13 @@ parent_h = git_show("include/emojineer/lsp.hpp")
 cur_h_path = Path("include/emojineer/lsp.hpp")
 cur_h = cur_h_path.read_text()
 
+source_diag_include = '#include "emojineer/source_diagnostic.hpp"\n'
+if source_diag_include not in cur_h:
+    include_anchor = '#include "emojineer/project.hpp"\n'
+    if include_anchor not in cur_h:
+        raise SystemExit("header project include anchor mismatch")
+    cur_h = cur_h.replace(include_anchor, include_anchor + source_diag_include, 1)
+
 if "struct DiagnosticResult" not in cur_h:
     insert_at = cur_h.index("// Symbol location for definitions/references")
     diag_struct = region(parent_h, "struct DiagnosticResult", "// Symbol location for definitions/references")
