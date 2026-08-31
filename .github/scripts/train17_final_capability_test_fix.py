@@ -114,6 +114,26 @@ if '+ mainUri + R"(' in mixed and '+ mainUri + R"("' not in mixed:
     raise SystemExit("mixed workspace URI closures were not repaired")
 if mixed_uri_count == 0 and fixed_uri not in mixed:
     raise SystemExit("mixed workspace dynamic URI anchors missing")
+
+# `🧩` is a supplementary-plane emoji and occupies UTF-16 characters 0-1.
+# Character 2 is the following ASCII space; an unfiltered completion request
+# belongs at character 3, immediately after that space and before 🚀.
+mixed_completion_1 = re.compile(
+    r'(textDocument/completion.{0,500}?position.{0,80}?line[^0-9]{0,20}0.{0,80}?character[^0-9]{0,20})1(?=[^0-9])',
+    re.DOTALL,
+)
+mixed_completion_3 = re.compile(
+    r'textDocument/completion.{0,500}?position.{0,80}?line[^0-9]{0,20}0.{0,80}?character[^0-9]{0,20}3(?=[^0-9])',
+    re.DOTALL,
+)
+completion_three_count = len(mixed_completion_3.findall(mixed))
+if completion_three_count < 2:
+    mixed, mixed_completion_count = mixed_completion_1.subn(r'\g<1>3', mixed)
+    if mixed_completion_count != 2:
+        raise SystemExit(f"mixed workspace completion coordinate matches: {mixed_completion_count}")
+else:
+    mixed_completion_count = 0
+mixed = mixed.replace("Position after 🧩 (UTF-16 position 1)", "Position after 🧩 and its following space (UTF-16 position 3)")
 text = text[:mixed_def.start()] + mixed + text[mixed_end:]
 
 had_final_newline = text.endswith("\n")
@@ -121,4 +141,4 @@ text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, hover/references UTF-16 coordinates, and {mixed_uri_count} mixed-workspace URI closure(s)")
+print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, hover/references UTF-16 coordinates, {mixed_uri_count} mixed-workspace URI closure(s), and {mixed_completion_count} mixed completion coordinate(s)")
