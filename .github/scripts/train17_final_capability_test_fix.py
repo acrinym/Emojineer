@@ -5,22 +5,10 @@ path = Path("tests/lsp_tests.cpp")
 text = path.read_text()
 
 replacements = [
-    (
-        "    caps.textDocumentSync = true;",
-        "    caps.textDocumentSync = TextDocumentSyncKind::Full;",
-    ),
-    (
-        "    caps.completionProvider = true;",
-        "    caps.completionProvider = CompletionOptions{false};",
-    ),
-    (
-        "    assert(*caps.textDocumentSync == true);",
-        "    assert(*caps.textDocumentSync == TextDocumentSyncKind::Full);",
-    ),
-    (
-        "    assert(*caps.completionProvider == true);",
-        "    assert(caps.completionProvider.has_value());\n    assert(!caps.completionProvider->resolveProvider);",
-    ),
+    ("    caps.textDocumentSync = true;", "    caps.textDocumentSync = TextDocumentSyncKind::Full;"),
+    ("    caps.completionProvider = true;", "    caps.completionProvider = CompletionOptions{false};"),
+    ("    assert(*caps.textDocumentSync == true);", "    assert(*caps.textDocumentSync == TextDocumentSyncKind::Full);"),
+    ("    assert(*caps.completionProvider == true);", "    assert(caps.completionProvider.has_value());\n    assert(!caps.completionProvider->resolveProvider);"),
 ]
 for old, new in replacements:
     if new in text:
@@ -29,37 +17,22 @@ for old, new in replacements:
         raise SystemExit(f"capability test anchor missing: {old}")
     text = text.replace(old, new, 1)
 
-# JSON may legally escape solidus. Do not make protocol tests depend on one spelling.
-method_pattern = re.compile(
-    r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("textDocument/publishDiagnostics"\) != std::string::npos'
-)
+method_pattern = re.compile(r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("textDocument/publishDiagnostics"\) != std::string::npos')
 text, method_count = method_pattern.subn(
-    lambda m: (
-        f'{m.group("expr")}.find("textDocument") != std::string::npos &&\n'
-        f'           {m.group("expr")}.find("publishDiagnostics") != std::string::npos'
-    ),
+    lambda m: f'{m.group("expr")}.find("textDocument") != std::string::npos &&\n           {m.group("expr")}.find("publishDiagnostics") != std::string::npos',
     text,
 )
 if 'find("textDocument/publishDiagnostics")' in text:
     raise SystemExit("remaining brittle publishDiagnostics JSON slash assertion")
 
-# URI assertions already independently require a `uri` field. Verify the exact
-# semantic URI components without depending on whether JSON serializes '/' or '\/'.
-uri_pattern = re.compile(
-    r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("file:///test/main\.emoji"\) != std::string::npos'
-)
+uri_pattern = re.compile(r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("file:///test/main\.emoji"\) != std::string::npos')
 text, uri_count = uri_pattern.subn(
-    lambda m: (
-        f'{m.group("expr")}.find("file:") != std::string::npos &&\n'
-        f'           {m.group("expr")}.find("test") != std::string::npos &&\n'
-        f'           {m.group("expr")}.find("main.emoji") != std::string::npos'
-    ),
+    lambda m: f'{m.group("expr")}.find("file:") != std::string::npos &&\n           {m.group("expr")}.find("test") != std::string::npos &&\n           {m.group("expr")}.find("main.emoji") != std::string::npos',
     text,
 )
 if '.find("file:///test/main.emoji") != std::string::npos' in text:
     raise SystemExit("remaining brittle file URI solidus assertion")
 
-# Rewrite the source ONLY inside the strict supplementary-diagnostic E2E.
 function_start = text.find("void test_e2e_real_supplementary_emoji_diagnostics()")
 if function_start == -1:
     raise SystemExit("supplementary diagnostic E2E function missing")
@@ -73,7 +46,6 @@ if new_source not in function:
     if old_source not in function:
         raise SystemExit("strict supplementary diagnostic source fixture missing")
     function = function.replace(old_source, new_source, 1)
-
 new_range_block = '''    // The invalid '@' follows four supplementary-plane emoji. In UTF-16 its exact
     // range is [15, 16): four emoji contribute 8 code units; five spaces plus two
     // digits before '@' contribute the remaining 7. This proves the server is not
@@ -89,18 +61,12 @@ new_range_block = '''    // The invalid '@' follows four supplementary-plane emo
 
     // Clean shutdown'''
 if "Diagnostic must start at UTF-16 character 15" not in function:
-    range_pattern = re.compile(
-        r'    // The diagnostic should cover the whole expression, with positions accounting for\n.*?    // Clean shutdown',
-        re.DOTALL,
-    )
+    range_pattern = re.compile(r'    // The diagnostic should cover the whole expression, with positions accounting for\n.*?    // Clean shutdown', re.DOTALL)
     function, range_count = range_pattern.subn(new_range_block, function, count=1)
     if range_count != 1:
         raise SystemExit(f"strict supplementary diagnostic range block matches: {range_count}")
 text = text[:function_start] + function + text[function_end:]
 
-# The hover E2E previously requested UTF-16 character 2, which is the ASCII
-# space after the two-unit 🐍. 🍎 starts at character 3. Scope the correction
-# to the real hover test so other position fixtures remain untouched.
 hover_start = text.find("void test_e2e_real_hover()")
 if hover_start == -1:
     raise SystemExit("real hover E2E function missing")
@@ -108,16 +74,29 @@ hover_end = text.find("void test_e2e_real_definition()", hover_start)
 if hover_end == -1:
     raise SystemExit("real hover E2E end marker missing")
 hover = text[hover_start:hover_end]
-old_hover = '\\"position\\":{\\"line\\":0,\\"character\\":2}'
-new_hover = '\\"position\\":{\\"line\\":0,\\"character\\":3}'
-if new_hover not in hover:
-    if old_hover not in hover:
-        raise SystemExit("real hover UTF-16 coordinate anchor missing")
-    hover = hover.replace(old_hover, new_hover, 1)
+hover_lines = hover.splitlines(True)
+changed_hover = False
+already_hover = False
+for i, line in enumerate(hover_lines):
+    if "std::string hoverReq" not in line:
+        continue
+    if "character" not in line:
+        raise SystemExit("hover request line has no character field")
+    if re.search(r'character[^0-9]*3', line):
+        already_hover = True
+        break
+    updated, n = re.subn(r'(character[^0-9]*)2(?=[^0-9])', r'\g<1>3', line, count=1)
+    if n != 1:
+        raise SystemExit("real hover request coordinate rewrite failed")
+    hover_lines[i] = updated
+    changed_hover = True
+    break
+if not changed_hover and not already_hover:
+    raise SystemExit("real hover request line missing")
+hover = ''.join(hover_lines)
 hover = hover.replace("UTF-16 position 2-3", "UTF-16 position 3-4")
 text = text[:hover_start] + hover + text[hover_end:]
 
-# Keep generated edits patch-clean.
 had_final_newline = text.endswith("\n")
 text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
