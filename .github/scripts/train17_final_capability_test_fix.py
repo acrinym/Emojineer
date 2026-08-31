@@ -67,22 +67,20 @@ if "Diagnostic must start at UTF-16 character 15" not in function:
         raise SystemExit(f"strict supplementary diagnostic range block matches: {range_count}")
 text = text[:function_start] + function + text[function_end:]
 
-hover_start = text.find("void test_e2e_real_hover()")
-if hover_start == -1:
-    raise SystemExit("real hover E2E function missing")
-hover_end = text.find("void test_e2e_real_definition()", hover_start)
-if hover_end == -1:
-    raise SystemExit("real hover E2E end marker missing")
+hover_def = re.search(r'void\s+test_e2e_real_hover\s*\(\s*\)\s*\{', text)
+if not hover_def:
+    raise SystemExit("real hover E2E definition missing")
+hover_start = hover_def.start()
+definition_def = re.search(r'void\s+test_e2e_real_definition\s*\(\s*\)\s*\{', text[hover_def.end():])
+if not definition_def:
+    raise SystemExit("real definition E2E definition missing")
+hover_end = hover_def.end() + definition_def.start()
 hover = text[hover_start:hover_end]
 hover_pattern_2 = re.compile(r'(textDocument/hover.{0,400}?character[^0-9]{0,20})2(?=[^0-9])', re.DOTALL)
 hover_pattern_3 = re.compile(r'textDocument/hover.{0,400}?character[^0-9]{0,20}3(?=[^0-9])', re.DOTALL)
 if not hover_pattern_3.search(hover):
     hover, hover_count = hover_pattern_2.subn(r'\g<1>3', hover, count=1)
     if hover_count != 1:
-        print("POST-STAGE-ONE HOVER LINES:")
-        for line in hover.splitlines():
-            if "hover" in line.lower() or "character" in line:
-                print(repr(line))
         raise SystemExit(f"real hover semantic coordinate matches: {hover_count}")
 hover = hover.replace("UTF-16 position 2-3", "UTF-16 position 3-4")
 text = text[:hover_start] + hover + text[hover_end:]
@@ -92,4 +90,4 @@ text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, and semantic hover coordinate")
+print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, and hover UTF-16 coordinate")
