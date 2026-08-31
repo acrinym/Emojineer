@@ -47,5 +47,12 @@ text, count = pattern.subn(
 if 'find("textDocument/publishDiagnostics")' in text:
     raise SystemExit("remaining brittle publishDiagnostics JSON slash assertion")
 
+# Keep generated edits patch-clean even when the replaced source had spaces
+# before its original continuation/newline.
+had_final_newline = text.endswith("\n")
+text = "\n".join(line.rstrip() for line in text.splitlines())
+if had_final_newline:
+    text += "\n"
+
 path.write_text(text)
 print(f"repaired: typed capability model and {count} publishDiagnostics assertion(s)")
