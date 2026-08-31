@@ -67,27 +67,36 @@ if "Diagnostic must start at UTF-16 character 15" not in function:
         raise SystemExit(f"strict supplementary diagnostic range block matches: {range_count}")
 text = text[:function_start] + function + text[function_end:]
 
-hover_def = re.search(r'void\s+test_e2e_real_hover\s*\(\s*\)\s*\{', text)
-if not hover_def:
-    raise SystemExit("real hover E2E definition missing")
-hover_start = hover_def.start()
-definition_def = re.search(r'void\s+test_e2e_real_definition\s*\(\s*\)\s*\{', text[hover_def.end():])
-if not definition_def:
-    raise SystemExit("real definition E2E definition missing")
-hover_end = hover_def.end() + definition_def.start()
-hover = text[hover_start:hover_end]
-hover_pattern_2 = re.compile(r'(textDocument/hover.{0,400}?character[^0-9]{0,20})2(?=[^0-9])', re.DOTALL)
-hover_pattern_3 = re.compile(r'textDocument/hover.{0,400}?character[^0-9]{0,20}3(?=[^0-9])', re.DOTALL)
-if not hover_pattern_3.search(hover):
-    hover, hover_count = hover_pattern_2.subn(r'\g<1>3', hover, count=1)
-    if hover_count != 1:
-        raise SystemExit(f"real hover semantic coordinate matches: {hover_count}")
-hover = hover.replace("UTF-16 position 2-3", "UTF-16 position 3-4")
-text = text[:hover_start] + hover + text[hover_end:]
+
+def rewrite_real_request_coordinate(text: str, function_name: str, method: str, next_function_name: str) -> str:
+    function_def = re.search(rf'void\s+{re.escape(function_name)}\s*\(\s*\)\s*\{{', text)
+    if not function_def:
+        raise SystemExit(f"{function_name} definition missing")
+    start = function_def.start()
+    next_def = re.search(rf'void\s+{re.escape(next_function_name)}\s*\(\s*\)\s*\{{', text[function_def.end():])
+    if not next_def:
+        raise SystemExit(f"{next_function_name} definition missing")
+    end = function_def.end() + next_def.start()
+    region = text[start:end]
+    pattern_2 = re.compile(rf'({re.escape(method)}.{{0,400}}?character[^0-9]{{0,20}})2(?=[^0-9])', re.DOTALL)
+    pattern_3 = re.compile(rf'{re.escape(method)}.{{0,400}}?character[^0-9]{{0,20}}3(?=[^0-9])', re.DOTALL)
+    if not pattern_3.search(region):
+        region, count = pattern_2.subn(r'\g<1>3', region, count=1)
+        if count != 1:
+            raise SystemExit(f"{function_name} UTF-16 coordinate matches: {count}")
+    region = region.replace("UTF-16 position 2-3", "UTF-16 position 3-4")
+    region = region.replace("UTF-16 position 2)", "UTF-16 position 3)")
+    region = region.replace("🍎(2-3)", "🍎(3-4)")
+    return text[:start] + region + text[end:]
+
+# 🐍 occupies UTF-16 characters 0-1 and the following space is character 2.
+# The 🍎 declaration begins at character 3, so hover and references must target 3.
+text = rewrite_real_request_coordinate(text, "test_e2e_real_hover", "textDocument/hover", "test_e2e_real_definition")
+text = rewrite_real_request_coordinate(text, "test_e2e_real_references", "textDocument/references", "test_e2e_real_document_symbols")
 
 had_final_newline = text.endswith("\n")
 text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, and hover UTF-16 coordinate")
+print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, hover UTF-16 coordinate, and references UTF-16 coordinate")
