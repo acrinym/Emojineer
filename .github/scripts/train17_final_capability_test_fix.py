@@ -20,14 +20,18 @@ replacements = [
         "    assert(*caps.completionProvider == true);",
         "    assert(caps.completionProvider.has_value());\n    assert(!caps.completionProvider->resolveProvider);",
     ),
+    (
+        '    assert(framed.find("textDocument/publishDiagnostics") != std::string::npos);',
+        '    assert(framed.find("textDocument") != std::string::npos &&\n           framed.find("publishDiagnostics") != std::string::npos &&\n           "published notification method must survive JSON serialization");',
+    ),
 ]
 
 for old, new in replacements:
     if new in text:
         continue
     if old not in text:
-        raise SystemExit(f"capability test anchor missing: {old}")
+        raise SystemExit(f"capability/diagnostic test anchor missing: {old}")
     text = text.replace(old, new, 1)
 
 path.write_text(text)
-print("repaired: capability tests use typed LSP sync/completion model")
+print("repaired: typed capability tests and serialization-agnostic diagnostic publication regression")
