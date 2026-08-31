@@ -74,12 +74,15 @@ hover_end = text.find("void test_e2e_real_definition()", hover_start)
 if hover_end == -1:
     raise SystemExit("real hover E2E end marker missing")
 hover = text[hover_start:hover_end]
-# Match the semantic request, independent of how quotes/backslashes are spelled.
 hover_pattern_2 = re.compile(r'(textDocument/hover.{0,400}?character[^0-9]{0,20})2(?=[^0-9])', re.DOTALL)
 hover_pattern_3 = re.compile(r'textDocument/hover.{0,400}?character[^0-9]{0,20}3(?=[^0-9])', re.DOTALL)
 if not hover_pattern_3.search(hover):
     hover, hover_count = hover_pattern_2.subn(r'\g<1>3', hover, count=1)
     if hover_count != 1:
+        print("POST-STAGE-ONE HOVER LINES:")
+        for line in hover.splitlines():
+            if "hover" in line.lower() or "character" in line:
+                print(repr(line))
         raise SystemExit(f"real hover semantic coordinate matches: {hover_count}")
 hover = hover.replace("UTF-16 position 2-3", "UTF-16 position 3-4")
 text = text[:hover_start] + hover + text[hover_end:]
