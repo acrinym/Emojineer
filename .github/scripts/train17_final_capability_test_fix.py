@@ -43,19 +43,24 @@ text, method_count = method_pattern.subn(
     ),
     text,
 )
-
 if 'find("textDocument/publishDiagnostics")' in text:
     raise SystemExit("remaining brittle publishDiagnostics JSON slash assertion")
 
-# The old supplementary-plane E2E fixture used a valid declaration and then
-# expected a diagnostic anyway. Make the final grapheme deliberately invalid so
-# the test proves exact UTF-16 range conversion after four supplementary emoji.
+# Rewrite the source ONLY inside the strict supplementary-diagnostic E2E. The
+# file contains another identical source literal in a looser UTF-16 smoke test.
+function_start = text.find("void test_e2e_real_supplementary_emoji_diagnostics()")
+if function_start == -1:
+    raise SystemExit("supplementary diagnostic E2E function missing")
+function_end = text.find("#endif // test_e2e_real_supplementary_emoji_diagnostics", function_start)
+if function_end == -1:
+    raise SystemExit("supplementary diagnostic E2E end marker missing")
+function = text[function_start:function_end]
 old_source = '"text":"🐍 🍎 🔢 🟰 42"'
 new_source = '"text":"🐍 🍎 🔢 🟰 42 @"'
-if new_source not in text:
-    if old_source not in text:
-        raise SystemExit("supplementary diagnostic fixture anchor missing")
-    text = text.replace(old_source, new_source, 1)
+if new_source not in function:
+    if old_source not in function:
+        raise SystemExit("strict supplementary diagnostic source fixture missing")
+    function = function.replace(old_source, new_source, 1)
 
 new_range_block = '''    // The invalid '@' follows four supplementary-plane emoji. In UTF-16 its exact
     // range is [15, 16): four emoji contribute 8 code units; five spaces plus two
@@ -71,24 +76,22 @@ new_range_block = '''    // The invalid '@' follows four supplementary-plane emo
            "Diagnostic must come from the intentionally invalid grapheme");
 
     // Clean shutdown'''
-
-if "Diagnostic must start at UTF-16 character 15" not in text:
+if "Diagnostic must start at UTF-16 character 15" not in function:
     range_pattern = re.compile(
-        r'    // The diagnostic should cover the whole expression, with positions accounting for\n'
-        r'.*?'
-        r'    // Clean shutdown',
+        r'    // The diagnostic should cover the whole expression, with positions accounting for\n.*?    // Clean shutdown',
         re.DOTALL,
     )
-    text, range_count = range_pattern.subn(new_range_block, text, count=1)
+    function, range_count = range_pattern.subn(new_range_block, function, count=1)
     if range_count != 1:
-        raise SystemExit(f"supplementary diagnostic structural block matches: {range_count}")
+        raise SystemExit(f"strict supplementary diagnostic range block matches: {range_count}")
 
-# Keep generated edits patch-clean even when the replaced source had spaces
-# before its original continuation/newline.
+text = text[:function_start] + function + text[function_end:]
+
+# Keep generated edits patch-clean.
 had_final_newline = text.endswith("\n")
 text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} publishDiagnostics assertion(s), and exact supplementary diagnostic E2E")
+print(f"repaired: typed capability model, {method_count} publishDiagnostics assertion(s), and targeted supplementary diagnostic E2E")
