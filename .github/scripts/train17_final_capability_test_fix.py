@@ -50,8 +50,8 @@ if 'find("textDocument/publishDiagnostics")' in text:
 # The old supplementary-plane E2E fixture used a valid declaration and then
 # expected a diagnostic anyway. Make the final grapheme deliberately invalid so
 # the test proves exact UTF-16 range conversion after four supplementary emoji.
-old_source = '\\"text\\":\\"🐍 🍎 🔢 🟰 42\\"'
-new_source = '\\"text\\":\\"🐍 🍎 🔢 🟰 42 @\\"'
+old_source = '"text":"🐍 🍎 🔢 🟰 42"'
+new_source = '"text":"🐍 🍎 🔢 🟰 42 @"'
 if new_source not in text:
     if old_source not in text:
         raise SystemExit("supplementary diagnostic fixture anchor missing")
@@ -61,7 +61,7 @@ old_range_comment = '''    // The diagnostic should cover the whole expression, 
     // the 2 UTF-16 units per supplementary-plane emoji
     assert(body.find("\\\"range\\\"") != std::string::npos &&
            "Diagnostic must have range");
-    
+
     // The start character should be 0 (beginning of document)
     // The end character should account for all the supplementary emojis
     // Grapheme count: 10 (🐍, space, 🍎, space, 🔢, space, 🟰, space, 4, 2)
@@ -69,9 +69,9 @@ old_range_comment = '''    // The diagnostic should cover the whole expression, 
     // We verify the positions are in UTF-16, not byte offsets or grapheme columns
 '''
 new_range_comment = '''    // The invalid '@' follows four supplementary-plane emoji. In UTF-16 its exact
-    // range is [15, 16): four emoji contribute 8 code units; six ASCII spaces/digits
-    // before '@' contribute the remaining 7. This proves the server is not reporting
-    // a byte offset or grapheme column.
+    // range is [15, 16): four emoji contribute 8 code units; five spaces plus two
+    // digits before '@' contribute the remaining 7. This proves the server is not
+    // reporting a byte offset or grapheme column.
     assert(body.find("\\\"range\\\"") != std::string::npos &&
            "Diagnostic must have range");
     assert(body.find("\\\"character\\\":15") != std::string::npos &&
