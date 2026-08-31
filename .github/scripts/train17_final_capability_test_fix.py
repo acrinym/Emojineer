@@ -108,8 +108,8 @@ hover_end = text.find("void test_e2e_real_definition()", hover_start)
 if hover_end == -1:
     raise SystemExit("real hover E2E end marker missing")
 hover = text[hover_start:hover_end]
-old_hover = '"position":{"line":0,"character":2}'
-new_hover = '"position":{"line":0,"character":3}'
+old_hover = '\\"position\\":{\\"line\\":0,\\"character\\":2}'
+new_hover = '\\"position\\":{\\"line\\":0,\\"character\\":3}'
 if new_hover not in hover:
     if old_hover not in hover:
         raise SystemExit("real hover UTF-16 coordinate anchor missing")
