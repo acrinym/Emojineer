@@ -74,26 +74,13 @@ hover_end = text.find("void test_e2e_real_definition()", hover_start)
 if hover_end == -1:
     raise SystemExit("real hover E2E end marker missing")
 hover = text[hover_start:hover_end]
-hover_lines = hover.splitlines(True)
-changed_hover = False
-already_hover = False
-for i, line in enumerate(hover_lines):
-    if "std::string hoverReq" not in line:
-        continue
-    if "character" not in line:
-        raise SystemExit("hover request line has no character field")
-    if re.search(r'character[^0-9]*3', line):
-        already_hover = True
-        break
-    updated, n = re.subn(r'(character[^0-9]*)2(?=[^0-9])', r'\g<1>3', line, count=1)
-    if n != 1:
-        raise SystemExit("real hover request coordinate rewrite failed")
-    hover_lines[i] = updated
-    changed_hover = True
-    break
-if not changed_hover and not already_hover:
-    raise SystemExit("real hover request line missing")
-hover = ''.join(hover_lines)
+# Match the semantic request, independent of how quotes/backslashes are spelled.
+hover_pattern_2 = re.compile(r'(textDocument/hover.{0,400}?character[^0-9]{0,20})2(?=[^0-9])', re.DOTALL)
+hover_pattern_3 = re.compile(r'textDocument/hover.{0,400}?character[^0-9]{0,20}3(?=[^0-9])', re.DOTALL)
+if not hover_pattern_3.search(hover):
+    hover, hover_count = hover_pattern_2.subn(r'\g<1>3', hover, count=1)
+    if hover_count != 1:
+        raise SystemExit(f"real hover semantic coordinate matches: {hover_count}")
 hover = hover.replace("UTF-16 position 2-3", "UTF-16 position 3-4")
 text = text[:hover_start] + hover + text[hover_end:]
 
@@ -102,4 +89,4 @@ text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, and hover UTF-16 coordinate")
+print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, and semantic hover coordinate")
