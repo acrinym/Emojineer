@@ -1,6 +1,30 @@
 from pathlib import Path
 import re
 
+# Preserve the authoritative token stream in workspace-symbol filesystem scans.
+# The old code moved modTokens into Parser, then tried to use the moved-from
+# vector to assign URI/range locations, producing symbols with empty locations.
+lsp_path = Path("src/lsp.cpp")
+lsp_text = lsp_path.read_text()
+ws_start = lsp_text.find("std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols")
+ws_end = lsp_text.find("JsonValue LanguageServer::handleFormatting", ws_start)
+if ws_start == -1 or ws_end == -1:
+    raise SystemExit("workspace-symbol production region missing")
+ws_region = lsp_text[ws_start:ws_end]
+old_ws_parse = '''                                auto modTokens = lexer.tokenize();
+                                Parser parser(std::move(modTokens));
+                                auto modProgram = parser.parse();'''
+new_ws_parse = '''                                auto modTokens = lexer.tokenize();
+                                auto parserTokens = modTokens;
+                                Parser parser(std::move(parserTokens));
+                                auto modProgram = parser.parse();'''
+if new_ws_parse not in ws_region:
+    if old_ws_parse not in ws_region:
+        raise SystemExit("workspace-symbol moved-token anchor missing")
+    ws_region = ws_region.replace(old_ws_parse, new_ws_parse, 1)
+lsp_text = lsp_text[:ws_start] + ws_region + lsp_text[ws_end:]
+lsp_path.write_text(lsp_text)
+
 path = Path("tests/lsp_tests.cpp")
 text = path.read_text()
 
@@ -100,7 +124,6 @@ if mixed_end == -1:
     raise SystemExit("mixed workspace E2E end marker missing")
 mixed = text[mixed_def.start():mixed_end]
 
-# Close every dynamically concatenated mainUri JSON string.
 broken_uri = '+ mainUri + R"('
 fixed_uri = '+ mainUri + R"("'
 if broken_uri in mixed:
@@ -110,8 +133,6 @@ else:
 if mixed_uri_count == 0 and fixed_uri not in mixed:
     raise SystemExit("mixed workspace dynamic URI anchors missing")
 
-# `🧩` occupies UTF-16 characters 0-1 and the following space is character 2.
-# The unfiltered completion cursor belongs at character 3, before 🚀.
 mixed_completion_1 = re.compile(
     r'(textDocument/completion.{0,500}?position.{0,80}?line[^0-9]{0,20}0.{0,80}?character[^0-9]{0,20})1(?=[^0-9])',
     re.DOTALL,
@@ -128,8 +149,6 @@ else:
     mixed_completion_count = 0
 mixed = mixed.replace("Position after 🧩 (UTF-16 position 1)", "Position after 🧩 and its following space (UTF-16 position 3)")
 
-# JsonValue serialization may legally escape solidus as `\/`. Assert package
-# destination components instead of one particular textual slash spelling.
 path_pattern = re.compile(r'body\.find\("path-pkg/lib\.emoji"\) != std::string::npos')
 mixed, path_component_count = path_pattern.subn(
     'body.find("path-pkg") != std::string::npos &&\n           body.find("lib.emoji") != std::string::npos',
@@ -150,4 +169,4 @@ text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} diagnostic method assertion(s), {uri_count} URI assertion(s), supplementary diagnostics, hover/references coordinates, {mixed_uri_count} mixed URI closure(s), {mixed_completion_count} mixed completion coordinate(s), {path_component_count} path-package assertion(s), and {registry_component_count} registry-package assertion(s)")
+print(f"repaired: workspace-symbol token retention; typed capability model; {method_count} diagnostic method assertion(s); {uri_count} URI assertion(s); supplementary diagnostics; hover/references coordinates; {mixed_uri_count} mixed URI closure(s); {mixed_completion_count} mixed completion coordinate(s); {path_component_count} path-package assertion(s); {registry_component_count} registry-package assertion(s)")
