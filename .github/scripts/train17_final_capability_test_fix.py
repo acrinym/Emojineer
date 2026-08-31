@@ -89,14 +89,9 @@ def rewrite_real_request_coordinate(text: str, function_name: str, method: str, 
     region = region.replace("🍎(2-3)", "🍎(3-4)")
     return text[:start] + region + text[end:]
 
-# 🐍 occupies UTF-16 characters 0-1 and the following space is character 2.
-# The 🍎 declaration begins at character 3, so hover and references must target 3.
 text = rewrite_real_request_coordinate(text, "test_e2e_real_hover", "textDocument/hover", "test_e2e_real_definition")
 text = rewrite_real_request_coordinate(text, "test_e2e_real_references", "textDocument/references", "test_e2e_real_document_symbols")
 
-# The mixed-workspace E2E builds JSON requests by concatenating mainUri into raw
-# string literals. Every suffix omitted the URI's closing quote, so the server
-# correctly returned JSON-RPC parse/invalid-request errors instead of results.
 mixed_def = re.search(r'void\s+test_e2e_real_mixed_workspace\s*\(\s*\)\s*\{', text)
 if not mixed_def:
     raise SystemExit("mixed workspace E2E definition missing")
@@ -104,20 +99,19 @@ mixed_end = text.find("#endif // EMOJINEER_HAVE_POSIX_PROCESS", mixed_def.end())
 if mixed_end == -1:
     raise SystemExit("mixed workspace E2E end marker missing")
 mixed = text[mixed_def.start():mixed_end]
+
+# Close every dynamically concatenated mainUri JSON string.
 broken_uri = '+ mainUri + R"('
 fixed_uri = '+ mainUri + R"("'
 if broken_uri in mixed:
     mixed, mixed_uri_count = re.subn(r'\+ mainUri \+ R"\((?!")', '+ mainUri + R"("', mixed)
 else:
     mixed_uri_count = 0
-if '+ mainUri + R"(' in mixed and '+ mainUri + R"("' not in mixed:
-    raise SystemExit("mixed workspace URI closures were not repaired")
 if mixed_uri_count == 0 and fixed_uri not in mixed:
     raise SystemExit("mixed workspace dynamic URI anchors missing")
 
-# `🧩` is a supplementary-plane emoji and occupies UTF-16 characters 0-1.
-# Character 2 is the following ASCII space; an unfiltered completion request
-# belongs at character 3, immediately after that space and before 🚀.
+# `🧩` occupies UTF-16 characters 0-1 and the following space is character 2.
+# The unfiltered completion cursor belongs at character 3, before 🚀.
 mixed_completion_1 = re.compile(
     r'(textDocument/completion.{0,500}?position.{0,80}?line[^0-9]{0,20}0.{0,80}?character[^0-9]{0,20})1(?=[^0-9])',
     re.DOTALL,
@@ -126,14 +120,29 @@ mixed_completion_3 = re.compile(
     r'textDocument/completion.{0,500}?position.{0,80}?line[^0-9]{0,20}0.{0,80}?character[^0-9]{0,20}3(?=[^0-9])',
     re.DOTALL,
 )
-completion_three_count = len(mixed_completion_3.findall(mixed))
-if completion_three_count < 2:
+if len(mixed_completion_3.findall(mixed)) < 2:
     mixed, mixed_completion_count = mixed_completion_1.subn(r'\g<1>3', mixed)
     if mixed_completion_count != 2:
         raise SystemExit(f"mixed workspace completion coordinate matches: {mixed_completion_count}")
 else:
     mixed_completion_count = 0
 mixed = mixed.replace("Position after 🧩 (UTF-16 position 1)", "Position after 🧩 and its following space (UTF-16 position 3)")
+
+# JsonValue serialization may legally escape solidus as `\/`. Assert package
+# destination components instead of one particular textual slash spelling.
+path_pattern = re.compile(r'body\.find\("path-pkg/lib\.emoji"\) != std::string::npos')
+mixed, path_component_count = path_pattern.subn(
+    'body.find("path-pkg") != std::string::npos &&\n           body.find("lib.emoji") != std::string::npos',
+    mixed,
+)
+registry_pattern = re.compile(r'body\.find\("\.emojineer/packages/registry/mathutil/1\.0\.0"\) != std::string::npos')
+mixed, registry_component_count = registry_pattern.subn(
+    'body.find(".emojineer") != std::string::npos &&\n           body.find("packages") != std::string::npos &&\n           body.find("registry") != std::string::npos &&\n           body.find("mathutil") != std::string::npos &&\n           body.find("1.0.0") != std::string::npos',
+    mixed,
+)
+if 'find("path-pkg/lib.emoji")' in mixed or 'find(".emojineer/packages/registry/mathutil/1.0.0")' in mixed:
+    raise SystemExit("mixed workspace slash-sensitive package assertion remains")
+
 text = text[:mixed_def.start()] + mixed + text[mixed_end:]
 
 had_final_newline = text.endswith("\n")
@@ -141,4 +150,4 @@ text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, hover/references UTF-16 coordinates, {mixed_uri_count} mixed-workspace URI closure(s), and {mixed_completion_count} mixed completion coordinate(s)")
+print(f"repaired: typed capability model, {method_count} diagnostic method assertion(s), {uri_count} URI assertion(s), supplementary diagnostics, hover/references coordinates, {mixed_uri_count} mixed URI closure(s), {mixed_completion_count} mixed completion coordinate(s), {path_component_count} path-package assertion(s), and {registry_component_count} registry-package assertion(s)")
