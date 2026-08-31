@@ -256,13 +256,11 @@ void test_utf16_unit_counting() {
     // ASCII - 1 UTF-16 unit per character
     assert(countUtf16UnitsInString("abc") == 3);
     
-    // BMP emoji (like 😀 U+1F600) - 1 UTF-16 unit (in BMP)
-    assert(countUtf16UnitsInString("😀") == 1);
+    // U+1F600 is supplementary and therefore occupies a UTF-16 surrogate pair.
+    assert(countUtf16UnitsInString("😀") == 2);
     
-    // Mixed ASCII and emoji
-    assert(countUtf16UnitsInString("a😀b") == 4);  // 'a' + 😀 + 'b' = 1 + 1 + 1 = 3... wait, that's 3
-    // Actually: 'a' (1), '😀' (1), 'b' (1) = 3
-    assert(countUtf16UnitsInString("a😀b") == 3);
+    // Mixed ASCII and supplementary emoji: 1 + 2 + 1 = 4 UTF-16 units.
+    assert(countUtf16UnitsInString("a😀b") == 4);
     
     // Supplementary plane emoji (e.g., U+1F3F4 WAVING BLACK FLAG - 4 byte UTF-8, 2 UTF-16 units)
     // 🏴 (U+1F3F4) = 4 bytes in UTF-8, 2 UTF-16 units (surrogate pair)

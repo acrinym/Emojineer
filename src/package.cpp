@@ -59,6 +59,10 @@ std::string package_hash(const std::filesystem::path& root,
     for (; it != end; ++it) {
         const auto path = it->path();
         if (it->is_directory()) {
+            if (path == root / ".emojineer") {
+                it.disable_recursion_pending();
+                continue;
+            }
             std::error_code ec;
             const auto canonical = std::filesystem::canonical(path, ec);
             if (!ec && path != root && under_dependency(canonical, dependency_roots)) {

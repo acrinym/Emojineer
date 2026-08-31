@@ -263,10 +263,20 @@ struct SignatureHelp {
     int activeParameter{0};
 };
 
+enum class TextDocumentSyncKind {
+    None = 0,
+    Full = 1,
+    Incremental = 2,
+};
+
+struct CompletionOptions {
+    bool resolveProvider{false};
+};
+
 struct ServerCapabilities {
-    std::optional<bool> textDocumentSync;
+    std::optional<TextDocumentSyncKind> textDocumentSync;
     std::optional<bool> hoverProvider;
-    std::optional<bool> completionProvider;
+    std::optional<CompletionOptions> completionProvider;
     std::optional<bool> definitionProvider;
     std::optional<bool> referencesProvider;
     std::optional<bool> documentSymbolProvider;

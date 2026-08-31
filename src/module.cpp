@@ -153,21 +153,22 @@ std::string internal_name(const ModuleUnit& unit, const std::string& source_name
 }
 
 void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
+                                 const std::filesystem::path& source_path,
                                  const std::string& identity) {
     for (const auto& stmt : block) {
         if (dynamic_cast<const ast::ModuleDecl*>(stmt.get()) ||
             dynamic_cast<const ast::ImportStmt*>(stmt.get()) ||
             dynamic_cast<const ast::ExportStmt*>(stmt.get())) {
-            throw SourceLocationException("🧩, 🔗, and 📤 are top-level only", 
-                                             {}, stmt->line, 1);
+            throw SourceLocationException("🧩, 🔗, and 📤 are top-level only",
+                                             source_path, identity, stmt->line, 1);
         }
         if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
-            reject_nested_module_syntax(branch->then_branch, identity);
-            reject_nested_module_syntax(branch->else_branch, identity);
+            reject_nested_module_syntax(branch->then_branch, source_path, identity);
+            reject_nested_module_syntax(branch->else_branch, source_path, identity);
         } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
-            reject_nested_module_syntax(loop->body, identity);
+            reject_nested_module_syntax(loop->body, source_path, identity);
         } else if (const auto* fn = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
-            reject_nested_module_syntax(fn->body, identity);
+            reject_nested_module_syntax(fn->body, source_path, identity);
         }
     }
 }
@@ -265,12 +266,12 @@ void analyze_unit(ModuleUnit& unit) {
 
     for (const auto& stmt : unit.program.statements) {
         if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
-            reject_nested_module_syntax(branch->then_branch, unit.identity);
-            reject_nested_module_syntax(branch->else_branch, unit.identity);
+            reject_nested_module_syntax(branch->then_branch, unit.path, unit.identity);
+            reject_nested_module_syntax(branch->else_branch, unit.path, unit.identity);
         } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
-            reject_nested_module_syntax(loop->body, unit.identity);
+            reject_nested_module_syntax(loop->body, unit.path, unit.identity);
         } else if (const auto* fn = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
-            reject_nested_module_syntax(fn->body, unit.identity);
+            reject_nested_module_syntax(fn->body, unit.path, unit.identity);
         }
     }
     collect_module_globals(unit.program.statements, unit);
@@ -521,24 +522,24 @@ private:
         const std::filesystem::path requested(spec.requested);
         if (requested.empty() || requested.is_absolute()) {
             throw SourceLocationException("🔗 import path must be non-empty and relative",
-                                             {}, spec.line, 1);
+                                             importer.path, importer.identity, spec.line, 1);
         }
         if (spec.requested.find('\\') != std::string::npos) {
             throw SourceLocationException("🔗 import paths must use portable forward slashes",
-                                             {}, spec.line, 1);
+                                             importer.path, importer.identity, spec.line, 1);
         }
         if (requested.extension() != ".emoji") {
             throw SourceLocationException("🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>",
-                                             {}, spec.line, 1);
+                                             importer.path, importer.identity, spec.line, 1);
         }
         const auto candidate = importer.path.parent_path() / requested;
         if (!std::filesystem::exists(candidate)) {
             throw SourceLocationException("imported module '" + spec.requested + "' does not exist",
-                                             {}, spec.line, 1, spec.requested);
+                                             importer.path, importer.identity, spec.line, 1, spec.requested);
         }
         if (!std::filesystem::is_regular_file(candidate)) {
             throw SourceLocationException("imported module '" + spec.requested + "' is not a regular file",
-                                             {}, spec.line, 1, spec.requested);
+                                             importer.path, importer.identity, spec.line, 1, spec.requested);
         }
         const auto canonical = std::filesystem::canonical(candidate);
         const std::string context = "module '" + importer.identity + "' line " +

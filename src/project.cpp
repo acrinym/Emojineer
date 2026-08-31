@@ -391,11 +391,24 @@ std::string canonical_project_lock(const std::filesystem::path& root,
                                    const ProjectManifest& manifest) {
     validate_manifest(manifest);
     
-    // Resolve registry dependencies for canonical lock production
+    // Reuse a current lock/materialized store without contacting registry authority.
+    // Only an absent or stale lock enters online package-manager resolution.
     auto store_root = package_store_root(root);
+    bool offline = false;
+    const auto lock_path = root / "emojineer.lock";
+    if (std::filesystem::exists(lock_path)) {
+        try {
+            const auto existing_lock = load_project_lock(lock_path);
+            offline = !is_lock_stale(root, manifest, existing_lock);
+        } catch (...) {
+            // A malformed lock is not reusable; canonical lock production may replace it.
+            offline = false;
+        }
+    }
     std::unordered_map<std::string, ResolvedRegistryDependency> resolved;
     std::unordered_set<std::string> resolving;
-    auto resolved_deps = resolve_registry_dependencies_impl(manifest, store_root, root, false, resolved, resolving);
+    auto resolved_deps = resolve_registry_dependencies_impl(
+        manifest, store_root, root, offline, resolved, resolving);
     
     // Convert to lock format 3 and output canonical text
     // Use the same producer as sync_project for consistent lock production
@@ -978,8 +991,10 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
                     }
                 }
                 
-                // Populate dependencies from embedded manifest for lock serialization
+                // Populate dependencies from embedded manifest for lock serialization.
                 resolved_dep.dependencies = embedded_manifest.dependencies;
+                resolved[key] = resolved_dep;
+                result.back() = resolved_dep;
                 
                 // Structural validation: Check for path dependencies in registry packages - reject them
                 // This MUST propagate in BOTH online and offline modes - do NOT move inside try/catch
@@ -1276,8 +1291,9 @@ void materialize_package(const std::filesystem::path& store_root,
                         const std::string& manifest_content) {
     auto pkg_path = store_root / registry_key / package_name / version / artifact_sha256;
     
-    // Create staging directory
-    auto staging = pkg_path.parent_path() / ".staging";
+    // Create a clean artifact-specific staging directory.
+    auto staging = pkg_path.parent_path() / (".staging-" + artifact_sha256);
+    std::filesystem::remove_all(staging);
     std::filesystem::create_directories(staging);
     
     // Write manifest
@@ -1290,7 +1306,10 @@ void materialize_package(const std::filesystem::path& store_root,
         write_text(full_path, content);
     }
     
-    // Atomically move staging to final location
+    // Replace corrupt/missing materialization with the fully written staging tree.
+    if (std::filesystem::exists(pkg_path)) {
+        std::filesystem::remove_all(pkg_path);
+    }
     std::filesystem::rename(staging, pkg_path);
 }
 
@@ -1338,20 +1357,44 @@ void verify_or_repair_materialization(const std::filesystem::path& root,
             if (!is_materialized_package_valid(pkg_path, *dep.content_sha256)) {
                 // Package is corrupt or missing - try to repair from cache
                 if (dep.artifact_sha256) {
-                    auto cache_path = cache_root.empty() 
-                        ? default_registry_cache_root() / dep.name / dep.version / *dep.artifact_sha256
-                        : cache_root / dep.name / dep.version / *dep.artifact_sha256;
+                    if (!dep.registry_endpoint || !dep.registry_id) {
+                        throw std::runtime_error("cannot repair package " + dep.name + "@" + dep.version +
+                                                 " - lock is missing registry authority");
+                    }
+                    PackageArtifact expected;
+                    expected.name = dep.name;
+                    expected.version = dep.version;
+                    expected.artifact_sha256 = *dep.artifact_sha256;
+                    const auto registry_cache_key = sha256_hex(
+                        *dep.registry_endpoint + "\n" + *dep.registry_id).substr(0, 32);
+                    const auto cache_base = (cache_root.empty() ? default_registry_cache_root() : cache_root) /
+                                            "registries" / registry_cache_key;
+                    auto cache_path = package_cache_path(cache_base, expected);
                     
                     if (std::filesystem::exists(cache_path)) {
-                        // Re-materialize from cache
                         auto artifact = load_package_artifact(cache_path);
+                        if (artifact.name != dep.name || artifact.version != dep.version ||
+                            artifact.artifact_sha256 != *dep.artifact_sha256 ||
+                            artifact.content_sha256 != *dep.content_sha256) {
+                            throw std::runtime_error("cached repair artifact identity mismatch for " +
+                                                     dep.name + "@" + dep.version);
+                        }
+                        std::vector<std::pair<std::string, std::string>> files;
+                        files.reserve(artifact.files.size());
+                        for (const auto& file : artifact.files) {
+                            files.emplace_back(file.path, file.source);
+                        }
                         materialize_package(store_root,
                                            registry_key(dep.registry_alias ? *dep.registry_alias : "origin"),
                                            dep.name,
                                            dep.version,
                                            *dep.artifact_sha256,
-                                           {},
+                                           files,
                                            artifact.manifest);
+                        if (!is_materialized_package_valid(pkg_path, *dep.content_sha256)) {
+                            throw std::runtime_error("repaired package failed content verification: " +
+                                                     dep.name + "@" + dep.version);
+                        }
                     } else {
                         throw std::runtime_error("cannot repair missing package " + dep.name + "@" + dep.version + 
                                                  " - run 'emji sync' to restore");

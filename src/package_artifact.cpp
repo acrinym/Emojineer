@@ -248,6 +248,10 @@ std::vector<PackageArtifactFile> collect_owned_sources(const std::filesystem::pa
     for (; it != end; ++it) {
         const auto path = it->path();
         if (it->is_directory()) {
+            if (path == root / ".emojineer") {
+                it.disable_recursion_pending();
+                continue;
+            }
             std::error_code error;
             const auto canonical = std::filesystem::canonical(path, error);
             if (!error && path != root && under_any(canonical, nested_roots)) {

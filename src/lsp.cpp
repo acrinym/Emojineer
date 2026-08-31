@@ -884,8 +884,8 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
         if (utf8Offset + 1 < text.size() &&
             text[utf8Offset] == '\r' && text[utf8Offset + 1] == '\n') {
             if (currentLine == line) {
-                // At end of target line after CRLF
-                return utf8Offset;
+                // Only the exact end-of-line UTF-16 position is valid.
+                return currentCol == utf16Col ? std::optional<std::size_t>(utf8Offset) : std::nullopt;
             }
             currentLine++;
             currentCol = 0;
@@ -897,8 +897,8 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
 
         if (byte == '\n') {
             if (currentLine == line) {
-                // At end of target line
-                return utf8Offset;
+                // Only the exact end-of-line UTF-16 position is valid.
+                return currentCol == utf16Col ? std::optional<std::size_t>(utf8Offset) : std::nullopt;
             }
             currentLine++;
             currentCol = 0;
@@ -907,7 +907,7 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
         } else if (byte == '\r') {
             // CR not followed by LF - treat as line ending
             if (currentLine == line) {
-                return utf8Offset;
+                return currentCol == utf16Col ? std::optional<std::size_t>(utf8Offset) : std::nullopt;
             }
             currentLine++;
             currentCol = 0;
@@ -967,7 +967,7 @@ std::optional<std::size_t> LanguageServer::utf16ToUtf8(const std::string& text, 
     }
 
     // At end of text
-    if (currentLine == line && currentCol <= utf16Col) {
+    if (currentLine == line && currentCol == utf16Col) {
         return utf8Offset;
     }
 
@@ -1141,7 +1141,7 @@ std::optional<std::size_t> utf16ColumnToGraphemeColumn(const std::string& line, 
     }
 
     // At end of line
-    if (currentUtf16 <= utf16Col) {
+    if (currentUtf16 == utf16Col) {
         return graphemeCount;
     }
 
@@ -1153,13 +1153,12 @@ std::optional<std::size_t> utf16ColumnToGraphemeColumn(const std::string& line, 
 std::optional<std::size_t> utf16ColumnToLineOffset(const std::string& line, std::uint32_t utf16Col) {
     std::uint32_t currentUtf16 = 0;
     std::size_t pos = 0;
-    bool inSurrogatePair = false;
 
     while (pos < line.size()) {
         // Handle line endings within the line check
         if (line[pos] == '\n' || (line[pos] == '\r' && (pos + 1 >= line.size() || line[pos + 1] != '\n'))) {
             // End of line
-            if (currentUtf16 <= utf16Col) {
+            if (currentUtf16 == utf16Col) {
                 return pos; // Return end of line
             }
             break;
@@ -1204,7 +1203,7 @@ std::optional<std::size_t> utf16ColumnToLineOffset(const std::string& line, std:
     }
 
     // At end of line
-    if (currentUtf16 <= utf16Col) {
+    if (currentUtf16 == utf16Col) {
         return pos;
     }
 
@@ -3162,7 +3161,8 @@ std::vector<SymbolInformation> LanguageServer::getWorkspaceSymbols(const std::st
                                 CustomEmojiRegistry reg = registry_;
                                 Lexer lexer(source, reg);
                                 auto modTokens = lexer.tokenize();
-                                Parser parser(std::move(modTokens));
+                                auto parserTokens = modTokens;
+                                Parser parser(std::move(parserTokens));
                                 auto modProgram = parser.parse();
 
                                 // Extract symbols from this program

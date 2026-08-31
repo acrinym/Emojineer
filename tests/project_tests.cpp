@@ -1,4 +1,6 @@
 #include "emojineer/project.hpp"
+#include "emojineer/package_artifact.hpp"
+#include "emojineer/hash.hpp"
 #include "emojineer/registry_transport.hpp"
 
 #include <chrono>
@@ -348,7 +350,7 @@ void test_corrupted_offline_materialization_fails() {
     
     // Create lock file with the registry dependency pointing to corrupted package
     std::ofstream lock_out(root / "emojineer.lock");
-    lock_out << "lock_version = \"3\"\n";
+    lock_out << "lock_version = 3\n";
     lock_out << "manifest_hash = \"abc123def456\"\n";
     lock_out << "\n";
     lock_out << "[[registry]]\n";
@@ -360,7 +362,7 @@ void test_corrupted_offline_materialization_fails() {
     lock_out << "source = \"registry\"\n";
     lock_out << "name = \"mylib\"\n";
     lock_out << "version = \"1.0.0\"\n";
-    lock_out << "registry_alias = \"origin\"\n";
+    lock_out << "registry = \"origin\"\n";
     lock_out << "registry_id = \"origin-id\"\n";
     lock_out << "registry_endpoint = \"https://registry.example.com\"\n";
     lock_out << "requirement = \"^1.0.0\"\n";
@@ -390,6 +392,8 @@ void test_corrupted_offline_materialization_fails() {
         error_msg = e.what();
     }
     require(failed, "corrupted offline materialization should fail, not disappear from graph, got: " + error_msg);
+    require(error_msg == "manifest [package] requires name, version, and entry",
+            "corrupted materialization must fail for the intended manifest corruption, got: " + error_msg);
     
     std::filesystem::remove_all(root);
 }
@@ -424,6 +428,58 @@ void test_sync_project_check_project_no_stale_lock() {
     std::filesystem::remove_all(root);
 }
 
+
+void test_verify_or_repair_materialization_restores_sources() {
+    const auto root = temp_root("repair-materialization");
+    const auto source_root = root / "artifact-source";
+    const auto cache_root = root / "cache";
+    std::filesystem::remove_all(root);
+    emojineer::initialize_project(source_root, "mylib");
+
+    const auto bytes = emojineer::build_package_artifact_bytes(source_root);
+    const auto artifact = emojineer::parse_package_artifact(bytes);
+    const std::string endpoint = "https://registry.example.com";
+    const std::string registry_id = "origin-id";
+    const std::string registry_cache_key =
+        emojineer::sha256_hex(endpoint + "\n" + registry_id).substr(0, 32);
+    const auto cache_path = emojineer::package_cache_path(
+        cache_root / "registries" / registry_cache_key, artifact);
+    std::filesystem::create_directories(cache_path.parent_path());
+    write_text(cache_path, bytes);
+
+    const auto store_root = emojineer::package_store_root(root);
+    const auto package_path = store_root / "origin" / artifact.name / artifact.version /
+                              artifact.artifact_sha256;
+    std::filesystem::create_directories(package_path / "src");
+    write_text(package_path / "emojineer.toml", artifact.manifest);
+    write_text(package_path / artifact.entry, "📝 📜corrupt📜\n");
+    require(!emojineer::is_materialized_package_valid(package_path, artifact.content_sha256),
+            "fixture must begin corrupt");
+
+    emojineer::ProjectLock lock;
+    lock.version = "3";
+    emojineer::LockDependency dependency;
+    dependency.source = emojineer::LockSourceKind::Registry;
+    dependency.name = artifact.name;
+    dependency.version = artifact.version;
+    dependency.registry_alias = "origin";
+    dependency.registry_id = registry_id;
+    dependency.registry_endpoint = endpoint;
+    dependency.requirement = "^0.1.0";
+    dependency.artifact_sha256 = artifact.artifact_sha256;
+    dependency.content_sha256 = artifact.content_sha256;
+    dependency.store_path = package_path.generic_string();
+    lock.dependencies.push_back(dependency);
+
+    emojineer::verify_or_repair_materialization(root, lock, cache_root);
+    require(emojineer::is_materialized_package_valid(package_path, artifact.content_sha256),
+            "repair must restore exact materialized content");
+    require(std::filesystem::is_regular_file(package_path / artifact.entry),
+            "repair must restore artifact source files, not only the manifest");
+
+    std::filesystem::remove_all(root);
+}
+
 } // namespace
 
 int main() {
@@ -438,6 +494,7 @@ int main() {
         test_registry_path_dependency_rejected_offline();
         test_corrupted_offline_materialization_fails();
         test_sync_project_check_project_no_stale_lock();
+        test_verify_or_repair_materialization_restores_sources();
         std::cout << "✅ project workflow tests passed\n";
         return 0;
     } catch (const std::exception& error) {

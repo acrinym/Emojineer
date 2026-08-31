@@ -66,6 +66,12 @@ void test_artifact_is_deterministic_and_package_owned() {
             "artifact should expose content and whole-artifact SHA-256 identities");
 
     const auto before = a;
+    write_text(first.path / "app/.emojineer/packages/injected/0.1.0/hash/src/hidden.emoji",
+               "📝 📜package manager state📜\n");
+    const auto after_package_state = emojineer::build_package_artifact_bytes(first.path / "app");
+    require(before == after_package_state,
+            ".emojineer package-manager state must never affect package hash/artifact ownership");
+
     write_text(first.path / "app/deps/lib/src/main.emoji", "📝 📜dependency changed📜\n");
     const auto after_dependency_change =
         emojineer::build_package_artifact_bytes(first.path / "app");
