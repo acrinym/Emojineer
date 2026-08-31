@@ -33,10 +33,10 @@ for old, new in replacements:
 # JSON permits escaping solidus as `\/`. The production serializer deliberately
 # does that, so tests must verify the semantic method name without requiring one
 # particular serialized spelling. Normalize every response-variable assertion.
-pattern = re.compile(
+method_pattern = re.compile(
     r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("textDocument/publishDiagnostics"\) != std::string::npos'
 )
-text, count = pattern.subn(
+text, method_count = method_pattern.subn(
     lambda m: (
         f'{m.group("expr")}.find("textDocument") != std::string::npos &&\n'
         f'           {m.group("expr")}.find("publishDiagnostics") != std::string::npos'
@@ -57,18 +57,7 @@ if new_source not in text:
         raise SystemExit("supplementary diagnostic fixture anchor missing")
     text = text.replace(old_source, new_source, 1)
 
-old_range_comment = '''    // The diagnostic should cover the whole expression, with positions accounting for
-    // the 2 UTF-16 units per supplementary-plane emoji
-    assert(body.find("\\\"range\\\"") != std::string::npos &&
-           "Diagnostic must have range");
-
-    // The start character should be 0 (beginning of document)
-    // The end character should account for all the supplementary emojis
-    // Grapheme count: 10 (🐍, space, 🍎, space, 🔢, space, 🟰, space, 4, 2)
-    // UTF-16 count: 14 (🐍=2, space=1, 🍎=2, space=1, 🔢=2, space=1, 🟰=2, space=1, 4=1, 2=1 = 14)
-    // We verify the positions are in UTF-16, not byte offsets or grapheme columns
-'''
-new_range_comment = '''    // The invalid '@' follows four supplementary-plane emoji. In UTF-16 its exact
+new_range_block = '''    // The invalid '@' follows four supplementary-plane emoji. In UTF-16 its exact
     // range is [15, 16): four emoji contribute 8 code units; five spaces plus two
     // digits before '@' contribute the remaining 7. This proves the server is not
     // reporting a byte offset or grapheme column.
@@ -80,11 +69,19 @@ new_range_comment = '''    // The invalid '@' follows four supplementary-plane e
            "Diagnostic must end at UTF-16 character 16");
     assert(body.find("unexpected grapheme") != std::string::npos &&
            "Diagnostic must come from the intentionally invalid grapheme");
-'''
-if new_range_comment not in text:
-    if old_range_comment not in text:
-        raise SystemExit("supplementary diagnostic range assertion block missing")
-    text = text.replace(old_range_comment, new_range_comment, 1)
+
+    // Clean shutdown'''
+
+if "Diagnostic must start at UTF-16 character 15" not in text:
+    range_pattern = re.compile(
+        r'    // The diagnostic should cover the whole expression, with positions accounting for\n'
+        r'.*?'
+        r'    // Clean shutdown',
+        re.DOTALL,
+    )
+    text, range_count = range_pattern.subn(new_range_block, text, count=1)
+    if range_count != 1:
+        raise SystemExit(f"supplementary diagnostic structural block matches: {range_count}")
 
 # Keep generated edits patch-clean even when the replaced source had spaces
 # before its original continuation/newline.
@@ -94,4 +91,4 @@ if had_final_newline:
     text += "\n"
 
 path.write_text(text)
-print(f"repaired: typed capability model, {count} publishDiagnostics assertion(s), and exact supplementary diagnostic E2E")
+print(f"repaired: typed capability model, {method_count} publishDiagnostics assertion(s), and exact supplementary diagnostic E2E")
