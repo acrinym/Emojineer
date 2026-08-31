@@ -98,10 +98,29 @@ if "Diagnostic must start at UTF-16 character 15" not in function:
         raise SystemExit(f"strict supplementary diagnostic range block matches: {range_count}")
 text = text[:function_start] + function + text[function_end:]
 
+# The hover E2E previously requested UTF-16 character 2, which is the ASCII
+# space after the two-unit 🐍. 🍎 starts at character 3. Scope the correction
+# to the real hover test so other position fixtures remain untouched.
+hover_start = text.find("void test_e2e_real_hover()")
+if hover_start == -1:
+    raise SystemExit("real hover E2E function missing")
+hover_end = text.find("void test_e2e_real_definition()", hover_start)
+if hover_end == -1:
+    raise SystemExit("real hover E2E end marker missing")
+hover = text[hover_start:hover_end]
+old_hover = '"position":{"line":0,"character":2}'
+new_hover = '"position":{"line":0,"character":3}'
+if new_hover not in hover:
+    if old_hover not in hover:
+        raise SystemExit("real hover UTF-16 coordinate anchor missing")
+    hover = hover.replace(old_hover, new_hover, 1)
+hover = hover.replace("UTF-16 position 2-3", "UTF-16 position 3-4")
+text = text[:hover_start] + hover + text[hover_end:]
+
 # Keep generated edits patch-clean.
 had_final_newline = text.endswith("\n")
 text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), and targeted supplementary diagnostic E2E")
+print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, and hover UTF-16 coordinate")
