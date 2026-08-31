@@ -94,9 +94,31 @@ def rewrite_real_request_coordinate(text: str, function_name: str, method: str, 
 text = rewrite_real_request_coordinate(text, "test_e2e_real_hover", "textDocument/hover", "test_e2e_real_definition")
 text = rewrite_real_request_coordinate(text, "test_e2e_real_references", "textDocument/references", "test_e2e_real_document_symbols")
 
+# The mixed-workspace E2E builds JSON requests by concatenating mainUri into raw
+# string literals. Every suffix omitted the URI's closing quote, so the server
+# correctly returned JSON-RPC parse/invalid-request errors instead of results.
+mixed_def = re.search(r'void\s+test_e2e_real_mixed_workspace\s*\(\s*\)\s*\{', text)
+if not mixed_def:
+    raise SystemExit("mixed workspace E2E definition missing")
+mixed_end = text.find("#endif // EMOJINEER_HAVE_POSIX_PROCESS", mixed_def.end())
+if mixed_end == -1:
+    raise SystemExit("mixed workspace E2E end marker missing")
+mixed = text[mixed_def.start():mixed_end]
+broken_uri = '+ mainUri + R"('
+fixed_uri = '+ mainUri + R"("'
+if broken_uri in mixed:
+    mixed, mixed_uri_count = re.subn(r'\+ mainUri \+ R"\((?!")', '+ mainUri + R"("', mixed)
+else:
+    mixed_uri_count = 0
+if '+ mainUri + R"(' in mixed and '+ mainUri + R"("' not in mixed:
+    raise SystemExit("mixed workspace URI closures were not repaired")
+if mixed_uri_count == 0 and fixed_uri not in mixed:
+    raise SystemExit("mixed workspace dynamic URI anchors missing")
+text = text[:mixed_def.start()] + mixed + text[mixed_end:]
+
 had_final_newline = text.endswith("\n")
 text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, hover UTF-16 coordinate, and references UTF-16 coordinate")
+print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), targeted supplementary diagnostic E2E, hover/references UTF-16 coordinates, and {mixed_uri_count} mixed-workspace URI closure(s)")
