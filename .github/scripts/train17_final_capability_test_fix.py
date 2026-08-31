@@ -22,7 +22,6 @@ replacements = [
         "    assert(caps.completionProvider.has_value());\n    assert(!caps.completionProvider->resolveProvider);",
     ),
 ]
-
 for old, new in replacements:
     if new in text:
         continue
@@ -30,9 +29,7 @@ for old, new in replacements:
         raise SystemExit(f"capability test anchor missing: {old}")
     text = text.replace(old, new, 1)
 
-# JSON permits escaping solidus as `\/`. The production serializer deliberately
-# does that, so tests must verify the semantic method name without requiring one
-# particular serialized spelling. Normalize every response-variable assertion.
+# JSON may legally escape solidus. Do not make protocol tests depend on one spelling.
 method_pattern = re.compile(
     r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("textDocument/publishDiagnostics"\) != std::string::npos'
 )
@@ -46,8 +43,20 @@ text, method_count = method_pattern.subn(
 if 'find("textDocument/publishDiagnostics")' in text:
     raise SystemExit("remaining brittle publishDiagnostics JSON slash assertion")
 
-# Rewrite the source ONLY inside the strict supplementary-diagnostic E2E. The
-# file contains another identical source literal in a looser UTF-16 smoke test.
+uri_pattern = re.compile(
+    r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("file:///test/main\.emoji"\) != std::string::npos'
+)
+text, uri_count = uri_pattern.subn(
+    lambda m: (
+        f'({m.group("expr")}.find("file:///test/main.emoji") != std::string::npos ||\n'
+        f'            {m.group("expr")}.find("file:\\\/\\\/\\\/test\\\/main.emoji") != std::string::npos)'
+    ),
+    text,
+)
+if '.find("file:///test/main.emoji") != std::string::npos' in text:
+    raise SystemExit("remaining brittle file URI solidus assertion")
+
+# Rewrite the source ONLY inside the strict supplementary-diagnostic E2E.
 function_start = text.find("void test_e2e_real_supplementary_emoji_diagnostics()")
 if function_start == -1:
     raise SystemExit("supplementary diagnostic E2E function missing")
@@ -84,7 +93,6 @@ if "Diagnostic must start at UTF-16 character 15" not in function:
     function, range_count = range_pattern.subn(new_range_block, function, count=1)
     if range_count != 1:
         raise SystemExit(f"strict supplementary diagnostic range block matches: {range_count}")
-
 text = text[:function_start] + function + text[function_end:]
 
 # Keep generated edits patch-clean.
@@ -92,6 +100,5 @@ had_final_newline = text.endswith("\n")
 text = "\n".join(line.rstrip() for line in text.splitlines())
 if had_final_newline:
     text += "\n"
-
 path.write_text(text)
-print(f"repaired: typed capability model, {method_count} publishDiagnostics assertion(s), and targeted supplementary diagnostic E2E")
+print(f"repaired: typed capability model, {method_count} method assertion(s), {uri_count} URI assertion(s), and targeted supplementary diagnostic E2E")
