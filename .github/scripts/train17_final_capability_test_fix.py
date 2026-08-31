@@ -24,14 +24,26 @@ replacements = [
         '    assert(framed.find("textDocument/publishDiagnostics") != std::string::npos);',
         '    assert(framed.find("textDocument") != std::string::npos &&\n           framed.find("publishDiagnostics") != std::string::npos &&\n           "published notification method must survive JSON serialization");',
     ),
+    (
+        '    assert(diagResponse.find("textDocument/publishDiagnostics") != std::string::npos &&\n           "Expected publishDiagnostics method");',
+        '    assert(diagResponse.find("textDocument") != std::string::npos &&\n           diagResponse.find("publishDiagnostics") != std::string::npos &&\n           "Expected publishDiagnostics method");',
+    ),
 ]
 
 for old, new in replacements:
     if new in text:
         continue
     if old not in text:
-        raise SystemExit(f"capability/diagnostic test anchor missing: {old}")
-    text = text.replace(old, new, 1)
+        # Some anchors may already have been repaired by an earlier run; only fail for
+        # the capability model anchors that must exist on the unqualified branch.
+        if old.startswith("    caps.") or old.startswith("    assert(*caps"):
+            raise SystemExit(f"capability test anchor missing: {old}")
+        continue
+    text = text.replace(old, new)
+
+# Guard against any remaining assertion that requires an unescaped JSON slash spelling.
+if 'find("textDocument/publishDiagnostics")' in text:
+    raise SystemExit("remaining brittle publishDiagnostics JSON slash assertion")
 
 path.write_text(text)
-print("repaired: typed capability tests and serialization-agnostic diagnostic publication regression")
+print("repaired: typed capability tests and serialization-agnostic publishDiagnostics assertions")
