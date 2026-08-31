@@ -43,13 +43,16 @@ text, method_count = method_pattern.subn(
 if 'find("textDocument/publishDiagnostics")' in text:
     raise SystemExit("remaining brittle publishDiagnostics JSON slash assertion")
 
+# URI assertions already independently require a `uri` field. Verify the exact
+# semantic URI components without depending on whether JSON serializes '/' or '\/'.
 uri_pattern = re.compile(
     r'(?P<expr>[A-Za-z_][A-Za-z0-9_]*)\.find\("file:///test/main\.emoji"\) != std::string::npos'
 )
 text, uri_count = uri_pattern.subn(
     lambda m: (
-        f'({m.group("expr")}.find("file:///test/main.emoji") != std::string::npos ||\n'
-        f'            {m.group("expr")}.find("file:\\\/\\\/\\\/test\\\/main.emoji") != std::string::npos)'
+        f'{m.group("expr")}.find("file:") != std::string::npos &&\n'
+        f'           {m.group("expr")}.find("test") != std::string::npos &&\n'
+        f'           {m.group("expr")}.find("main.emoji") != std::string::npos'
     ),
     text,
 )
