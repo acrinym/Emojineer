@@ -31,9 +31,12 @@ jobs:
         run: |
           git merge-base --is-ancestor a668b63408cd96825a486486942ea7eabbde0fc3 HEAD
           test -f .github/scripts/train17-fresh-review-repair.py
+          test -f .github/scripts/train17-release-test-repair.py
 
       - name: Apply fresh exact-head review repairs
-        run: python3 .github/scripts/train17-fresh-review-repair.py
+        run: |
+          python3 .github/scripts/train17-fresh-review-repair.py
+          python3 .github/scripts/train17-release-test-repair.py
 
       - name: Patch hygiene
         run: git diff --check
