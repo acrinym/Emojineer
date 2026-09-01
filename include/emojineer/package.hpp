@@ -41,4 +41,10 @@ PackageGraph resolve_package_graph(const std::filesystem::path& root,
                                    const std::filesystem::path& store_root,
                                    bool offline = false);
 
+// Compute the canonical content hash for a registry package.
+// This uses the production authority (EMOJINEER-PACKAGE-v1 framing) to compute
+// the hash that will be used in lock files for content integrity verification.
+std::string compute_registry_package_hash(const std::filesystem::path& package_root,
+                                          const ProjectManifest& manifest);
+
 } // namespace emojineer

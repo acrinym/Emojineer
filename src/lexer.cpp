@@ -1,5 +1,6 @@
 #include "emojineer/lexer.hpp"
 #include "emojineer/unicode.hpp"
+#include "emojineer/source_diagnostic.hpp"
 #include <cctype>
 #include <sstream>
 #include <stdexcept>
@@ -30,12 +31,12 @@ std::vector<Token> Lexer::tokenize() const {
         if(g.display=="\n"){out.push_back({TokenKind::Newline,"\n","\n","",line,col});++line;col=1;++i;continue;}
         if(space(g)){++col;++i;continue;}
         if(g.canonical==comment){while(i<gs.size()&&gs[i].display!="\n"){++i;++col;}continue;}
-        if(g.canonical==fence){size_t sl=line,sc=col;std::string lit,lex=g.display;++i;++col;bool closed=false;while(i<gs.size()){const auto&p=gs[i];if(p.canonical==fence){lex+=p.display;++i;++col;closed=true;break;}if(p.display=="\n"){++line;col=1;}else ++col;lit+=p.display;lex+=p.display;++i;}if(!closed)throw std::runtime_error("line "+std::to_string(sl)+", column "+std::to_string(sc)+": unterminated 📜 string literal");out.push_back({TokenKind::String,lex,fence,lit,sl,sc});continue;}
-        if(digit(g)){size_t sc=col;bool dot=false;std::string num;while(i<gs.size()){const auto&p=gs[i];if(digit(p)){num+=p.display;++i;++col;continue;}if(p.display=="."&&!dot){dot=true;num+='.';++i;++col;continue;}break;}if(!num.empty()&&num.back()=='.')throw std::runtime_error("line "+std::to_string(line)+": number cannot end with '.'");out.push_back({TokenKind::Number,num,num,num,line,sc});continue;}
+        if(g.canonical==fence){size_t sl=line,sc=col;std::string lit,lex=g.display;++i;++col;bool closed=false;while(i<gs.size()){const auto&p=gs[i];if(p.canonical==fence){lex+=p.display;++i;++col;closed=true;break;}if(p.display=="\n"){++line;col=1;}else ++col;lit+=p.display;lex+=p.display;++i;}if(!closed)throw SourceLocationException("unterminated 📜 string literal",{},sl,sc,lex);out.push_back({TokenKind::String,lex,fence,lit,sl,sc});continue;}
+        if(digit(g)){size_t sc=col;bool dot=false;std::string num;while(i<gs.size()){const auto&p=gs[i];if(digit(p)){num+=p.display;++i;++col;continue;}if(p.display=="."&&!dot){dot=true;num+='.';++i;++col;continue;}break;}if(!num.empty()&&num.back()=='.')throw SourceLocationException("number cannot end with '.'",{},line,sc,num);out.push_back({TokenKind::Number,num,num,num,line,sc});continue;}
         size_t consumed=0;const auto* def=registry_.match(gs,i,consumed);
         if(def){const size_t sc=col;std::string lex=join_display(gs,i,consumed),canon=join_canonical(gs,i,consumed);out.push_back({def->kind,lex,canon,"",line,sc});i+=consumed;col+=consumed;continue;}
         if(is_emoji_grapheme(g.canonical)){out.push_back({TokenKind::Identifier,g.display,g.canonical,g.canonical,line,col});++i;++col;continue;}
-        std::ostringstream msg;msg<<"line "<<line<<", column "<<col<<": unexpected grapheme '"<<g.display<<"' ("<<codepoints_hex(g.display)<<")";throw std::runtime_error(msg.str());
+        std::ostringstream msg;msg<<"unexpected grapheme '"<<g.display<<"' ("<<codepoints_hex(g.display)<<")";throw SourceLocationException(msg.str(),{},line,col,g.display);
     }
     out.push_back({TokenKind::Eof,"","","",line,col});return out;
 }

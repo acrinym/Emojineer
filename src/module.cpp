@@ -5,6 +5,8 @@
 #include "emojineer/lexer.hpp"
 #include "emojineer/package.hpp"
 #include "emojineer/parser.hpp"
+#include "emojineer/project.hpp"
+#include "emojineer/source_diagnostic.hpp"
 #include "emojineer/stdlib.hpp"
 
 #include <algorithm>
@@ -60,20 +62,39 @@ std::string read_text(const std::filesystem::path& path) {
 
 ast::Program parse_text(const std::string& source,
                         const CustomEmojiRegistry& registry,
-                        const std::string& identity) {
+                        const std::string& identity,
+                        const std::filesystem::path& sourcePath = {}) {
     try {
         Lexer lexer(source, registry);
         Parser parser(lexer.tokenize());
         return parser.parse();
+    } catch (const SourceLocationException& sle) {
+        // Preserve typed source errors, attaching the sourceIdentity and real sourcePath separately.
+        // sourcePath should be an actual filesystem path, identity is the module identity (e.g., "pkg:foo/src/main.emoji")
+        if (sle.sourcePath.empty()) {
+            throw SourceLocationException(sle.message, sourcePath, identity, sle.line, sle.column, sle.tokenLexeme);
+        }
+        throw;
     } catch (const std::exception& error) {
         throw std::runtime_error("module '" + identity + "': " + error.what());
     }
 }
 
+// Parse source from a path, optionally using a SourceProvider for in-memory overlays.
+// If source_provider is provided and returns a value, use that instead of reading from disk.
 ast::Program parse_source(const std::filesystem::path& path,
                           const CustomEmojiRegistry& registry,
-                          const std::string& identity) {
-    return parse_text(read_text(path), registry, identity);
+                          const std::string& identity,
+                          SourceProvider source_provider = {}) {
+    // First check if the source provider has the content
+    if (source_provider) {
+        auto overlay = source_provider(path);
+        if (overlay) {
+            return parse_text(*overlay, registry, identity, path);
+        }
+    }
+    // Fall back to reading from disk
+    return parse_text(read_text(path), registry, identity, path);
 }
 
 bool has_module_syntax_stmt(const ast::Stmt& stmt) {
@@ -132,22 +153,22 @@ std::string internal_name(const ModuleUnit& unit, const std::string& source_name
 }
 
 void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
+                                 const std::filesystem::path& source_path,
                                  const std::string& identity) {
     for (const auto& stmt : block) {
         if (dynamic_cast<const ast::ModuleDecl*>(stmt.get()) ||
             dynamic_cast<const ast::ImportStmt*>(stmt.get()) ||
             dynamic_cast<const ast::ExportStmt*>(stmt.get())) {
-            throw std::runtime_error("module '" + identity + "' line " +
-                                     std::to_string(stmt->line) +
-                                     ": 🧩, 🔗, and 📤 are top-level only");
+            throw SourceLocationException("🧩, 🔗, and 📤 are top-level only",
+                                             source_path, identity, stmt->line, 1);
         }
         if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
-            reject_nested_module_syntax(branch->then_branch, identity);
-            reject_nested_module_syntax(branch->else_branch, identity);
+            reject_nested_module_syntax(branch->then_branch, source_path, identity);
+            reject_nested_module_syntax(branch->else_branch, source_path, identity);
         } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
-            reject_nested_module_syntax(loop->body, identity);
+            reject_nested_module_syntax(loop->body, source_path, identity);
         } else if (const auto* fn = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
-            reject_nested_module_syntax(fn->body, identity);
+            reject_nested_module_syntax(fn->body, source_path, identity);
         }
     }
 }
@@ -245,12 +266,12 @@ void analyze_unit(ModuleUnit& unit) {
 
     for (const auto& stmt : unit.program.statements) {
         if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
-            reject_nested_module_syntax(branch->then_branch, unit.identity);
-            reject_nested_module_syntax(branch->else_branch, unit.identity);
+            reject_nested_module_syntax(branch->then_branch, unit.path, unit.identity);
+            reject_nested_module_syntax(branch->else_branch, unit.path, unit.identity);
         } else if (const auto* loop = dynamic_cast<const ast::WhileStmt*>(stmt.get())) {
-            reject_nested_module_syntax(loop->body, unit.identity);
+            reject_nested_module_syntax(loop->body, unit.path, unit.identity);
         } else if (const auto* fn = dynamic_cast<const ast::FunctionDecl*>(stmt.get())) {
-            reject_nested_module_syntax(fn->body, unit.identity);
+            reject_nested_module_syntax(fn->body, unit.path, unit.identity);
         }
     }
     collect_module_globals(unit.program.statements, unit);
@@ -385,10 +406,12 @@ class ModuleLinker {
 public:
     ModuleLinker(std::filesystem::path root,
                  CustomEmojiRegistry registry,
-                 std::optional<PackageGraph> package_graph)
+                 std::optional<PackageGraph> package_graph,
+                 SourceProvider source_provider = {})
         : root_(std::move(root)),
           registry_(std::move(registry)),
-          package_graph_(std::move(package_graph)) {}
+          package_graph_(std::move(package_graph)),
+          source_provider_(std::move(source_provider)) {}
 
     Chunk compile(const std::filesystem::path& entry) {
         std::vector<std::string> stack;
@@ -498,47 +521,51 @@ private:
                                                const ImportSpec& spec) const {
         const std::filesystem::path requested(spec.requested);
         if (requested.empty() || requested.is_absolute()) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) +
-                                     ": 🔗 import path must be non-empty and relative");
+            throw SourceLocationException("🔗 import path must be non-empty and relative",
+                                             importer.path, importer.identity, spec.line, 1);
         }
         if (spec.requested.find('\\') != std::string::npos) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) +
-                                     ": 🔗 import paths must use portable forward slashes");
+            throw SourceLocationException("🔗 import paths must use portable forward slashes",
+                                             importer.path, importer.identity, spec.line, 1);
         }
         if (requested.extension() != ".emoji") {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) +
-                                     ": 🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>");
+            throw SourceLocationException("🔗 import must target a .emoji source file, pkg:<dependency>/<module>.emoji, or std:<module>",
+                                             importer.path, importer.identity, spec.line, 1);
         }
         const auto candidate = importer.path.parent_path() / requested;
         if (!std::filesystem::exists(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) + ": imported module '" +
-                                     spec.requested + "' does not exist");
+            throw SourceLocationException("imported module '" + spec.requested + "' does not exist",
+                                             importer.path, importer.identity, spec.line, 1, spec.requested);
         }
         if (!std::filesystem::is_regular_file(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
-                                     std::to_string(spec.line) + ": imported module '" +
-                                     spec.requested + "' is not a regular file");
+            throw SourceLocationException("imported module '" + spec.requested + "' is not a regular file",
+                                             importer.path, importer.identity, spec.line, 1, spec.requested);
         }
         const auto canonical = std::filesystem::canonical(candidate);
         const std::string context = "module '" + importer.identity + "' line " +
                                     std::to_string(spec.line) + ": 🔗 import";
-        require_owned_path(importer.package_name, canonical, context);
+        try {
+            require_owned_path(importer.package_name, canonical, context);
+        } catch (const std::runtime_error& error) {
+            throw SourceLocationException(error.what(), importer.path, importer.identity,
+                                          spec.line, 1, spec.requested);
+        }
         return canonical;
     }
 
     ResolvedSourceImport resolve_package_import(const ModuleUnit& importer,
                                                 const ImportSpec& spec) const {
+        const auto fail = [&](const std::string& message) -> void {
+            throw SourceLocationException(message, importer.path, importer.identity,
+                                          spec.line, 1, spec.requested);
+        };
         if (!package_graph_) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: imports require an enclosing emojineer.toml package graph");
         }
         if (spec.requested.find('\\') != std::string::npos) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: import paths must use portable forward slashes");
         }
@@ -546,7 +573,7 @@ private:
         const std::string coordinate = spec.requested.substr(4);
         const auto slash = coordinate.find('/');
         if (slash == std::string::npos || slash == 0 || slash + 1 >= coordinate.size()) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: import must use pkg:<dependency>/<module>.emoji");
         }
@@ -554,7 +581,7 @@ private:
         const std::string module_path_text = coordinate.substr(slash + 1);
         const std::filesystem::path module_path(module_path_text);
         if (module_path.empty() || module_path.is_absolute() || module_path.extension() != ".emoji") {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: import must target a relative .emoji source file");
         }
@@ -565,7 +592,7 @@ private:
         }
         if (std::find(importer_package->dependencies.begin(), importer_package->dependencies.end(),
                       dependency_name) == importer_package->dependencies.end()) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": package '" +
                                      importer.package_name + "' does not declare direct dependency '" +
                                      dependency_name + "'");
@@ -578,25 +605,25 @@ private:
         }
         const auto candidate = dependency->root / module_path;
         if (!std::filesystem::exists(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": package module '" +
                                      spec.requested + "' does not exist");
         }
         if (!std::filesystem::is_regular_file(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": package module '" +
                                      spec.requested + "' is not a regular file");
         }
         const auto canonical = std::filesystem::canonical(candidate);
         if (!within(dependency->root, canonical)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": pkg: import escapes dependency '" +
                                      dependency_name + "' root");
         }
         const auto* owner = owner_for_path(canonical);
         if (!owner || owner->name != dependency_name) {
             const std::string nested = owner ? owner->name : std::string("unknown");
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": pkg: import through '" +
                                      dependency_name + "' targets nested package '" + nested +
                                      "'; import that package through its own declared coordinate");
@@ -665,7 +692,7 @@ private:
         unit.package_root = package_root(package_name);
         unit.package_name = package_name;
         unit.identity = identity;
-        unit.program = parse_source(canonical, registry_, identity);
+        unit.program = parse_source(canonical, registry_, identity, source_provider_);
         analyze_unit(unit);
         register_unit(std::move(unit));
 
@@ -745,6 +772,7 @@ private:
     std::filesystem::path root_;
     CustomEmojiRegistry registry_;
     std::optional<PackageGraph> package_graph_;
+    SourceProvider source_provider_;
     std::unordered_map<std::string, ModuleUnit> units_;
     std::unordered_map<std::string, VisitState> states_;
     std::unordered_map<std::string, std::string> module_names_;
@@ -755,7 +783,8 @@ private:
 
 Chunk compile_file(const std::filesystem::path& raw_entry,
                    CustomEmojiRegistry registry,
-                   std::filesystem::path raw_root) {
+                   std::filesystem::path raw_root,
+                   SourceProvider source_provider) {
     if (!std::filesystem::exists(raw_entry)) {
         throw std::runtime_error("entry source does not exist: " + raw_entry.string());
     }
@@ -771,7 +800,7 @@ Chunk compile_file(const std::filesystem::path& raw_entry,
     if (!within(root, entry)) throw std::runtime_error("entry source escapes the module root");
 
     const std::string identity = identity_for(root, entry);
-    ast::Program entry_program = parse_source(entry, registry, identity);
+    ast::Program entry_program = parse_source(entry, registry, identity, source_provider);
     if (!has_module_syntax(entry_program)) {
         Compiler compiler;
         return compiler.compile(entry_program);
@@ -779,10 +808,11 @@ Chunk compile_file(const std::filesystem::path& raw_entry,
 
     std::optional<PackageGraph> package_graph;
     if (std::filesystem::is_regular_file(root / "emojineer.toml")) {
-        package_graph = resolve_package_graph(root);
+        const auto manifest = load_project_manifest(root / "emojineer.toml");
+        package_graph = resolve_package_graph(root, manifest, package_store_root(root), true);
     }
 
-    ModuleLinker linker(root, std::move(registry), std::move(package_graph));
+    ModuleLinker linker(root, std::move(registry), std::move(package_graph), std::move(source_provider));
     return linker.compile(entry);
 }
 
