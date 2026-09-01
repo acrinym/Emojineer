@@ -544,19 +544,28 @@ private:
         const auto canonical = std::filesystem::canonical(candidate);
         const std::string context = "module '" + importer.identity + "' line " +
                                     std::to_string(spec.line) + ": 🔗 import";
-        require_owned_path(importer.package_name, canonical, context);
+        try {
+            require_owned_path(importer.package_name, canonical, context);
+        } catch (const std::runtime_error& error) {
+            throw SourceLocationException(error.what(), importer.path, importer.identity,
+                                          spec.line, 1, spec.requested);
+        }
         return canonical;
     }
 
     ResolvedSourceImport resolve_package_import(const ModuleUnit& importer,
                                                 const ImportSpec& spec) const {
+        const auto fail = [&](const std::string& message) -> void {
+            throw SourceLocationException(message, importer.path, importer.identity,
+                                          spec.line, 1, spec.requested);
+        };
         if (!package_graph_) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: imports require an enclosing emojineer.toml package graph");
         }
         if (spec.requested.find('\\') != std::string::npos) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: import paths must use portable forward slashes");
         }
@@ -564,7 +573,7 @@ private:
         const std::string coordinate = spec.requested.substr(4);
         const auto slash = coordinate.find('/');
         if (slash == std::string::npos || slash == 0 || slash + 1 >= coordinate.size()) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: import must use pkg:<dependency>/<module>.emoji");
         }
@@ -572,7 +581,7 @@ private:
         const std::string module_path_text = coordinate.substr(slash + 1);
         const std::filesystem::path module_path(module_path_text);
         if (module_path.empty() || module_path.is_absolute() || module_path.extension() != ".emoji") {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) +
                                      ": pkg: import must target a relative .emoji source file");
         }
@@ -583,7 +592,7 @@ private:
         }
         if (std::find(importer_package->dependencies.begin(), importer_package->dependencies.end(),
                       dependency_name) == importer_package->dependencies.end()) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": package '" +
                                      importer.package_name + "' does not declare direct dependency '" +
                                      dependency_name + "'");
@@ -596,25 +605,25 @@ private:
         }
         const auto candidate = dependency->root / module_path;
         if (!std::filesystem::exists(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": package module '" +
                                      spec.requested + "' does not exist");
         }
         if (!std::filesystem::is_regular_file(candidate)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": package module '" +
                                      spec.requested + "' is not a regular file");
         }
         const auto canonical = std::filesystem::canonical(candidate);
         if (!within(dependency->root, canonical)) {
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": pkg: import escapes dependency '" +
                                      dependency_name + "' root");
         }
         const auto* owner = owner_for_path(canonical);
         if (!owner || owner->name != dependency_name) {
             const std::string nested = owner ? owner->name : std::string("unknown");
-            throw std::runtime_error("module '" + importer.identity + "' line " +
+            fail("module '" + importer.identity + "' line " +
                                      std::to_string(spec.line) + ": pkg: import through '" +
                                      dependency_name + "' targets nested package '" + nested +
                                      "'; import that package through its own declared coordinate");

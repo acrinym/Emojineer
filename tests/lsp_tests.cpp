@@ -13,6 +13,8 @@
 #include <cstring>
 #include <fstream>
 #include <chrono>
+#include <cerrno>
+#include <cctype>
 
 // Platform-specific headers for process management
 // These are only available on POSIX systems
@@ -497,8 +499,10 @@ public:
     int stdinFd_;
     int stdoutFd_;
     bool isRunning_;
+    std::string receiveBuffer_;
 
-    LspServerProcess() : pid_(-1), stdinFd_(-1), stdoutFd_(-1), isRunning_(false) {}
+    LspServerProcess()
+        : pid_(-1), stdinFd_(-1), stdoutFd_(-1), isRunning_(false), receiveBuffer_() {}
 
     ~LspServerProcess() {
         if (isRunning_) {
@@ -547,6 +551,7 @@ public:
         // Set non-blocking
         fcntl(stdoutFd_, F_SETFL, fcntl(stdoutFd_, F_GETFL) | O_NONBLOCK);
 
+        receiveBuffer_.clear();
         isRunning_ = true;
         return true;
     }
@@ -568,16 +573,53 @@ public:
             stdoutFd_ = -1;
         }
         isRunning_ = false;
+        receiveBuffer_.clear();
     }
 
     // Send a framed JSON-RPC message
     bool sendMessage(const std::string& jsonBody) {
         if (!isRunning_ || stdinFd_ < 0) return false;
 
-        // Calculate the actual byte length of the JSON body
         std::string framed = "Content-Length: " + std::to_string(jsonBody.size()) + "\r\n\r\n" + jsonBody;
-        ssize_t written = write(stdinFd_, framed.data(), framed.size());
-        return written == static_cast<ssize_t>(framed.size());
+        std::size_t offset = 0;
+        while (offset < framed.size()) {
+            const ssize_t written = write(stdinFd_, framed.data() + offset, framed.size() - offset);
+            if (written > 0) {
+                offset += static_cast<std::size_t>(written);
+                continue;
+            }
+            if (written < 0 && errno == EINTR) continue;
+            return false;
+        }
+        return true;
+    }
+
+    std::optional<std::string> popBufferedFrame() {
+        const std::size_t headerEnd = receiveBuffer_.find("\r\n\r\n");
+        if (headerEnd == std::string::npos) return std::nullopt;
+
+        const std::string headers = receiveBuffer_.substr(0, headerEnd);
+        const std::string marker = "Content-Length:";
+        const std::size_t clPos = headers.find(marker);
+        if (clPos == std::string::npos) return std::nullopt;
+
+        std::size_t pos = clPos + marker.size();
+        while (pos < headers.size() && (headers[pos] == ' ' || headers[pos] == '\t')) ++pos;
+        const std::size_t digitsStart = pos;
+        std::size_t contentLength = 0;
+        while (pos < headers.size() && std::isdigit(static_cast<unsigned char>(headers[pos]))) {
+            contentLength = contentLength * 10 + static_cast<std::size_t>(headers[pos] - '0');
+            ++pos;
+        }
+        if (pos == digitsStart) return std::nullopt;
+
+        const std::size_t bodyStart = headerEnd + 4;
+        const std::size_t frameSize = bodyStart + contentLength;
+        if (receiveBuffer_.size() < frameSize) return std::nullopt;
+
+        std::string frame = receiveBuffer_.substr(0, frameSize);
+        receiveBuffer_.erase(0, frameSize);
+        return frame;
     }
 
     // Read a framed JSON-RPC response
@@ -585,81 +627,35 @@ public:
     std::string readResponse(int timeoutMs = 5000) {
         if (!isRunning_ || stdoutFd_ < 0) return "";
 
-        std::string response;
-        std::string header;
-        fd_set readfds;
-        struct timeval tv;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+        while (true) {
+            if (auto frame = popBufferedFrame()) return *frame;
+            if (std::chrono::steady_clock::now() >= deadline) return "";
 
-        // First, read headers until we see \r\n\r\n
-        bool foundEndOfHeaders = false;
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-
-        while (!foundEndOfHeaders && std::chrono::steady_clock::now() < deadline) {
+            fd_set readfds;
             FD_ZERO(&readfds);
             FD_SET(stdoutFd_, &readfds);
-            tv.tv_sec = 0;
-            tv.tv_usec = 10000; // 10ms
-
-            int ret = select(stdoutFd_ + 1, &readfds, nullptr, nullptr, &tv);
-            if (ret > 0) {
-                char buf[256];
-                ssize_t n = read(stdoutFd_, buf, sizeof(buf) - 1);
-                if (n > 0) {
-                    buf[n] = '\0';
-                    header += buf;
-
-                    // Check for end of headers
-                    size_t endPos = header.find("\r\n\r\n");
-                    if (endPos != std::string::npos) {
-                        foundEndOfHeaders = true;
-                        response = header;
-                    }
-                } else if (n == 0) {
-                    break; // EOF
-                }
-            }
-        }
-
-        if (!foundEndOfHeaders) return "";
-
-        // Parse Content-Length
-        size_t contentLength = 0;
-        size_t clPos = response.find("Content-Length:");
-        if (clPos != std::string::npos) {
-            size_t valPos = clPos + 15;
-            while (valPos < response.size() && (response[valPos] == ' ' || response[valPos] == '\t')) valPos++;
-            while (valPos < response.size() && std::isdigit(static_cast<unsigned char>(response[valPos]))) {
-                contentLength = contentLength * 10 + (response[valPos] - '0');
-                valPos++;
-            }
-        }
-
-        if (contentLength == 0) return "";
-
-        // Read body
-        size_t bodyStart = response.find("\r\n\r\n") + 4;
-        size_t bodyRead = response.size() - bodyStart;
-
-        while (bodyRead < contentLength && std::chrono::steady_clock::now() < deadline) {
-            FD_ZERO(&readfds);
-            FD_SET(stdoutFd_, &readfds);
+            struct timeval tv;
             tv.tv_sec = 0;
             tv.tv_usec = 10000;
 
-            int ret = select(stdoutFd_ + 1, &readfds, nullptr, nullptr, &tv);
-            if (ret > 0) {
-                char buf[4096];
-                ssize_t n = read(stdoutFd_, buf, sizeof(buf));
-                if (n > 0) {
-                    response += std::string(buf, n);
-                    bodyRead += n;
-                } else if (n == 0) {
-                    break;
-                }
+            const int ret = select(stdoutFd_ + 1, &readfds, nullptr, nullptr, &tv);
+            if (ret < 0) {
+                if (errno == EINTR) continue;
+                return "";
             }
-        }
+            if (ret == 0) continue;
 
-        return response;
+            char buf[4096];
+            const ssize_t n = read(stdoutFd_, buf, sizeof(buf));
+            if (n > 0) {
+                receiveBuffer_.append(buf, static_cast<std::size_t>(n));
+                continue;
+            }
+            if (n == 0) return "";
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
+            return "";
+        }
     }
 
     // Extract JSON body from a framed response
@@ -1848,6 +1844,64 @@ void test_utf16_rejects_positions_beyond_line_end() {
     assert(!server.utf16ToUtf8(crlf, 0, 2) &&
            "columns beyond a CRLF-terminated line must be rejected");
 }
+
+#if EMOJINEER_HAVE_POSIX_PROCESS
+void test_lsp_harness_coalesced_frames() {
+    LspServerProcess harness;
+    const std::string firstBody = R"({"jsonrpc":"2.0","id":1,"result":null})";
+    const std::string secondBody = R"({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"diagnostics":[]}})";
+    const std::string first = "Content-Length: " + std::to_string(firstBody.size()) + "\r\n\r\n" + firstBody;
+    const std::string second = "Content-Length: " + std::to_string(secondBody.size()) + "\r\n\r\n" + secondBody;
+    harness.receiveBuffer_ = first + second;
+
+    auto a = harness.popBufferedFrame();
+    assert(a && *a == first);
+    assert(harness.receiveBuffer_ == second && "second coalesced frame must remain buffered");
+    auto b = harness.popBufferedFrame();
+    assert(b && *b == second);
+    assert(harness.receiveBuffer_.empty());
+}
+
+void test_e2e_real_explicit_null_id_request() {
+    std::cout << "Testing real LSP explicit null request id..." << std::endl;
+    LspServerProcess server;
+    const bool started = server.start("./emojineer-lsp");
+    assert(started);
+    if (!started) return;
+
+    const bool initSent = server.sendMessage(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"rootUri":"file:///test","processId":12345}})");
+    assert(initSent);
+    const std::string initResponse = server.readResponse();
+    assert(!initResponse.empty());
+
+    const bool initializedSent = server.sendMessage(R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+    assert(initializedSent);
+
+    const bool shutdownSent = server.sendMessage(R"({"jsonrpc":"2.0","id":null,"method":"shutdown","params":null})");
+    assert(shutdownSent);
+    const std::string response = server.readResponse();
+    assert(!response.empty() && "explicit id:null request must receive a response");
+    if (response.empty()) {
+        server.stop();
+        return;
+    }
+    const std::size_t bodyStart = response.find("\r\n\r\n");
+    assert(bodyStart != std::string::npos);
+    if (bodyStart == std::string::npos) {
+        server.stop();
+        return;
+    }
+    const std::string body = response.substr(bodyStart + 4);
+    assert(body.find("\"result\"") != std::string::npos);
+    assert(body.find("\"id\":null") != std::string::npos && "response must preserve explicit null id");
+
+    const bool exitSent = server.sendMessage(R"({"jsonrpc":"2.0","method":"exit","params":null})");
+    assert(exitSent);
+    usleep(100000);
+    server.stop();
+}
+#endif
+
 int main() {
     test_utf16_rejects_positions_beyond_line_end();
     test_jsonrpc_null_id_contract();
@@ -1897,6 +1951,8 @@ int main() {
     // Real end-to-end framed protocol tests (spawns actual server)
 #if EMOJINEER_HAVE_POSIX_PROCESS
     std::cout << "\n=== Real Framed E2E Tests (spawning server) ===" << std::endl;
+    test_lsp_harness_coalesced_frames();
+    test_e2e_real_explicit_null_id_request();
     test_e2e_real_initialize();
     test_e2e_real_document_lifecycle();
     test_e2e_real_empty_change();

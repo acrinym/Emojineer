@@ -2,6 +2,7 @@
 #include "emojineer/lexer.hpp"
 #include "emojineer/module.hpp"
 #include "emojineer/project.hpp"
+#include "emojineer/source_diagnostic.hpp"
 #include "emojineer/vm.hpp"
 
 #include <chrono>
@@ -270,6 +271,39 @@ void test_dependency_initialization_once_and_project_check() {
     require(saw_source_graph, "emji project check should validate the module graph");
 }
 
+
+void test_package_import_error_preserves_importer_source() {
+    TempRoot root("package-import-source-owner");
+    emojineer::initialize_project(root.path, "owner_app");
+    const auto manifest = emojineer::load_project_manifest(root.path / "emojineer.toml");
+    const auto entry = root.path / manifest.entry;
+    const auto imported = entry.parent_path() / "child.emoji";
+
+    write_source(imported,
+                 "🧩 🌲\n"
+                 "🔗 📜pkg:missing/lib.emoji📜\n");
+    write_source(entry,
+                 "🧩 🚀\n"
+                 "🔗 📜child.emoji📜\n");
+
+    bool caught = false;
+    try {
+        (void)emojineer::compile_file(entry, {}, root.path);
+    } catch (const emojineer::SourceLocationException& error) {
+        caught = true;
+        require(error.sourcePath == imported,
+                "package import failure must belong to imported module path");
+        require(error.sourceIdentity.find("child.emoji") != std::string::npos,
+                "package import failure must preserve imported module identity");
+        require(error.line == 2, "package import failure must preserve import line");
+        require(error.tokenLexeme == "pkg:missing/lib.emoji",
+                "package import failure must preserve requested import token");
+        require(std::string(error.what()).find("does not declare direct dependency 'missing'") != std::string::npos,
+                "regression must exercise package authority, not parsing");
+    }
+    require(caught, "package import authority failure must be a SourceLocationException");
+}
+
 } // namespace
 
 int main() {
@@ -283,6 +317,7 @@ int main() {
         test_collisions_and_declaration_rules();
         test_deterministic_identity_and_bytecode_compatibility();
         test_dependency_initialization_once_and_project_check();
+        test_package_import_error_preserves_importer_source();
         std::cout << "✅ module/import tests passed\n";
         return 0;
     } catch (const std::exception& error) {

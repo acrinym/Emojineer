@@ -3539,19 +3539,23 @@ void LanguageServer::handleMessage(const JsonValue& message) {
     }
     std::string method = getJsonString(methodIt->second);
     const JsonValue& params = getJsonObject(message, "params");
-    const JsonValue& idVal = getJsonObject(message, "id");
+    const auto idIt = obj->find("id");
+    const bool hasId = idIt != obj->end();
 
-    // Support both integer and string request IDs
+    // JSON-RPC distinguishes a request from a notification by the presence
+    // of the id member. An explicit null id is still a request and must get
+    // a response carrying id:null.
     std::optional<int> intId;
     std::optional<std::string> stringId;
     bool hasInvalidId = false;
-    if (!idVal.isNull()) {
+    if (hasId && !idIt->second.isNull()) {
+        const JsonValue& idVal = idIt->second;
         if (idVal.isNumber()) {
             intId = static_cast<int>(getJsonNumber(idVal));
         } else if (idVal.isString()) {
             stringId = idVal.get<std::string>();
         } else {
-            // Invalid ID type - mark it to return error with null id
+            // Invalid ID type - mark it to return error with null id.
             hasInvalidId = true;
         }
     }
@@ -3562,8 +3566,9 @@ void LanguageServer::handleMessage(const JsonValue& message) {
         throw JsonRpcError(-32600, "Invalid JSON-RPC request: id must be a string or number");
     }
 
-    // Handle the response - prefer string IDs if present
-    if (stringId || intId) {
+    // Handle a request whenever an id member is present, including id:null.
+    // Empty intId/stringId optionals deliberately serialize as a null id.
+    if (hasId) {
         try {
             auto result = handleRequest(method, params);
             if (stringId) {
