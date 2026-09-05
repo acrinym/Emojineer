@@ -2,6 +2,7 @@ from pathlib import Path
 
 path = Path('tests/debugger_tests.cpp')
 text = path.read_text(encoding='utf-8')
+
 start = text.index('void test_evaluate_with_params_locals() {')
 end = text.index('// Test: Frame selection', start)
 region = text[start:end]
@@ -24,5 +25,54 @@ region = region.replace('<< param1_int <<', '<< param1_number <<')
 region = region.replace('<< param2_int <<', '<< param2_number <<')
 region = region.replace('<< local_int <<', '<< local_number <<')
 text = text[:start] + region + text[end:]
+
+start = text.index('void test_frame_selection() {')
+end = text.index('// Test: Breakpoint doesn\'t immediately re-hit', start)
+replacement = r'''void test_frame_selection() {
+    std::cout << "Test: nested frame selection...\n";
+    const std::string source =
+        "🛠️ ⭐ 🫴 🍎 🤲\n"
+        "📝 🍎\n"
+        "📦 🍎\n"
+        "🏁\n"
+        "🛠️ 🌟 🫴 🍐 🤲\n"
+        "📦 ⭐ 🫴 🍐 🤲\n"
+        "🏁\n"
+        "📝 🌟 🫴 📜hi📜 🤲\n";
+    emojineer::Lexer lexer(source, {});
+    emojineer::Parser parser(lexer.tokenize());
+    auto program = parser.parse();
+    emojineer::Compiler compiler;
+    compiler.set_source_path("test.emoji");
+    auto chunk = compiler.compile(program);
+    std::istringstream input;
+    std::ostringstream output;
+    emojineer::DebugVM vm(input, output);
+    emojineer::BreakpointLocation bp;
+    bp.source_position.source_path = "test.emoji";
+    bp.source_position.line = 2;
+    bp.enabled = true;
+    vm.add_breakpoint(bp);
+    vm.execute(chunk);
+    vm.continue_run();
+    vm.execute(chunk);
+    auto snapshot = vm.get_debug_snapshot();
+    require(snapshot.has_value(), "nested breakpoint should produce a snapshot");
+    require(snapshot->current_position.line == 2, "should pause inside ⭐");
+    require(snapshot->call_stack.size() == 2, "nested call should expose exactly two function frames");
+    require(snapshot->call_stack[0].function_name == "⭐", "frame 0 must be innermost ⭐");
+    require(snapshot->call_stack[1].function_name == "🌟", "frame 1 must be caller 🌟");
+    require(vm.select_frame(0), "should select innermost frame 0");
+    require(vm.selected_frame() == 0, "selected frame should be 0");
+    require(vm.select_frame(1), "should select caller frame 1");
+    require(vm.selected_frame() == 1, "selected frame should be 1");
+    require(!vm.select_frame(99), "out-of-range frame selection must fail");
+    require(vm.selected_frame() == 1, "failed selection must preserve the prior selected frame");
+    std::cout << "  ✅ Nested frame selection works\n";
+}
+
+'''
+text = text[:start] + replacement + text[end:]
+
 path.write_text(text, encoding='utf-8')
-print('Train 18 debugger numeric-value acceptance aligned with production Value semantics.')
+print('Train 18 debugger numeric and nested-frame acceptance aligned with production semantics.')
