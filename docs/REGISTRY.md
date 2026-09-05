@@ -1,171 +1,74 @@
-# Package Artifacts and Registry Transport
+# Package Artifacts, Registry Transport, and Discovery
 
-Emojineer 0.14 turns the immutable `.emjpkg` substrate from Train 13 into a real package-exchange workflow. The transport layer now has registry identity/discovery, immutable package-version indexes, local-registry publication, SemVer selection, verified fetching, registry-scoped content-addressed caching, and optional HTTPS read transport.
+Emojineer's package registry is an immutable package-exchange system layered on deterministic `.emjpkg` artifacts. Registry tooling belongs to `emji`; ordinary language execution, LSP requests, and debugger operation do not receive ambient registry/network authority.
 
-This is still deliberately separate from project dependency manifests. A fetched artifact does not silently become a dependency. Remote dependency declarations and deterministic remote lock provenance need to land together in the next train.
+## Immutable `.emjpkg`
 
-## `.emjpkg` artifacts
+`emji pack` emits deterministic `EMJPKG1` artifacts containing the canonical package manifest and package-owned `.emoji` sources. Per-source checksums, package `content-sha256`, and whole-artifact `artifact-sha256` are verified before an artifact is admitted to package state.
 
-`emji pack` creates deterministic binary `.emjpkg` artifacts with format marker `EMJPKG1`.
+## Registry identity and endpoints
 
-```text
-emji pack
-emji pack path/to/package
-emji pack path/to/package -o dist/package.emjpkg
-```
+Supported registry endpoints are local/file paths and HTTPS. Plain HTTP is rejected.
 
-Artifacts contain package identity, canonical manifest text, package-owned `.emoji` source records, per-source SHA-256 values, package `content-sha256`, and a separate whole-artifact `artifact-sha256`.
-
-The parser remains non-extracting and bounded. It rejects oversized artifacts, malformed framing, noncanonical manifest metadata, invalid source paths/order, checksum mismatches, missing entry source, content-identity mismatches, and trailing bytes.
-
-## Registry endpoint contract
-
-Supported endpoint kinds are:
-
-```text
-/path/to/registry
-file:///absolute/path/to/registry
-https://registry.example/api
-```
-
-Plain `http://` network endpoints are rejected. HTTPS endpoint host names are canonicalized to lowercase and trailing endpoint slashes are removed. Query strings, fragments, user-info syntax, backslashes, whitespace, and `.` / `..` path segments are rejected.
-
-Local paths are normalized to absolute `file://` identities internally.
-
-HTTPS read transport is compiled when CMake finds libcurl. A build without libcurl keeps complete local-registry behavior and reports that HTTPS transport is unavailable if an HTTPS endpoint is used.
-
-## Registry identity and discovery
-
-Initialize a local registry with:
-
-```text
-emji registry-init ./registry --id local.dev
-```
-
-The registry stores a bounded discovery descriptor at:
+Every registry exposes bounded identity at:
 
 ```text
 v1/registry.txt
 ```
 
-with format marker:
+using `EMJREGISTRY1`. HTTPS uses TLS peer/hostname verification, no redirects, bounded responses, and timeouts.
 
-```text
-EMJREGISTRY1
-id=local.dev
-```
+## Immutable package indexes
 
-The registry ID is immutable for an initialized registry. Package indexes carry the same ID and are rejected if they claim a different registry identity.
-
-Inspect an endpoint with:
-
-```text
-emji registry-info --registry ./registry
-emji registry-info --registry https://registry.example/api
-```
-
-## Package-version indexes
-
-Each package has one canonical index:
+Each package uses:
 
 ```text
 v1/packages/<package>.index
 ```
 
-using the `EMJREGPKG1` format. Every immutable version record binds:
-
-- exact SemVer text;
-- package `content-sha256`;
-- exact `.emjpkg` `artifact-sha256`.
-
-Records are rendered in deterministic textual version order and duplicate version identities are rejected.
-
-Browse versions with:
+with `EMJREGPKG1`. Every exact SemVer is bound to package content SHA-256 and exact artifact SHA-256. The artifact is addressed at:
 
 ```text
-emji versions my_package --registry ./registry
+v1/artifacts/sha256/<artifact-sha256>.emjpkg
 ```
 
-The existing Train 13 SemVer engine chooses the highest matching version for `*`, exact, caret, and tilde requirements. Wildcard and ordinary ranges exclude prereleases by default; explicit prerelease requirements retain the existing SemVer rules.
+`emji versions` reads the index. `emji fetch` performs SemVer selection, retrieves the exact artifact, verifies package/version/content/artifact identity, and only then admits it to the registry-scoped cache. Cache hits are re-verified.
 
-## Immutable publication
+## Publication
 
-Publish a package to a writable local registry with:
+File registry publication is immutable and credential-free. Exact republishing is idempotent; conflicting content under an existing package/version is rejected.
+
+HTTPS publication uses the authenticated `emjpub1` contract documented in [AUTHENTICATED_REGISTRY_PUBLICATION.md](AUTHENTICATED_REGISTRY_PUBLICATION.md). Registry identity is verified before the bearer credential is sent. The actual `.emjpkg` bytes are uploaded, and the returned receipt is strictly verified and persisted.
+
+## Remote project dependencies
+
+Registry dependencies are first-class manifest/lock state. `emji add ... --registry` and `emji sync` resolve recursively, verify artifacts, materialize content-addressed packages under the project-owned `.emojineer/packages` store, and write deterministic lock v3 provenance. `emji sync --offline` can reconstruct from complete verified cache/store state. See [REMOTE_DEPENDENCIES.md](REMOTE_DEPENDENCIES.md).
+
+## Train 19 discovery
+
+Discovery is a lookup layer over immutable registry state, not a replacement for artifact verification.
 
 ```text
-emji publish path/to/package --registry ./registry
+emji search <query> --registry <endpoint> [--include-prerelease] [--json]
+emji package-info <package> --registry <endpoint> [--include-prerelease] [--json]
+emji dependents <package> --registry <endpoint> [--include-prerelease] [--json]
+emji discovery-index --registry <endpoint>
 ```
 
-Publication:
+File registries derive discovery live from `EMJREGPKG1` indexes and the verified artifacts they reference. Existing file registries therefore require no migration and have no secondary mutable catalog to drift from package truth.
 
-1. builds the deterministic `EMJPKG1` artifact;
-2. verifies it through the ordinary artifact parser;
-3. stores the artifact by exact artifact SHA-256 at `v1/artifacts/sha256/<hash>.emjpkg`;
-4. adds the package/version record to the canonical package index.
-
-Re-publishing exactly the same package/version/artifact is idempotent. Publishing different content under an already-published package/version is rejected as an immutable version conflict.
-
-HTTPS publication is intentionally not implemented yet. Uploading needs an authenticated immutable-write protocol, authorization model, and server-side conflict semantics rather than a generic HTTP PUT hidden behind the CLI.
-
-## Verified fetch and cache admission
-
-Fetch a package artifact by SemVer requirement with:
+HTTPS registries expose the equivalent bounded canonical resource:
 
 ```text
-emji fetch my_package '^1.2.0' --registry ./registry
-emji fetch my_package '~1.4.0' --registry https://registry.example/api
+v1/discovery.index
 ```
 
-An explicit cache root can be supplied:
+using `EMJREGDISC1`. Records bind package/version/content/artifact identities plus entry and direct dependency names. The discovery registry ID must match `EMJREGISTRY1`.
 
-```text
-emji fetch my_package '^1.2.0' --registry ./registry --cache ./cache
-```
+Stable releases are selected by default. `--include-prerelease` allows prereleases. Search terms match package name, entry path, and direct dependency metadata with deterministic AND semantics. Reverse-dependency queries are direct and operate over the selected release of each package.
 
-Without `--cache`, the platform cache root is used:
+See [PACKAGE_DISCOVERY.md](PACKAGE_DISCOVERY.md) for the full wire and command contract.
 
-- Windows: `%LOCALAPPDATA%/Emojineer/cache` when available;
-- Unix-like systems: `$XDG_CACHE_HOME/emojineer` or `$HOME/.cache/emojineer`;
-- otherwise a temporary-directory fallback.
+## Trust boundary
 
-Fetch performs these checks before cache admission:
-
-1. load and verify the registry descriptor;
-2. load the package index and require matching registry/package identity;
-3. select the highest matching version deterministically;
-4. retrieve the exact artifact named by the index artifact SHA-256;
-5. parse/verify the complete `.emjpkg` artifact;
-6. require package name, exact version, content SHA-256, and artifact SHA-256 to match the selected index record;
-7. only then write the artifact to the content-addressed cache.
-
-The cache is scoped by a digest of canonical endpoint identity plus registry ID, then by package/version/artifact hash. A cache hit is re-verified before reuse. If a cached artifact is malformed or does not match the selected index record, it is discarded and fetched again.
-
-## HTTPS trust boundary
-
-When libcurl is available, HTTPS registry reads use TLS certificate and host verification, disallow redirects, use bounded response buffers, and apply connection/overall request timeouts. Only `https://` is allowed through the network transport.
-
-HTTPS authenticates the registry server through TLS. It does **not** provide package-author signatures, transparency logs, or authenticated client publication. Those are distinct trust mechanisms and are not implied by TLS.
-
-## Two SHA-256 identities
-
-`content-sha256` identifies package-owned semantic/source content using the existing `PackageGraph` content identity.
-
-`artifact-sha256` identifies the exact serialized `.emjpkg` bytes.
-
-A registry index binds both. Fetch is successful only if both identities agree with the retrieved artifact.
-
-## Current boundary and next train
-
-Emojineer 0.14 can exchange immutable package artifacts through a real registry protocol, but `emojineer.toml` still contains local/path dependencies only. This is intentional.
-
-The next package train should add remote dependency integration as one coherent system:
-
-- manifest source syntax carrying registry endpoint/identity plus version requirement;
-- recursive registry dependency resolution;
-- deterministic materialization into a verified package store;
-- lockfile records carrying registry identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency edges;
-- package-aware linking against the verified materialized graph;
-- real remote `emji add` only after the manifest/lock/resolver path is complete;
-- authenticated HTTPS publication only after an explicit upload/authorization contract is defined.
-
-The language runtime itself receives no ambient network or filesystem authority from registry support. Registry networking belongs to the `emji` package-management toolchain.
+Discovery metadata can help a user decide what to fetch, but package code is not trusted merely because it appears in search results. Fetch/materialization still verifies the immutable package index and artifact identities. Discovery cannot make an undeclared transitive dependency importable and cannot grant runtime host authority.

@@ -2,6 +2,7 @@
 
 #include "emojineer/package_artifact.hpp"
 
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -81,6 +82,9 @@ std::filesystem::path default_registry_cache_root();
 void initialize_file_registry(const std::filesystem::path& root,
                               const std::string& registry_id);
 std::string registry_identity(const RegistryEndpoint& endpoint);
+std::string read_registry_resource(const RegistryEndpoint& endpoint,
+                                   std::string_view resource,
+                                   std::size_t max_bytes);
 RegistryPackageIndex load_registry_package_index(const RegistryEndpoint& endpoint,
                                                  const std::string& package_name);
 std::string render_registry_package_index(const RegistryPackageIndex& index);
