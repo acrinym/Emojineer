@@ -29,6 +29,8 @@ jobs:
         run: cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
       - name: Build Debug
         run: cmake --build build-debug
+      - name: Run debugger target unbuffered
+        run: stdbuf -o0 -e0 ./build-debug/emojineer_debugger_tests
       - name: Test Debug
         run: ctest --test-dir build-debug --output-on-failure
       - name: Configure Release
