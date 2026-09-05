@@ -183,6 +183,7 @@ std::vector<BreakpointLocation> DebugController::get_breakpoints() const {
 }
 
 void DebugController::continue_execution() {
+    if (paused_ && pause_reason_ == "breakpoint hit") resume_breakpoint_ip_ = vm_.current_ip();
     run_mode_ = DebugRunMode::Running;
     paused_ = false;
     vm_.set_debug_paused(false);
@@ -195,6 +196,7 @@ void DebugController::pause_execution() {
 }
 
 void DebugController::step_into() {
+    if (paused_ && pause_reason_ == "breakpoint hit") resume_breakpoint_ip_ = vm_.current_ip();
     run_mode_ = DebugRunMode::SteppingInto;
     step_into_start_ip_ = vm_.current_ip();
     // Initialize step state for source-boundary stepping
@@ -206,6 +208,7 @@ void DebugController::step_into() {
 }
 
 void DebugController::step_over() {
+    if (paused_ && pause_reason_ == "breakpoint hit") resume_breakpoint_ip_ = vm_.current_ip();
     run_mode_ = DebugRunMode::SteppingOver;
     step_over_start_ip_ = vm_.current_ip();
     // Initialize step state for source-boundary stepping
@@ -217,6 +220,7 @@ void DebugController::step_over() {
 }
 
 void DebugController::step_out() {
+    if (paused_ && pause_reason_ == "breakpoint hit") resume_breakpoint_ip_ = vm_.current_ip();
     run_mode_ = DebugRunMode::SteppingOut;
     step_out_frame_depth_ = vm_.get_call_stack().size();
     // Initialize step state - target depth is one less than current
@@ -233,6 +237,7 @@ std::optional<DebugSnapshot> DebugController::get_snapshot() const {
     
     DebugSnapshot snapshot;
     snapshot.call_stack = vm_.get_call_stack();
+    snapshot.globals = vm_.get_globals();
     // Clamp selected frame to valid range
     snapshot.current_frame = std::min(selected_frame_, snapshot.call_stack.empty() ? 0 : snapshot.call_stack.size() - 1);
     
@@ -268,14 +273,9 @@ std::optional<Value> DebugController::evaluate_expression(const std::string& exp
         return std::nullopt;
     }
     
-    // Get the current frame's locals, parameters, and globals
+    // Function frames are optional at module scope; globals remain inspectable either way.
     auto frames = vm_.get_call_stack();
-    if (frames.empty()) {
-        return std::nullopt;
-    }
-    
-    // Clamp selected frame to valid range
-    std::size_t frame_idx = std::min(selected_frame_, frames.size() - 1);
+    std::size_t frame_idx = frames.empty() ? 0 : std::min(selected_frame_, frames.size() - 1);
     
     // Trim whitespace from expression
     auto trim = [](const std::string& s) -> std::string {
@@ -381,6 +381,9 @@ bool DebugController::debug_hook() {
         current_chunk_ = chunk;
         rebuild_breakpoint_index();
     }
+
+    // Reaching the post-instruction hook proves the one skipped instruction made progress.
+    resume_breakpoint_ip_.reset();
     
     // Check if we should pause
     if (run_mode_ == DebugRunMode::Paused) {
@@ -435,6 +438,7 @@ bool DebugController::is_breakpoint_hit() const {
     // However, we don't want to re-hit the same breakpoint immediately - that's handled by step semantics
     
     std::size_t ip = vm_.current_ip();
+    if (resume_breakpoint_ip_ && *resume_breakpoint_ip_ == ip) return false;
     auto it = breakpoint_id_by_ip_.find(ip);
     if (it == breakpoint_id_by_ip_.end()) return false;
     
@@ -550,27 +554,19 @@ std::size_t DebugController::get_step_over_target_ip() const {
     return step_over_start_ip_;
 }
 
-bool DebugController::should_pause_before_execution() const {
-    // If already paused, stay paused
-    if (paused_) {
-        return true;
+bool DebugController::should_pause_before_execution() {
+    const Chunk* chunk = vm_.current_chunk();
+    if (chunk != current_chunk_) {
+        current_chunk_ = chunk;
+        rebuild_breakpoint_index();
     }
-    
-    // If in paused mode, pause before executing
-    if (run_mode_ == DebugRunMode::Paused) {
-        return true;
-    }
-    
-    // Check for breakpoint hit - but don't re-hit the same breakpoint immediately
-    // after a step operation (handled by step semantics)
+    if (paused_ || run_mode_ == DebugRunMode::Paused) return true;
     if (is_breakpoint_hit()) {
+        paused_ = true;
+        pause_reason_ = "breakpoint hit";
+        notify_debug_event(DebugEventType::BreakpointHit, pause_reason_);
         return true;
     }
-    
-    // Check if we should pause for step (but only after the instruction has executed,
-    // so this is handled by debug_hook() which is called post-instruction)
-    // This method is for PRE-execution checks only
-    
     return false;
 }
 
@@ -589,6 +585,7 @@ void DebugController::rebuild_breakpoint_index() {
             if (src.source_path == bp.source_position.source_path &&
                 src.line == bp.source_position.line) {
                 breakpoint_id_by_ip_[ip] = i;
+                break;
             }
         }
     }
@@ -723,6 +720,10 @@ void DebugVM::set_breakpoints(const std::vector<BreakpointLocation>& bps) {
 
 std::vector<BreakpointLocation> DebugVM::get_breakpoints() const {
     return controller_->get_breakpoints();
+}
+
+std::vector<BreakpointInfo> DebugVM::get_breakpoint_info() const {
+    return controller_->get_breakpoint_info();
 }
 
 void DebugVM::rebuild_breakpoint_index() {
@@ -958,6 +959,10 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
+            if (snapshot->call_stack.empty()) {
+                output << "No function frames (paused at module scope)\n";
+                continue;
+            }
             // Accept optional frame index - use controller's frame selection
             if (parts.size() >= 2) {
                 try {
@@ -998,6 +1003,10 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
+            if (snapshot->call_stack.empty()) {
+                output << "No function frames (paused at module scope)\n";
+                continue;
+            }
             // Use controller's selected frame
             std::size_t current_frame = debug_vm->selected_frame();
             if (current_frame >= snapshot->call_stack.size()) {
@@ -1033,17 +1042,11 @@ int run_debug_session(const std::filesystem::path& source_file,
                 output << "Not paused\n";
                 continue;
             }
-            // Use controller's selected frame
-            std::size_t current_frame = debug_vm->selected_frame();
-            if (current_frame >= snapshot->call_stack.size()) {
-                current_frame = 0;
-            }
-            const auto& frame = snapshot->call_stack[current_frame];
-            output << "Globals in frame #" << current_frame << ":\n";
-            for (const auto& g : frame.globals) {
+            output << "Globals:\n";
+            for (const auto& g : snapshot->globals) {
                 output << "  " << g.first << " = " << emojineer::debug_render_value(g.second) << "\n";
             }
-            if (frame.globals.empty()) {
+            if (snapshot->globals.empty()) {
                 output << "  (no globals)\n";
             }
         }

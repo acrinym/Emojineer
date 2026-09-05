@@ -122,7 +122,7 @@ public:
     bool should_pause_for_step() const override;
     std::size_t get_step_out_target_depth() const override;
     std::size_t get_step_over_target_ip() const override;
-    bool should_pause_before_execution() const override;
+    bool should_pause_before_execution() override;
     
 	private:
     void rebuild_breakpoint_index();
@@ -155,6 +155,7 @@ public:
     bool paused_{true};
     bool finished_{false};
     std::string pause_reason_;
+    std::optional<std::size_t> resume_breakpoint_ip_;
     
     // Frame selection for inspection
     std::size_t selected_frame_{0};
@@ -180,6 +181,7 @@ public:
     void remove_breakpoint(std::size_t id);
     void set_breakpoints(const std::vector<BreakpointLocation>& bps);
     std::vector<BreakpointLocation> get_breakpoints() const;
+    std::vector<BreakpointInfo> get_breakpoint_info() const;
     void rebuild_breakpoint_index();
     
     // Execution control

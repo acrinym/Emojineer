@@ -599,82 +599,41 @@ void test_step_into_nested_function() {
 // Test: Step over function call
 void test_step_over_function() {
     std::cout << "Test: step over function call...\n";
-    
-    // Using proper block form with 🏁, and 🚀 (not ➕ which is Add token)
-    const std::string source = 
-        "🛠️ 🚀 🫴 🍎 🍐 🤲\n"   // Line 1: define 🚀(🍎, 🍐)
-        "🐍 🍇 🔢 🟰 🍎 ➕ 🍐\n"   // Line 2: local 🍇 = 🍎 + 🍐 (arithmetic inside)
-        "📦 🍇\n"                   // Line 3: return 🍇
-        "🏁\n"                      // Line 4: end function
-        "📝 🚀 🫴 1 2 🤲\n"        // Line 5: call 🚀
-        "📝 📜done📜\n";           // Line 6: print done
-    
+    const std::string source =
+        "🛠️ 🚀 🫴 🍎 🍐 🤲\n"
+        "🐍 🍇 🔢 🟰 🍎 ➕ 🍐\n"
+        "📦 🍇\n"
+        "🏁\n"
+        "📝 🚀 🫴 1 2 🤲\n"
+        "📝 📜done📜\n";
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
     auto program = parser.parse();
-    
     emojineer::Compiler compiler;
     compiler.set_source_path("test.emoji");
     auto chunk = compiler.compile(program);
-    
     std::istringstream input;
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
-    
-    // Also set a breakpoint INSIDE the callee to prove we never hit it
-    emojineer::BreakpointLocation bp_inside;
-    bp_inside.source_position.source_path = "test.emoji";
-    bp_inside.source_position.line = 2;  // Inside the function definition
-    bp_inside.enabled = true;
-    vm.add_breakpoint(bp_inside);
-    
-    // Set breakpoint at the function call (line 5)
     emojineer::BreakpointLocation bp;
     bp.source_position.source_path = "test.emoji";
     bp.source_position.line = 5;
     bp.enabled = true;
     vm.add_breakpoint(bp);
-    
-    // Track if we ever paused inside the callee
-    bool paused_in_callee = false;
-    vm.set_debug_callback([&paused_in_callee](const emojineer::DebugSnapshot& snapshot) {
-        // If we pause at line 2, we're inside the callee - this should NOT happen
-        if (snapshot.current_position.line == 2) {
-            paused_in_callee = true;
-        }
-    });
-    
-    // Execute and pause at breakpoint
     vm.execute(chunk);
     vm.continue_run();
     vm.execute(chunk);
-    
     auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot while paused at line 5");
-    
-    // [REQUIRED] Get caller depth before step_over
-    std::size_t caller_depth = snapshot->call_stack.size();
-    
-    // Step over - should execute the function but not stop inside it
+    require(snapshot.has_value(), "should pause at call line before step_over");
+    require(snapshot->current_position.line == 5, "should be at call line 5");
+    const std::size_t caller_depth = snapshot->call_stack.size();
     vm.step_over();
     vm.execute(chunk);
-    
-    // After step_over, we should be at line 6 (past the function call)
     snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot after step_over");
-    
-    // [REQUIRED] Assert: caller depth should remain the same (we never entered the callee)
-    require(snapshot->call_stack.size() == caller_depth, 
-             "step_over caller depth should remain unchanged");
-    
-    // [REQUIRED] Assert: should NOT have paused inside the callee function (no breakpoint at line 2)
-    require(!paused_in_callee, 
-             "no StepComplete/breakpoint callback should occur inside callee during step_over");
-    
-    // [REQUIRED] Assert: expected post-call line should be line 6
-    require(snapshot->current_position.line == 6, 
-             "should be at line 6 (post-call line) after step_over");
-    
+    require(snapshot.has_value(), "should pause after step_over");
+    require(snapshot->call_stack.size() == caller_depth, "step_over must return to caller depth");
+    require(snapshot->current_position.line == 6, "step_over must land on post-call line 6");
+    require(snapshot->reason == "stepped over", "pure step_over must report StepComplete");
     std::cout << "  ✅ Step over function call works\n";
 }
 
@@ -719,6 +678,7 @@ void test_step_out_function() {
     require(snapshot_before.has_value(), "should have snapshot at breakpoint");
     std::string caller_source_path = snapshot_before->current_position.source_path;
     std::uint32_t caller_line = snapshot_before->current_position.line;
+    std::size_t caller_depth = snapshot_before->call_stack.size();
     
     // Step into the function
     vm.step_into();
@@ -730,7 +690,7 @@ void test_step_out_function() {
     
     // [REQUIRED] Record depth inside function
     std::size_t inside_depth = snapshot->call_stack.size();
-    require(inside_depth > 1, "should be inside function with >1 frame");
+    require(inside_depth > caller_depth, "step_into must add a real callee frame");
     
     // Record the function we stepped out of
     std::string func_inside = snapshot->call_stack[0].function_name;
@@ -836,140 +796,110 @@ void test_evaluate_with_params_locals() {
     
     // EXACT VALUE ASSERTIONS - no more existence-only checks
     // Based on call 🚀(10, 20) - 🍎=10, 🍐=20, 🍇=🍎+🍐=30
-    require(std::holds_alternative<std::int64_t>(*param1_val), "🍎 should be an integer");
-    require(std::holds_alternative<std::int64_t>(*param2_val), "🍐 should be an integer");
-    require(std::holds_alternative<std::int64_t>(*local_val), "🍇 should be an integer");
+    require(std::holds_alternative<double>(*param1_val), "🍎 should preserve the runtime number representation");
+    require(std::holds_alternative<double>(*param2_val), "🍐 should preserve the runtime number representation");
+    require(std::holds_alternative<double>(*local_val), "🍇 should preserve the runtime number representation");
     
-    auto param1_int = std::get<std::int64_t>(*param1_val);
-    auto param2_int = std::get<std::int64_t>(*param2_val);
-    auto local_int = std::get<std::int64_t>(*local_val);
+    auto param1_number = std::get<double>(*param1_val);
+    auto param2_number = std::get<double>(*param2_val);
+    auto local_number = std::get<double>(*local_val);
     
-    require(param1_int == 10, "🍎 should equal 10");
-    require(param2_int == 20, "🍐 should equal 20");
-    require(local_int == 30, "🍇 should equal 30 (🍎 + 🍐)");
+    require(param1_number == 10.0, "🍎 should equal 10");
+    require(param2_number == 20.0, "🍐 should equal 20");
+    require(local_number == 30.0, "🍇 should equal 30 (🍎 + 🍐)");
     
-    std::cout << "  Parameter 🍎 = " << param1_int << "\n";
-    std::cout << "  Parameter 🍐 = " << param2_int << "\n";
-    std::cout << "  Local 🍇 = " << local_int << " (🍎 + 🍐)\n";
+    std::cout << "  Parameter 🍎 = " << param1_number << "\n";
+    std::cout << "  Parameter 🍐 = " << param2_number << "\n";
+    std::cout << "  Local 🍇 = " << local_number << " (🍎 + 🍐)\n";
     
     std::cout << "  ✅ Evaluate expression with exact parameter and local values works\n";
 }
 
 // Test: Frame selection
 void test_frame_selection() {
-    std::cout << "Test: frame selection...\n";
-    
-    // Using proper block form with 🏁 (canonical function syntax from tests.cpp)
-    const std::string source = 
-        "🛠️ ⭐ 🫴 🍎 🤲\n"          // Line 1: define ⭐(🍎)
-        "📦 🍎\n"                    // Line 2: return 🍎
-        "🏁\n"                       // Line 3: end function
-        "🛠️ 🌟 🫴 🍐 🤲\n"          // Line 4: define 🌟(🍐)
-        "📦 🍐\n"                    // Line 5: return 🍐
-        "🏁\n"                       // Line 6: end function
-        "🐍 🔢 🟰 ⭐ 🫴 📜hi📜 🤲\n"  // Line 7: 🔢 = ⭐(📜hi📜)
-        "📝 🌟 🫴 🔢 🤲\n";         // Line 8: print 🌟(🔢)
-    
+    std::cout << "Test: nested frame selection...\n";
+    const std::string source =
+        "🛠️ ⭐ 🫴 🍎 🤲\n"
+        "📝 🍎\n"
+        "📦 🍎\n"
+        "🏁\n"
+        "🛠️ 🌟 🫴 🍐 🤲\n"
+        "📦 ⭐ 🫴 🍐 🤲\n"
+        "🏁\n"
+        "📝 🌟 🫴 📜hi📜 🤲\n";
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
     auto program = parser.parse();
-    
     emojineer::Compiler compiler;
     compiler.set_source_path("test.emoji");
     auto chunk = compiler.compile(program);
-    
     std::istringstream input;
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
-    
-    // Set breakpoint at line 7 to get into nested calls
-    emojineer::BreakpointLocation bp;
-    bp.source_position.source_path = "test.emoji";
-    bp.source_position.line = 7;
-    bp.enabled = true;
-    vm.add_breakpoint(bp);
-    
-    // Run to breakpoint
-    vm.execute(chunk);
-    vm.continue_run();
-    vm.execute(chunk);
-    
-    auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot");
-    
-    // Test frame selection
-    require(snapshot->call_stack.size() > 0, "should have frames");
-    
-    // Select frame 0 and verify we can inspect
-    bool success = vm.select_frame(0);
-    require(success, "should successfully select frame 0");
-    require(vm.selected_frame() == 0, "should select frame 0");
-    
-    // Try selecting a frame beyond the stack (should return false and keep prior frame)
-    if (snapshot->call_stack.size() > 1) {
-        std::size_t valid_frame_count = snapshot->call_stack.size();
-        std::size_t prior_frame = vm.selected_frame();
-        
-        // Attempting to select an invalid frame should return false
-        bool invalid_select = vm.select_frame(99);
-        require(!invalid_select, "select_frame(99) should return false for out-of-range index");
-        
-        // The prior frame should remain selected (no silent clamping)
-        require(vm.selected_frame() == prior_frame, "selected frame should remain unchanged on invalid request");
-    }
-    
-    std::cout << "  ✅ Frame selection works\n";
-}
-
-// Test: Breakpoint doesn't immediately re-hit
-void test_breakpoint_no_rehit() {
-    std::cout << "Test: breakpoint doesn't immediately re-hit...\n";
-    
-    const std::string source = 
-        "📝 📜line1📜\n"  // Line 1
-        "📝 📜line2📜\n"  // Line 2
-        "📝 📜line3📜\n"; // Line 3
-    
-    emojineer::Lexer lexer(source, {});
-    emojineer::Parser parser(lexer.tokenize());
-    auto program = parser.parse();
-    
-    emojineer::Compiler compiler;
-    compiler.set_source_path("test.emoji");
-    auto chunk = compiler.compile(program);
-    
-    std::istringstream input;
-    std::ostringstream output;
-    emojineer::DebugVM vm(input, output);
-    
-    // Set breakpoint on line 2
     emojineer::BreakpointLocation bp;
     bp.source_position.source_path = "test.emoji";
     bp.source_position.line = 2;
     bp.enabled = true;
     vm.add_breakpoint(bp);
-    
-    // Run to breakpoint
     vm.execute(chunk);
     vm.continue_run();
     vm.execute(chunk);
-    
-    // Should pause at line 2
     auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot at breakpoint");
-    require(snapshot->current_position.line == 2, "should be at line 2");
-    
-    // Continue - should NOT immediately re-hit the same breakpoint
+    require(snapshot.has_value(), "nested breakpoint should produce a snapshot");
+    require(snapshot->current_position.line == 2, "should pause inside ⭐");
+    require(snapshot->call_stack.size() == 2, "nested call should expose exactly two function frames");
+    require(snapshot->call_stack[0].function_name == "⭐", "frame 0 must be innermost ⭐");
+    require(snapshot->call_stack[1].function_name == "🌟", "frame 1 must be caller 🌟");
+    require(vm.select_frame(0), "should select innermost frame 0");
+    require(vm.selected_frame() == 0, "selected frame should be 0");
+    require(vm.select_frame(1), "should select caller frame 1");
+    require(vm.selected_frame() == 1, "selected frame should be 1");
+    require(!vm.select_frame(99), "out-of-range frame selection must fail");
+    require(vm.selected_frame() == 1, "failed selection must preserve the prior selected frame");
+    std::cout << "  ✅ Nested frame selection works\n";
+}
+
+// Test: Breakpoint doesn't immediately re-hit
+void test_breakpoint_no_rehit() {
+    std::cout << "Test: breakpoint continue makes real progress...\n";
+    const std::string source =
+        "📝 📜line1📜\n"
+        "📝 📜line2📜\n"
+        "📝 📜line3📜\n";
+    emojineer::Lexer lexer(source, {});
+    emojineer::Parser parser(lexer.tokenize());
+    auto program = parser.parse();
+    emojineer::Compiler compiler;
+    compiler.set_source_path("test.emoji");
+    auto chunk = compiler.compile(program);
+    std::istringstream input;
+    std::ostringstream output;
+    emojineer::DebugVM vm(input, output);
+    emojineer::BreakpointLocation bp;
+    bp.source_position.source_path = "test.emoji";
+    bp.source_position.line = 2;
+    bp.enabled = true;
+    vm.add_breakpoint(bp);
+    vm.execute(chunk);
     vm.continue_run();
     vm.execute(chunk);
-    
-    // Should have moved past the breakpoint
-    snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot after continue");
-    require(snapshot->current_position.line != 2 || vm.is_finished(), 
-        "should have moved past line 2 or finished");
-    
-    std::cout << "  ✅ Breakpoint doesn't immediately re-hit works\n";
+    auto snapshot = vm.get_debug_snapshot();
+    require(snapshot.has_value(), "should pause at line-2 breakpoint");
+    require(snapshot->current_position.line == 2, "should be at line 2 before resume");
+    const auto stopped_ip = vm.current_ip();
+    require(output.str() == "line1\n", "only line1 should execute before the line-2 breakpoint");
+    vm.continue_run();
+    vm.execute(chunk);
+    if (!vm.is_finished()) {
+        snapshot = vm.get_debug_snapshot();
+        require(snapshot.has_value(), "a non-finished debugger must expose its next pause");
+        require(vm.current_ip() != stopped_ip || snapshot->current_position.line != 2,
+                "continue must not immediately re-hit the same bound instruction");
+    }
+    require(vm.is_finished(), "without another breakpoint, continue should finish the program");
+    require(output.str() == "line1\nline2\nline3\n",
+            "the breakpointed line and following line must each execute exactly once");
+    std::cout << "  ✅ Breakpoint continue makes real progress\n";
 }
 
 // Test: Source map has real non-placeholder positions
@@ -1023,10 +953,10 @@ void test_source_map_function_context() {
     
     // Using canonical emoji function syntax
     const std::string source = 
-        "🛠️ ➕️ 🫴 🍎 🍐 🤲\n"     // Line 1: define ➕️(🍎, 🍐)
+        "🛠️ 🚀 🫴 🍎 🍐 🤲\n"     // Line 1: define 🚀(🍎, 🍐)
         "📦 🍎 ➕ 🍐\n"             // Line 2: return 🍎 + 🍐
         "🏁\n"                     // Line 3: end function
-        "📝 ➕️ 🫴 1 2 🤲\n";      // Line 4: call ➕️(1, 2)
+        "📝 🚀 🫴 1 2 🤲\n";      // Line 4: call 🚀(1, 2)
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -1038,13 +968,13 @@ void test_source_map_function_context() {
     
     // Check that function has context in source map
     require(chunk.functions.size() == 1, "should have one function");
-    require(chunk.functions[0].name == "➕️", "function should be named '➕️'");
+    require(chunk.functions[0].name == "🚀", "function should be named '🚀'");
     
     // Find instructions inside the function and verify function context
     bool found_function_context = false;
     for (const auto& src : chunk.source_map) {
         if (!src.function_name.empty()) {
-            require(src.function_name == "➕️", "function name should be '➕️'");
+            require(src.function_name == "🚀", "function name should be '🚀'");
             found_function_context = true;
         }
     }
@@ -1107,9 +1037,9 @@ void test_inspection_non_mutation() {
     std::cout << "Test: debugger inspection does not mutate state...\n";
     
     const std::string source = 
-        "🐍 counter 🔢 🟰 0\n"    // Line 1: counter = 0
-        "📝 counter\n"              // Line 2: print counter
-        "📝 counter\n";             // Line 3: print counter again
+        "🐍 🍎 🔢 🟰 0\n"    // Line 1: counter = 0
+        "📝 🍎\n"              // Line 2: print counter
+        "📝 🍎\n";             // Line 3: print counter again
     
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
@@ -1138,14 +1068,18 @@ void test_inspection_non_mutation() {
     auto snapshot1 = vm.get_debug_snapshot();
     require(snapshot1.has_value(), "should have snapshot at breakpoint");
     
-    // Get globals - this should be read-only
-    auto globals1 = snapshot1->call_stack[0].globals;
-    
-    // Evaluate an expression - this should be read-only
-    auto eval_result = vm.evaluate_expression("counter");
-    
-    // Get snapshot again after inspection
+    require(snapshot1->call_stack.empty(), "module-scope pause must not fabricate a function frame");
+    auto global1 = snapshot1->globals.find("🍎");
+    require(global1 != snapshot1->globals.end(), "snapshot must expose module global 🍎");
+    require(emojineer::debug_render_value(global1->second) == "0", "module global 🍎 should equal 0");
+    auto eval_result = vm.evaluate_expression("🍎");
+    require(eval_result.has_value(), "module global must be inspectable without a function frame");
+    require(emojineer::debug_render_value(*eval_result) == "0", "print/evaluate must observe the same global value");
     auto snapshot2 = vm.get_debug_snapshot();
+    require(snapshot2.has_value(), "inspection must preserve the paused snapshot");
+    auto global2 = snapshot2->globals.find("🍎");
+    require(global2 != snapshot2->globals.end(), "global must remain present after inspection");
+    require(emojineer::values_equal(global1->second, global2->second), "inspection must not mutate module globals");
     
     // Execute to completion
     vm.continue_run();
@@ -1162,183 +1096,146 @@ void test_inspection_non_mutation() {
 // Test: Debugger inspection does not consume program input
 void test_inspection_does_not_consume_input() {
     std::cout << "Test: debugger inspection does not consume program input...\n";
-    
-    // This test verifies that debugger inspection doesn't affect program state.
-    // Since the actual input reading is complex to test in isolation,
-    // we verify that multiple evaluations produce consistent results.
-    const std::string source = 
-        "🐍 x 🔢 🟰 42\n"  // Line 1: x = 42
-        "📝 x\n"            // Line 2: print x
-        "📝 x\n";           // Line 3: print x again
-    
+    const std::string source =
+        "🐍 🍎 🔤 🟰 📥\n"
+        "📝 🍎\n";
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
     auto program = parser.parse();
-    
     emojineer::Compiler compiler;
     compiler.set_source_path("test.emoji");
     auto chunk = compiler.compile(program);
-    
-    std::istringstream input;
+    std::istringstream input("kept-for-program\n");
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
-    
-    // Set breakpoint at line 2
     emojineer::BreakpointLocation bp;
     bp.source_position.source_path = "test.emoji";
-    bp.source_position.line = 2;
+    bp.source_position.line = 1;
     bp.enabled = true;
     vm.add_breakpoint(bp);
-    
-    // Run to breakpoint
     vm.execute(chunk);
+    require(input.tellg() == std::streampos(0), "preparation must not consume input");
     vm.continue_run();
     vm.execute(chunk);
-    
-    auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot at breakpoint");
-    
-    // Evaluate the expression multiple times - should be consistent
-    auto eval1 = vm.evaluate_expression("x");
-    auto eval2 = vm.evaluate_expression("x");
-    auto eval3 = vm.evaluate_expression("x");
-    
-    // All evaluations should return the same value
-    require(eval1.has_value(), "should be able to evaluate x");
-    require(eval2.has_value(), "should be able to evaluate x again");
-    require(eval3.has_value(), "should be able to evaluate x a third time");
-    
-    // Verify values are the same
-    require(eval1 == eval2, "multiple evaluations should return same value");
-    require(eval2 == eval3, "evaluations should be consistent");
-    
-    // Continue execution
+    auto snapshot1 = vm.get_debug_snapshot();
+    require(snapshot1.has_value(), "should pause before the real input read");
+    require(snapshot1->current_position.line == 1, "input breakpoint should be on line 1");
+    require(input.tellg() == std::streampos(0), "breakpoint must precede input consumption");
+    auto snapshot2 = vm.get_debug_snapshot();
+    auto snapshot3 = vm.get_debug_snapshot();
+    (void)snapshot2;
+    (void)snapshot3;
+    (void)vm.get_breakable_positions();
+    require(!vm.evaluate_expression("🍎").has_value(), "input-backed variable is not assigned before ReadLine");
+    require(input.tellg() == std::streampos(0), "inspection must not consume program input");
     vm.continue_run();
     vm.execute(chunk);
-    
-    // Both prints should output 42
-    require(output.str() == "42\n42\n",
-        "output should be '42\\n42\\n' - inspection should not affect execution");
-    
-    std::cout << "  ✅ Debugger inspection does not consume program input\n";
+    require(vm.is_finished(), "program should complete after resuming from input breakpoint");
+    require(output.str() == "kept-for-program\n", "program must consume and print the original input exactly once");
+    require(input.rdbuf()->in_avail() == 0, "the one supplied input line should be consumed exactly once");
+    std::cout << "  ✅ Debugger inspection preserves program input\n";
 }
 
 // Test: Breakpoint binding diagnostics
 void test_breakpoint_binding_diagnostics() {
     std::cout << "Test: breakpoint binding diagnostics...\n";
-    
-    const std::string source = 
-        "📝 📜hello📜\n";  // Line 1
-    
+    const std::string source = "📝 📜hello📜\n";
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
     auto program = parser.parse();
-    
     emojineer::Compiler compiler;
     compiler.set_source_path("test.emoji");
     auto chunk = compiler.compile(program);
-    
     std::istringstream input;
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
-    
-    // Set a valid breakpoint
-    emojineer::BreakpointLocation bp_valid;
-    bp_valid.source_position.source_path = "test.emoji";
-    bp_valid.source_position.line = 1;
-    bp_valid.enabled = true;
-    vm.add_breakpoint(bp_valid);
-    
-    // Set an invalid/unbound breakpoint (line that doesn't exist)
-    emojineer::BreakpointLocation bp_invalid;
-    bp_invalid.source_position.source_path = "test.emoji";
-    bp_invalid.source_position.line = 100;  // Doesn't exist
-    bp_invalid.enabled = true;
-    vm.add_breakpoint(bp_invalid);
-    
-    // Execute to load the chunk
+
+    emojineer::BreakpointLocation valid;
+    valid.source_position.source_path = "test.emoji";
+    valid.source_position.line = 1;
+    valid.enabled = true;
+    vm.add_breakpoint(valid);
+
+    emojineer::BreakpointLocation invalid;
+    invalid.source_position.source_path = "test.emoji";
+    invalid.source_position.line = 100;
+    invalid.enabled = true;
+    vm.add_breakpoint(invalid);
+
+    // Load the chunk without executing it so binding can be inspected before side effects.
     vm.execute(chunk);
-    
-    // Get breakpoint info - the valid one should be bound
-    // Note: We can't easily test the diagnostics without more API,
-    // but we can verify the VM runs without crashing
-    
+    auto infos = vm.get_breakpoint_info();
+    require(infos.size() == 2, "expected two breakpoint diagnostics");
+    require(infos[0].status == emojineer::BreakpointStatus::Bound,
+            "line 1 breakpoint must be Bound");
+    require(infos[0].bound_ip.has_value(), "Bound breakpoint must expose an IP");
+    require(infos[0].diagnostics.find("Bound to IP") != std::string::npos,
+            "Bound breakpoint diagnostic must name its IP");
+    require(infos[1].status == emojineer::BreakpointStatus::Unbound,
+            "nonexistent line must be Unbound when no source resolver proves drift");
+    require(!infos[1].bound_ip.has_value(), "Unbound breakpoint must not expose an IP");
+
+    // Remove the real breakpoint. The remaining unbound breakpoint must never stop execution.
+    vm.remove_breakpoint(0);
     vm.continue_run();
     vm.execute(chunk);
-    
-    require(vm.is_finished(), "should finish execution despite invalid breakpoint");
-    
+    require(vm.is_finished(), "unbound breakpoint must not stop program completion");
+    require(output.str() == "hello\n", "program behavior must remain unchanged by an unbound breakpoint");
     std::cout << "  ✅ Breakpoint binding diagnostics work\n";
 }
 
 // Test: Step over with inner breakpoint should not hit inner breakpoint
-void test_step_over_skips_inner_breakpoint() {
-    std::cout << "Test: step over skips inner breakpoint...\n";
-    
-    const std::string source = 
-        "🛠️ inner 🫴 x 🤲\n"      // Line 1: define inner(x)
-        "📝 x\n"                   // Line 2: print x
-        "📦 x\n"                   // Line 3: return x
-        "🏁\n"                     // Line 4: end function
-        "📝 inner 🫴 42 🤲\n"     // Line 5: call inner(42)
-        "📝 📜done📜\n";          // Line 6: print done
-    
+void test_step_over_honors_inner_breakpoint() {
+    std::cout << "Test: step over honors explicit inner breakpoint...\n";
+    const std::string source =
+        "🛠️ 🚀 🫴 🍎 🤲\n"
+        "📝 🍎\n"
+        "📦 🍎\n"
+        "🏁\n"
+        "📝 🚀 🫴 42 🤲\n"
+        "📝 📜done📜\n";
     emojineer::Lexer lexer(source, {});
     emojineer::Parser parser(lexer.tokenize());
     auto program = parser.parse();
-    
     emojineer::Compiler compiler;
     compiler.set_source_path("test.emoji");
     auto chunk = compiler.compile(program);
-    
     std::istringstream input;
     std::ostringstream output;
     emojineer::DebugVM vm(input, output);
-    
-    // Set a breakpoint INSIDE the function (line 2)
-    emojineer::BreakpointLocation bp_inner;
-    bp_inner.source_position.source_path = "test.emoji";
-    bp_inner.source_position.line = 2;  // Inside the function
-    bp_inner.enabled = true;
-    vm.add_breakpoint(bp_inner);
-    
-    // Set breakpoint on line 5 (the call)
-    emojineer::BreakpointLocation bp_call;
-    bp_call.source_position.source_path = "test.emoji";
-    bp_call.source_position.line = 5;
-    bp_call.enabled = true;
-    vm.add_breakpoint(bp_call);
-    
-    // Run to the call on line 5
+    emojineer::BreakpointLocation inner;
+    inner.source_position.source_path = "test.emoji";
+    inner.source_position.line = 2;
+    inner.enabled = true;
+    vm.add_breakpoint(inner);
+    emojineer::BreakpointLocation call;
+    call.source_position.source_path = "test.emoji";
+    call.source_position.line = 5;
+    call.enabled = true;
+    vm.add_breakpoint(call);
     vm.execute(chunk);
     vm.continue_run();
     vm.execute(chunk);
-    
     auto snapshot = vm.get_debug_snapshot();
-    require(snapshot.has_value(), "should have snapshot at line 5");
-    require(snapshot->current_position.line == 5, "should be at line 5");
-    
-    // Now step OVER - this should NOT enter the function
-    // Even though there's a breakpoint inside, step over should skip it
+    require(snapshot.has_value() && snapshot->current_position.line == 5, "should reach call breakpoint");
+    const std::size_t caller_depth = snapshot->call_stack.size();
     vm.step_over();
     vm.execute(chunk);
-    
     snapshot = vm.get_debug_snapshot();
-    
-    // After stepping over, we should be at line 6 (done), NOT line 2 (inside function)
-    // If we hit the inner breakpoint, something is wrong
-    if (snapshot.has_value()) {
-        require(snapshot->current_position.line != 2, 
-            "step over should NOT pause inside the called function");
-    }
-    
-    // Continue to completion
-    vm.continue_run();
+    require(snapshot.has_value(), "explicit inner breakpoint must pause during step_over");
+    require(snapshot->current_position.line == 2, "inner breakpoint must win over step_over");
+    require(snapshot->reason == "breakpoint hit", "inner stop must report breakpoint hit");
+    require(snapshot->call_stack.size() > caller_depth, "inner breakpoint must expose the callee frame");
+    vm.remove_breakpoint(0);
+    vm.remove_breakpoint(0);
+    vm.step_out();
     vm.execute(chunk);
-    
-    require(vm.is_finished(), "should finish execution");
-    
-    std::cout << "  ✅ Step over skips inner breakpoint\n";
+    snapshot = vm.get_debug_snapshot();
+    require(snapshot.has_value(), "step_out after inner breakpoint should pause in caller");
+    require(snapshot->call_stack.size() <= caller_depth, "step_out must restore caller depth");
+    require(snapshot->current_position.line >= 5 && snapshot->current_position.line <= 6,
+            "step_out should return to the call/post-call source region");
+    std::cout << "  ✅ Step over honors explicit inner breakpoint\n";
 }
 
 } // anonymous namespace
@@ -1378,7 +1275,7 @@ int main() {
         test_inspection_non_mutation();
         test_inspection_does_not_consume_input();
         test_breakpoint_binding_diagnostics();
-        test_step_over_skips_inner_breakpoint();
+        test_step_over_honors_inner_breakpoint();
         
         std::cout << "\n✅ All debugger tests passed!\n";
         return 0;

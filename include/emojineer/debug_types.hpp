@@ -74,6 +74,7 @@ struct DebugFrame {
 // Debug state snapshot (read-only, no mutation)
 struct DebugSnapshot {
     std::vector<DebugFrame> call_stack;
+    std::unordered_map<std::string, Value> globals;
     std::size_t current_frame;
     SourcePosition current_position;
     std::string reason;  // Why we're paused (breakpoint, step, etc.)
@@ -144,7 +145,7 @@ public:
     
     // Check if debugger should pause BEFORE executing an instruction
     // Returns true if execution should NOT proceed (paused, breakpoint hit, or step complete)
-    virtual bool should_pause_before_execution() const = 0;
+    virtual bool should_pause_before_execution() = 0;
 };
 
 } // namespace emojineer
