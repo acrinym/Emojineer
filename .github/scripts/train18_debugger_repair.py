@@ -75,7 +75,6 @@ cpp.write_text(text, encoding='utf-8')
 tests = Path('tests/debugger_tests.cpp')
 text = tests.read_text(encoding='utf-8')
 
-# Canonicalize stale ASCII fixtures.
 start = text.index('void test_inspection_non_mutation() {')
 end = text.index('// Test: Debugger inspection does not consume program input', start)
 region = text[start:end]
@@ -84,7 +83,6 @@ region = region.replace('📝 counter', '📝 🍎')
 region = region.replace('evaluate_expression("counter")', 'evaluate_expression("🍎")')
 text = text[:start] + region + text[end:]
 
-# Real input non-consumption acceptance.
 start = text.index('void test_inspection_does_not_consume_input() {')
 end = text.index('// Test: Breakpoint binding diagnostics', start)
 replacement = r'''void test_inspection_does_not_consume_input() {
@@ -136,7 +134,6 @@ start = text.index('void test_source_map_function_context() {')
 end = text.index('// Test: Bytecode roundtrip preserves source maps', start)
 text = text[:start] + text[start:end].replace('➕️', '🚀') + text[end:]
 
-# Pure step-over: no explicit breakpoint in the callee, so next must land after the call.
 start = text.index('void test_step_over_function() {')
 end = text.index('// Test: Step out of function', start)
 replacement = r'''void test_step_over_function() {
@@ -182,7 +179,19 @@ replacement = r'''void test_step_over_function() {
 '''
 text = text[:start] + replacement + text[end:]
 
-# Explicit breakpoints remain authoritative even while a step-over operation is active.
+# The VM call stack contains actual function frames only; there is no synthetic module frame.
+start = text.index('void test_step_out_function() {')
+end = text.index('// Test: Evaluate expression with parameters and locals', start)
+region = text[start:end]
+region = region.replace(
+    '    std::uint32_t caller_line = snapshot_before->current_position.line;\n',
+    '    std::uint32_t caller_line = snapshot_before->current_position.line;\n'
+    '    std::size_t caller_depth = snapshot_before->call_stack.size();\n')
+region = region.replace(
+    '    require(inside_depth > 1, "should be inside function with >1 frame");',
+    '    require(inside_depth > caller_depth, "step_into must add a real callee frame");')
+text = text[:start] + region + text[end:]
+
 start = text.index('void test_step_over_skips_inner_breakpoint() {')
 end = text.index('} // anonymous namespace', start)
 replacement = r'''void test_step_over_honors_inner_breakpoint() {
@@ -207,12 +216,12 @@ replacement = r'''void test_step_over_honors_inner_breakpoint() {
     inner.source_position.source_path = "test.emoji";
     inner.source_position.line = 2;
     inner.enabled = true;
-    vm.add_breakpoint(inner); // id 0
+    vm.add_breakpoint(inner);
     emojineer::BreakpointLocation call;
     call.source_position.source_path = "test.emoji";
     call.source_position.line = 5;
     call.enabled = true;
-    vm.add_breakpoint(call); // id 1
+    vm.add_breakpoint(call);
     vm.execute(chunk);
     vm.continue_run();
     vm.execute(chunk);
@@ -243,4 +252,4 @@ text = text[:start] + replacement + text[end:]
 text = text.replace('test_step_over_skips_inner_breakpoint();', 'test_step_over_honors_inner_breakpoint();')
 
 tests.write_text(text, encoding='utf-8')
-print('Train 18 debugger control, input inspection, and step-over acceptance repairs applied.')
+print('Train 18 debugger control, input inspection, and step semantics repairs applied.')
