@@ -74,5 +74,52 @@ replacement = r'''void test_frame_selection() {
 '''
 text = text[:start] + replacement + text[end:]
 
+start = text.index('void test_breakpoint_no_rehit() {')
+end = text.index('// Test: Source map has real non-placeholder positions', start)
+replacement = r'''void test_breakpoint_no_rehit() {
+    std::cout << "Test: breakpoint continue makes real progress...\n";
+    const std::string source =
+        "📝 📜line1📜\n"
+        "📝 📜line2📜\n"
+        "📝 📜line3📜\n";
+    emojineer::Lexer lexer(source, {});
+    emojineer::Parser parser(lexer.tokenize());
+    auto program = parser.parse();
+    emojineer::Compiler compiler;
+    compiler.set_source_path("test.emoji");
+    auto chunk = compiler.compile(program);
+    std::istringstream input;
+    std::ostringstream output;
+    emojineer::DebugVM vm(input, output);
+    emojineer::BreakpointLocation bp;
+    bp.source_position.source_path = "test.emoji";
+    bp.source_position.line = 2;
+    bp.enabled = true;
+    vm.add_breakpoint(bp);
+    vm.execute(chunk);
+    vm.continue_run();
+    vm.execute(chunk);
+    auto snapshot = vm.get_debug_snapshot();
+    require(snapshot.has_value(), "should pause at line-2 breakpoint");
+    require(snapshot->current_position.line == 2, "should be at line 2 before resume");
+    const auto stopped_ip = vm.current_ip();
+    require(output.str() == "line1\n", "only line1 should execute before the line-2 breakpoint");
+    vm.continue_run();
+    vm.execute(chunk);
+    if (!vm.is_finished()) {
+        snapshot = vm.get_debug_snapshot();
+        require(snapshot.has_value(), "a non-finished debugger must expose its next pause");
+        require(vm.current_ip() != stopped_ip || snapshot->current_position.line != 2,
+                "continue must not immediately re-hit the same bound instruction");
+    }
+    require(vm.is_finished(), "without another breakpoint, continue should finish the program");
+    require(output.str() == "line1\nline2\nline3\n",
+            "the breakpointed line and following line must each execute exactly once");
+    std::cout << "  ✅ Breakpoint continue makes real progress\n";
+}
+
+'''
+text = text[:start] + replacement + text[end:]
+
 path.write_text(text, encoding='utf-8')
-print('Train 18 debugger numeric and nested-frame acceptance aligned with production semantics.')
+print('Train 18 debugger numeric, nested-frame, and breakpoint-resume acceptance aligned with production semantics.')
