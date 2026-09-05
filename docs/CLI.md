@@ -2,10 +2,10 @@
 
 Emojineer builds two command-line executables:
 
-- `emojineer` - source, bytecode, formatting, REPL, standard-library, package-aware linking, and execution tools;
+- `emojineer` - source, bytecode, formatting, REPL, standard-library, package-aware linking, execution, and source-level debugging tools;
 - `emji` - project, local dependency, lockfile, package-graph, artifact, and registry workflow.
 
-The current toolchain version is **0.14**.
+The current toolchain version is **0.18**.
 
 ## Build
 
@@ -36,6 +36,32 @@ emojineer exec program.emjbc
 emojineer disasm program.emjbc
 emojineer stdlib
 emojineer repl [--cer registry.json ...]
+emojineer debug <source-or-project>
+```
+
+### Debugger commands
+
+The debugger provides source-level debugging with the following commands:
+
+```text
+break <file:line>   - Set breakpoint at source location
+delete <id>         - Delete breakpoint by ID
+list                - List all breakpoints
+run                 - Start/continue execution
+continue            - Continue execution (alias for run)
+step                - Step into function/next instruction
+next                - Step over function call
+out                 - Step out of current function
+pause               - Pause execution
+backtrace           - Show call stack (alias: bt, where)
+frame <n>           - Select frame n
+locals              - Show local variables
+globals             - Show global variables
+print <expr>        - Evaluate expression
+source              - Show current source position
+list                - List source around line
+help                - Show help
+quit                - Exit debugger
 ```
 
 File compilation resolves local modules, declared `pkg:<dependency>/<module>.emoji` imports, and built-in `std:<module>` imports through the same package-aware linker. Package-qualified module identities remain checkout-portable and never encode absolute package roots.
@@ -200,6 +226,6 @@ Registry support belongs to `emji`; it does not grant ambient network authority 
 
 ## Current boundary
 
-The v0.14 toolchain now has a real artifact exchange protocol, but remote registry packages are **not yet project dependencies**. `emojineer.toml` and lockfile v2 still describe local/path dependencies only.
+The v0.18 toolchain adds a source-level debugger with deterministic bytecode source mappings, VM debugger control API, and interactive `emojineer debug` session. Remote registry packages are **not yet project dependencies**. `emojineer.toml` and lockfile v2 still describe local/path dependencies only.
 
 The next package train must add registry dependency declarations, recursive remote resolution/materialization, registry provenance in deterministic locks, and package-aware linking against the verified materialized graph before remote `emji add` can be considered real.
