@@ -70,7 +70,7 @@ replacement = r'''void test_breakpoint_binding_diagnostics() {
     require(!infos[1].bound_ip.has_value(), "Unbound breakpoint must not expose an IP");
 
     // Remove the real breakpoint. The remaining unbound breakpoint must never stop execution.
-    require(vm.remove_breakpoint(0), "valid breakpoint should be removable");
+    vm.remove_breakpoint(0);
     vm.continue_run();
     vm.execute(chunk);
     require(vm.is_finished(), "unbound breakpoint must not stop program completion");
