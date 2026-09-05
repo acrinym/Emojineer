@@ -27,6 +27,8 @@ jobs:
         run: python3 .github/scripts/train18_module_scope_debugger_repair.py
       - name: Repair breakpoint diagnostics
         run: python3 .github/scripts/train18_breakpoint_diagnostics_repair.py
+      - name: Complete debugger product
+        run: python3 .github/scripts/train18_product_completion.py
       - name: Validate diff
         run: git diff --check
       - name: Configure Debug
@@ -43,15 +45,15 @@ jobs:
         run: cmake --build build-release
       - name: Test Release
         run: ctest --test-dir build-release --output-on-failure
-      - name: Commit qualified reconciliation repairs
+      - name: Commit qualified Train 18 product repairs
         run: |
-          paths=(src/module.cpp include/emojineer/debug_types.hpp include/emojineer/debugger.hpp src/debugger.cpp tests/debugger_tests.cpp)
+          paths=(src/module.cpp src/bytecode.cpp include/emojineer/bytecode.hpp include/emojineer/debug_types.hpp include/emojineer/debugger.hpp src/debugger.cpp tests/debugger_tests.cpp)
           if git diff --quiet -- "${paths[@]}"; then
-            echo 'No qualified product reconciliation diff to commit.'
+            echo 'No qualified Train 18 product diff to commit.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add "${paths[@]}"
-          git commit -m 'Train 18: reconcile debugger control onto current main'
+          git commit -m 'Train 18: finish bytecode provenance and debugger diagnostics'
           git push origin HEAD:train-18-reconcile-main
