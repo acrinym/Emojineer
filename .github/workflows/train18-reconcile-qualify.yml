@@ -1,0 +1,46 @@
+name: Train 18 Reconcile Qualification
+
+on:
+  push:
+    branches: [train-18-reconcile-main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libicu-dev libcurl4-openssl-dev
+      - name: Apply exact module reconciliation
+        run: python3 .github/scripts/train18_reconcile_apply.py
+      - name: Validate diff
+        run: git diff --check
+      - name: Configure Debug
+        run: cmake -S . -B build-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+      - name: Build Debug
+        run: cmake --build build-debug
+      - name: Test Debug
+        run: ctest --test-dir build-debug --output-on-failure
+      - name: Configure Release
+        run: cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build Release
+        run: cmake --build build-release
+      - name: Test Release
+        run: ctest --test-dir build-release --output-on-failure
+      - name: Commit reconciled module if qualified
+        run: |
+          if git diff --quiet -- src/module.cpp; then
+            echo 'No module reconciliation diff to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/module.cpp
+          git commit -m 'Train 18: reconcile module debug identities onto current main'
+          git push origin HEAD:train-18-reconcile-main
