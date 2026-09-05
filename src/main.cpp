@@ -1,5 +1,6 @@
 #include "emojineer/bytecode.hpp"
 #include "emojineer/cer.hpp"
+#include "emojineer/debugger.hpp"
 #include "emojineer/disassembler.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/module.hpp"
@@ -42,10 +43,11 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.17\n"
+        << "Emojineer 0.18\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...]\n"
         << "  emojineer stdlib\n"
+        << "  emojineer debug <source-or-project>\n"
         << "  emojineer <run|check|explain|dump|lint> <file.emoji> [--cer registry.json ...]\n"
         << "  emojineer fmt <file.emoji> [-o file.emoji] [--cer registry.json ...]\n"
         << "  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n"
@@ -198,6 +200,12 @@ int main(int argc, char** argv) {
             emojineer::write_bytecode(chunk, output);
             std::cout << "✅ wrote " << output_path.string() << '\n';
             return 0;
+        }
+
+        if (cli.command == "debug") {
+            if (!cli.input) throw std::runtime_error("missing input");
+            if (cli.output) throw std::runtime_error("debug does not accept -o");
+            return emojineer::run_debug_session(*cli.input, std::cin, std::cout, std::cerr, registry_for(cli));
         }
 
         usage();
