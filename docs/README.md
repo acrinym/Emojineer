@@ -4,58 +4,52 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 ## Start here
 
-- [Language reference](LANGUAGE.md) - source model, tokens, grammar, values, functions, collections, control flow, and all module import forms.
-- [Standard library](STDLIB.md) - built-in `std:math`, `std:arrays`, and `std:text` APIs and architecture.
-- [CLI and toolchain](CLI.md) - build, run, check, format, lint, explain, REPL, compile, execute, package graph, package artifact, and registry commands.
-- [EMJBC bytecode](BYTECODE.md) - file format, compatibility versions, constants, function metadata, instructions, verifier limits, and VM execution model.
-- [Modules and imports](MODULES.md) - project-local, `pkg:`, and `std:` imports, visibility, deterministic identity, package ownership, loading order, and cycles.
-- [`emji` projects](PROJECTS.md) - manifest, local/path dependency graph, deterministic lockfile, SHA-256 package identity, package-qualified imports, graph inspection, initialization, and project validation.
-- [Package artifacts and registry transport](REGISTRY.md) - immutable `.emjpkg` format, registry identity/index protocol, publishing/fetching, content-addressed caching, HTTPS reads, and trust boundaries.
+- [Language reference](LANGUAGE.md) - source model, tokens, grammar, values, functions, collections, control flow, and module imports.
+- [CLI and toolchain](CLI.md) - language, project, package, registry, discovery, LSP, and debugger entry points.
+- [EMJBC bytecode](BYTECODE.md) - bytecode format, verifier limits, source metadata, and VM execution model.
+- [Modules and imports](MODULES.md) - local, `pkg:`, and `std:` imports plus package ownership and visibility.
+- [`emji` projects](PROJECTS.md) - manifests, local/registry dependencies, locking, materialization, and project validation.
+- [Package artifacts and registry transport](REGISTRY.md) - immutable artifacts, verified exchange, publication, dependencies, and discovery.
+- [Authenticated publication](AUTHENTICATED_REGISTRY_PUBLICATION.md) - `emjpub1` HTTPS write protocol and receipts.
+- [Remote dependencies](REMOTE_DEPENDENCIES.md) - reproducible registry dependency resolution/materialization.
+- [Language server](LANGUAGE_SERVER.md) - native C++ LSP behavior and offline editor boundaries.
+- [Source debugger](DEBUGGER.md) - source breakpoints, stepping, frames, values, and provenance.
+- [Package discovery](PACKAGE_DISCOVERY.md) - deterministic search, package metadata, release filtering, and reverse dependencies.
+- [Product roadmap](ROADMAP.md) - landed and future product trains.
 
 ## Focused references
 
 - [Functions](FUNCTIONS.md)
 - [Collections](COLLECTIONS.md)
 - [Custom Emoji Registry](CER.md)
+- [Standard library](STDLIB.md)
 - [Formatter and lint](SOURCE_TOOLING.md)
 - [REPL and bytecode tooling](TOOLING.md)
 - [Design provenance](PROVENANCE.md)
-- [Product roadmap](ROADMAP.md)
 
 ## Current implemented product level
 
-The compiler executable reports Emojineer **0.14**. Product Trains 1 through 14 are implemented on this train:
+The compiler/toolchain reports Emojineer **0.19**. Product Trains **1 through 19** are implemented on this train.
 
-1. sovereign language core;
-2. functions, recursion, and call frames;
-3. Custom Emoji Registry;
-4. first-class collections;
-5. REPL and bytecode tooling;
-6. canonical source formatting and diagnostics;
-7. `emji` project workflow;
-8. modules and imports;
-9. native standard-library foundation;
-10. real local/path dependency management with recursive locking and package content identity;
-11. explicit cross-package module imports through the resolved package graph;
-12. deterministic package graph inspection for humans and tooling;
-13. deterministic immutable `.emjpkg` package artifacts, strict verification, content-addressed artifact identity, and full SemVer requirement/selection primitives;
-14. registry identity/discovery, immutable local publication, package-version indexes, verified fetch/cache behavior, and optional HTTPS registry reads through libcurl.
+The product now includes the sovereign language/compiler/VM core; functions and collections; CER; REPL/source tooling; project workflow; modules; native standard modules; local and remote package dependency graphs; immutable `.emjpkg` artifacts; verified file/HTTPS registry reads; reproducible materialization and lock v3; authenticated HTTPS publication; native C++ LSP/editor integration; the source-level debugger; and deterministic package search/discovery with stable/prerelease filtering and reverse-dependency queries.
 
-The documentation describes implemented behavior unless a section is explicitly labeled as future work.
+The documentation describes implemented behavior unless a section is explicitly labeled as future work or as a historical train contract.
 
 ## File, module, package, and registry forms
 
 - `.emoji` - Emojineer UTF-8 source.
-- `.emjbc` - serialized Emojineer bytecode.
+- `.emjbc` - serialized Emojineer bytecode with deterministic debug metadata where present.
 - `.emjpkg` - deterministic immutable package source artifact.
-- `emojineer.toml` - strict project/package manifest, currently including local/path `[dependencies]` only.
-- `emojineer.lock` - deterministic local project/package graph lock metadata.
-- CER `.json` files - optional custom emoji token packs that lower into existing Emojineer semantic token kinds.
+- `emojineer.toml` - strict package/project manifest with local/path and registry dependency declarations.
+- `emojineer.lock` - deterministic lock v3 provenance for path and registry dependencies.
+- `.emojineer/packages/...` - project-owned verified materialized remote package store.
+- CER `.json` - optional custom emoji token packs.
 - `relative/path.emoji` - source module inside the importing package's owned root.
 - `pkg:<dependency>/<path>.emoji` - source module inside a declared direct dependency package.
-- `std:<name>` - deterministic built-in standard module specifier resolved by the module linker.
-- `emojineer.package-graph.v1` - deterministic JSON graph-inspection schema emitted by `emji tree --json`.
-- `EMJREGISTRY1` - registry discovery/identity descriptor.
-- `EMJREGPKG1` - immutable package-version index binding versions to package content and exact artifact SHA-256 identities.
+- `std:<name>` - deterministic built-in standard module.
+- `EMJREGISTRY1` - registry identity descriptor.
+- `EMJREGPKG1` - immutable per-package version index.
+- `EMJREGDISC1` - deterministic registry discovery index for package search metadata.
+- `emojineer.registry-search.v1`, `emojineer.registry-package-info.v1`, `emojineer.registry-dependents.v1` - deterministic discovery JSON schemas.
 
-Local dependency packages remain resolvable, lockable, explicitly importable, inspectable, packable, and verifiable. v0.14 additionally exchanges immutable artifacts through real file registries and optionally HTTPS read endpoints. Registry-fetched artifacts do not yet become project dependencies until remote manifest syntax, recursive materialization, and lockfile provenance land together.
+Ordinary source compilation, execution, LSP requests, and debugger operation do not contact registries. Registry networking remains explicit `emji` package-manager authority. Package discovery does not weaken immutable fetch/materialization verification or make transitive dependencies ambient imports.

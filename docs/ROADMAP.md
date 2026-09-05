@@ -147,43 +147,48 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - the dedicated interoperability fixture consumes the exact encoded request, enforces auth/ownership/immutability/checksums/bounds, and proves uploaded artifacts round-trip through the existing verified fetch path;
 - no ambient network authority for Emojineer programs or the VM and no audit machinery.
 
-## Next product train
-
 ### Train 17 — Language server and editor integration
 
-Build the already-open Train 17 language-server stack as a native C++ LSP implementation over Emojineer's sovereign compiler/toolchain:
+- native C++ `emojineer-lsp` over the sovereign parser/compiler/package/module model;
+- JSON-RPC/LSP stdio lifecycle and unsaved-buffer document state;
+- UTF-16/LSP position translation over Emojineer's UTF-8/grapheme source model;
+- diagnostics, completion, hover, definition/references, symbols, and formatter integration;
+- local/path/materialized-registry package awareness without undeclared transitive imports;
+- ordinary editor requests remain offline with respect to registries.
 
-- dedicated `emojineer-lsp` executable speaking JSON-RPC/LSP over stdio;
-- initialize/shutdown/exit and text-document open/change/save/close lifecycle;
-- correct LSP UTF-16 position translation over Emojineer's UTF-8/grapheme-aware source model;
-- unsaved-buffer diagnostics and navigation without mutating project files;
-- syntax/semantic/module/package/lock/materialization/CER-aware diagnostics;
-- completion and hover for core emoji, CER aliases/descriptions, user symbols, exports, std modules, local modules, path packages, and materialized registry packages;
-- definition/references across modules and declared direct package dependencies without exposing undeclared transitive imports;
-- document/workspace symbols and canonical formatter integration;
-- workspace discovery from `emojineer.toml`, lock/store state, `PackageGraph`, and module graph;
-- ordinary LSP requests never initiate registry network access;
-- deterministic textual views for emoji/CER semantics and accessibility tooling;
-- no alternate parser or JavaScript/Python language-server implementation;
-- no editor-specific extension requirement and no audit machinery.
+### Train 18 — Source-level debugger
+
+- deterministic source mappings in EMJBC v7;
+- source breakpoints, continue/pause, step into/over/out;
+- stack/frame, parameter/local/global inspection and deterministic value rendering;
+- source provenance, Stale vs SourceDrift diagnostics, and serialized-bytecode sessions;
+- debugger observation does not mutate VM state or consume program input;
+- no second interpreter or debugger-only language semantics.
+
+### Train 19 — Package search and registry discovery
+
+- deterministic `EMJREGDISC1` registry discovery index contract;
+- existing file registries derive discovery from real package indexes plus verified immutable artifacts, with no migration or fake registry state;
+- HTTPS registries expose bounded `v1/discovery.index` metadata bound to registry identity;
+- `emji search` over package name, entry path, and direct dependency metadata;
+- stable-by-default selection with explicit `--include-prerelease` behavior;
+- `emji package-info` with selected release, all discoverable versions, entry, dependencies, and immutable identities;
+- `emji dependents` direct reverse-dependency queries;
+- deterministic human and JSON schemas for tooling;
+- `emji discovery-index` canonical materialization for registry operators;
+- discovery networking remains explicit package-manager authority and never becomes program/VM authority.
+
+## Next product train
+
+### Train 20 — Capability model and native facilities
+
+Build explicit host capability grants as one coherent runtime/tooling organ: filesystem, network, process, clocks, randomness, and host resources must remain absent by default and become available only through defined grants, deterministic/sandboxed modes, verifier/runtime enforcement, and acceptance tests that prove authority cannot leak through tooling or dependencies.
 
 ## Later product trains
 
-### Package search and discovery
-
-Registry search/discovery can follow after publication and editor tooling are stable: package name/keyword search, metadata, stable/prerelease filtering, reverse dependency queries, and deterministic discovery semantics without granting runtime network authority.
-
-### Debugging
-
-Source breakpoints, stepping, stack/call-frame inspection, local/global value inspection, and source-position mappings across module graphs.
-
-### Capability model and native facilities
-
-Explicit grants for filesystem/network/process/clocks/randomness/host resources, deterministic/sandboxed execution modes, and no ambient host authority by default.
-
 ### WASM / Host Interop Layer
 
-A defined interop ABI, C ABI and/or WASM boundary, and capability-controlled adapters only after the ABI is stable.
+A defined interop ABI, C ABI and/or WASM boundary, and capability-controlled adapters only after the capability/ABI boundary is stable.
 
 ### Low-level Emojineer / EASM
 
@@ -199,4 +204,4 @@ Explicit IR boundary, LLVM/native compilation, equivalence testing against the V
 
 ## Ongoing language evolution
 
-Future language additions can include records/user structures, richer error values, pattern matching, interfaces/protocols, more collection types, richer standard modules, and accessibility-oriented textual aliases. Each should extend the sovereign language model rather than route source through another programming language.
+Future language additions can include records/user structures, richer error values, pattern matching, interfaces/protocols, more collection types, richer standard modules, richer immutable package description/tag metadata, and accessibility-oriented textual aliases. Each should extend the sovereign language model rather than route source through another programming language.

@@ -3,18 +3,20 @@
 #include "emojineer/package_report.hpp"
 #include "emojineer/project.hpp"
 #include "emojineer/registry_transport.hpp"
+#include "emojineer/registry_discovery.hpp"
 
 #include <filesystem>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.16\n"
+        << "emji 0.19\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"
@@ -28,6 +30,10 @@ void usage() {
         << "  emji registry-init <directory> --id <registry_id>\n"
         << "  emji registry-info --registry <endpoint>\n"
         << "  emji versions <package_name> --registry <endpoint>\n"
+        << "  emji search <query> --registry <endpoint> [--include-prerelease] [--json]\n"
+        << "  emji package-info <package_name> --registry <endpoint> [--include-prerelease] [--json]\n"
+        << "  emji dependents <package_name> --registry <endpoint> [--include-prerelease] [--json]\n"
+        << "  emji discovery-index --registry <endpoint>\n"
         << "  emji publish [directory] --registry <endpoint> [--namespace <ns>] [--receipt <file>]\n"
         << "       (use EMOJINEER_TOKEN env var for authentication - never pass token as CLI argument)\n"
         << "  emji fetch <package_name> <requirement> --registry <endpoint> [--cache directory]\n"
@@ -178,6 +184,37 @@ FetchOptions parse_fetch_options(int argc, char** argv) {
     }
     if (!registry) throw std::runtime_error("fetch requires --registry <endpoint>");
     return {*registry, cache.value_or(std::filesystem::path{})};
+}
+
+
+struct DiscoveryOptions {
+    std::string registry;
+    bool include_prerelease = false;
+    bool json = false;
+};
+
+DiscoveryOptions parse_discovery_options(int argc, char** argv, int start, const std::string& command) {
+    std::optional<std::string> registry;
+    bool include_prerelease = false;
+    bool json = false;
+    for (int i = start; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--registry") {
+            if (registry) throw std::runtime_error(command + " accepts only one --registry endpoint");
+            if (++i >= argc) throw std::runtime_error("--registry requires an endpoint");
+            registry = argv[i];
+        } else if (arg == "--include-prerelease") {
+            if (include_prerelease) throw std::runtime_error(command + " accepts --include-prerelease only once");
+            include_prerelease = true;
+        } else if (arg == "--json") {
+            if (json) throw std::runtime_error(command + " accepts --json only once");
+            json = true;
+        } else {
+            throw std::runtime_error("unknown " + command + " option '" + arg + "'");
+        }
+    }
+    if (!registry) throw std::runtime_error(command + " requires --registry <endpoint>");
+    return {*registry, include_prerelease, json};
 }
 
 emojineer::PackageGraphReport package_report(const std::filesystem::path& root) {
@@ -391,6 +428,51 @@ int main(int argc, char** argv) {
             const auto endpoint = emojineer::parse_registry_endpoint(registry);
             std::cout << emojineer::render_registry_versions(
                 emojineer::load_registry_package_index(endpoint, package));
+            return 0;
+        }
+
+
+        if (command == "search") {
+            if (argc < 5) throw std::runtime_error("search requires <query> --registry <endpoint>");
+            const std::string query = argv[2];
+            const auto options = parse_discovery_options(argc, argv, 3, "search");
+            const auto endpoint = emojineer::parse_registry_endpoint(options.registry);
+            const auto discovery = emojineer::load_registry_discovery(endpoint);
+            std::cout << (options.json
+                ? emojineer::render_registry_search_json(discovery, query, options.include_prerelease)
+                : emojineer::render_registry_search(discovery, query, options.include_prerelease));
+            return 0;
+        }
+
+        if (command == "package-info") {
+            if (argc < 5) throw std::runtime_error("package-info requires <package_name> --registry <endpoint>");
+            const std::string package = argv[2];
+            const auto options = parse_discovery_options(argc, argv, 3, "package-info");
+            const auto endpoint = emojineer::parse_registry_endpoint(options.registry);
+            const auto discovery = emojineer::load_registry_discovery(endpoint);
+            std::cout << (options.json
+                ? emojineer::render_registry_package_info_json(discovery, package, options.include_prerelease)
+                : emojineer::render_registry_package_info(discovery, package, options.include_prerelease));
+            return 0;
+        }
+
+        if (command == "dependents") {
+            if (argc < 5) throw std::runtime_error("dependents requires <package_name> --registry <endpoint>");
+            const std::string package = argv[2];
+            const auto options = parse_discovery_options(argc, argv, 3, "dependents");
+            const auto endpoint = emojineer::parse_registry_endpoint(options.registry);
+            const auto discovery = emojineer::load_registry_discovery(endpoint);
+            std::cout << (options.json
+                ? emojineer::render_registry_dependents_json(discovery, package, options.include_prerelease)
+                : emojineer::render_registry_dependents(discovery, package, options.include_prerelease));
+            return 0;
+        }
+
+        if (command == "discovery-index") {
+            const auto registry = registry_option(argc, argv, 2, "discovery-index");
+            const auto endpoint = emojineer::parse_registry_endpoint(registry);
+            std::cout << emojineer::render_registry_discovery_index(
+                emojineer::load_registry_discovery(endpoint));
             return 0;
         }
 
