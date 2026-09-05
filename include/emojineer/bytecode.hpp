@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <variant>
+#include <unordered_map>
 #include <vector>
 namespace emojineer {
 struct ArrayValue;
@@ -30,6 +31,9 @@ struct Chunk{
     std::vector<FunctionInfo> functions;
     std::vector<Instruction> code;
     std::vector<SourceLocation> source_map;  // Indexed by instruction pointer
+    // EMJBC v7: source identity -> SHA-256 of the exact source text used to compile.
+    // This is one digest per source, not one digest per instruction.
+    std::unordered_map<std::string, std::string> source_hashes;
     std::int32_t add_constant(Value value);
 };
 

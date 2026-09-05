@@ -3,6 +3,10 @@
 #include "emojineer/module.hpp"
 #include "emojineer/unicode.hpp"
 #include "emojineer/compiler.hpp"
+#include "emojineer/hash.hpp"
+#include "emojineer/package.hpp"
+#include "emojineer/project.hpp"
+#include "emojineer/stdlib.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/parser.hpp"
 #include <climits>
@@ -124,6 +128,17 @@ std::optional<std::string> SourceResolver::get_source_text(const std::string& id
         return std::nullopt;
     }
     return result;
+}
+
+std::optional<std::string> SourceResolver::get_source_hash(const std::string& identity) const {
+    auto registered = registered_sources_.find(identity);
+    if (registered != registered_sources_.end()) return sha256_hex(registered->second);
+    const auto path = resolve(identity);
+    if (path.empty()) return std::nullopt;
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return std::nullopt;
+    const std::string content{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    return sha256_hex(content);
 }
 
 void SourceResolver::register_source(const std::string& identity, std::string content) {
@@ -593,60 +608,55 @@ void DebugController::rebuild_breakpoint_index() {
 
 std::vector<BreakpointInfo> DebugController::get_breakpoint_info() const {
     std::vector<BreakpointInfo> infos;
-    
     const Chunk* chunk = vm_.current_chunk();
-    
     for (std::size_t i = 0; i < breakpoints_.size(); ++i) {
         const auto& bp = breakpoints_[i];
-        BreakpointInfo info;
-        info.id = i;
-        info.location = bp;
-        
-        // Check if breakpoint can bind to current chunk
+        BreakpointInfo info{i, bp, BreakpointStatus::Unbound, std::nullopt, {}};
         if (!chunk) {
-            info.status = BreakpointStatus::Unbound;
             info.diagnostics = "No chunk loaded";
-            infos.push_back(info);
+            infos.push_back(std::move(info));
             continue;
         }
-        
-        // Try to find matching source position
-        std::optional<std::size_t> bound_ip;
+
+        const bool identity_present = std::any_of(chunk->source_map.begin(), chunk->source_map.end(), [&](const SourceLocation& src) {
+            return src.source_path == bp.source_position.source_path;
+        });
+        if (!identity_present) {
+            info.diagnostics = "Source identity is absent from current bytecode";
+            infos.push_back(std::move(info));
+            continue;
+        }
+
+        if (source_resolver_) {
+            const auto live_hash = source_resolver_->get_source_hash(bp.source_position.source_path);
+            if (!live_hash) {
+                info.status = BreakpointStatus::SourceDrift;
+                info.diagnostics = "Compiled source identity is no longer resolvable";
+                infos.push_back(std::move(info));
+                continue;
+            }
+            if (auto compiled = chunk->source_hashes.find(bp.source_position.source_path);
+                compiled != chunk->source_hashes.end() && !compiled->second.empty() && compiled->second != *live_hash) {
+                info.status = BreakpointStatus::Stale;
+                info.diagnostics = "Source content differs from the content used to compile this bytecode";
+                infos.push_back(std::move(info));
+                continue;
+            }
+        }
+
         for (std::size_t ip = 0; ip < chunk->source_map.size(); ++ip) {
             const auto& src = chunk->source_map[ip];
-            if (src.source_path == bp.source_position.source_path &&
-                src.line == bp.source_position.line) {
-                bound_ip = ip;
+            if (src.source_path == bp.source_position.source_path && src.line == bp.source_position.line) {
+                info.status = BreakpointStatus::Bound;
+                info.bound_ip = ip;
+                info.diagnostics = "Bound to IP " + std::to_string(ip);
                 break;
             }
         }
-        
-        if (bound_ip) {
-            info.status = BreakpointStatus::Bound;
-            info.bound_ip = bound_ip;
-            info.diagnostics = "Bound to IP " + std::to_string(*bound_ip);
-        } else {
-            // Check if source exists
-            bool source_exists = false;
-            if (source_resolver_) {
-                source_exists = !source_resolver_->resolve(bp.source_position.source_path).empty();
-            } else {
-                std::filesystem::path p(bp.source_position.source_path);
-                source_exists = std::filesystem::exists(p);
-            }
-            
-            if (source_exists) {
-                info.status = BreakpointStatus::SourceDrift;
-                info.diagnostics = "Source file exists but no matching line in current bytecode";
-            } else {
-                info.status = BreakpointStatus::Unbound;
-                info.diagnostics = "No matching source location found in current chunk";
-            }
-        }
-        
-        infos.push_back(info);
+        if (!info.bound_ip && info.diagnostics.empty())
+            info.diagnostics = "Source exists in current bytecode but requested line has no executable location";
+        infos.push_back(std::move(info));
     }
-    
     return infos;
 }
 
@@ -687,6 +697,10 @@ DebugVM::~DebugVM() = default;
 
 void DebugVM::set_debug_callback(DebugCallback callback) {
     controller_->set_debug_callback(std::move(callback));
+}
+
+void DebugVM::set_source_resolver(std::shared_ptr<SourceResolver> resolver) {
+    controller_->set_source_resolver(std::move(resolver));
 }
 
 void DebugVM::execute(const Chunk& chunk) {
@@ -812,22 +826,89 @@ std::vector<std::string> split(const std::string& s, char delim) {
 }
 } // anonymous namespace
 
+std::filesystem::path debugger_source_root(const std::filesystem::path& target) {
+    std::filesystem::path dir = target.parent_path();
+    while (!dir.empty()) {
+        if (std::filesystem::is_regular_file(dir / "emojineer.toml")) return dir;
+        const auto parent = dir.parent_path();
+        if (parent == dir) break;
+        dir = parent;
+    }
+    return target.parent_path();
+}
+
+std::optional<std::string> read_debug_source(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+    return std::string{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+std::shared_ptr<SourceResolver> build_source_resolver(const std::filesystem::path& target, const Chunk& chunk) {
+    auto resolver = std::make_shared<SourceResolver>();
+    const auto root = debugger_source_root(target);
+    resolver->set_base_path(root);
+    resolver->add_search_path(root);
+
+    std::optional<PackageGraph> graph;
+    try {
+        if (std::filesystem::is_regular_file(root / "emojineer.toml")) {
+            const auto manifest = load_project_manifest(root / "emojineer.toml");
+            graph = resolve_package_graph(root, manifest, package_store_root(root), true);
+        }
+    } catch (...) {
+        // Source listing/drift diagnostics must never create network authority. If the
+        // already-materialized graph is unavailable, ordinary root/local resolution remains.
+    }
+
+    std::set<std::string> identities;
+    for (const auto& src : chunk.source_map) if (!src.source_path.empty()) identities.insert(src.source_path);
+    for (const auto& identity : identities) {
+        if (identity.rfind("std:", 0) == 0) {
+            if (auto source = standard_module_source(identity)) resolver->register_source(identity, std::string(*source));
+            continue;
+        }
+        if (identity.rfind("pkg:", 0) == 0 && graph) {
+            const auto coordinate = identity.substr(4);
+            const auto slash = coordinate.find('/');
+            if (slash != std::string::npos) {
+                const auto package_name = coordinate.substr(0, slash);
+                const auto module_path = coordinate.substr(slash + 1);
+                if (const auto* package = graph->find(package_name)) {
+                    if (auto source = read_debug_source(package->root / module_path))
+                        resolver->register_source(identity, std::move(*source));
+                }
+            }
+            continue;
+        }
+        if (auto source = read_debug_source(root / identity)) resolver->register_source(identity, std::move(*source));
+    }
+    return resolver;
+}
+
 int run_debug_session(const std::filesystem::path& source_file,
                      std::istream& input,
                      std::ostream& output,
                      std::ostream& error,
                      const CustomEmojiRegistry& registry) {
-    // Compile the source file
     emojineer::Chunk chunk;
     try {
-        chunk = emojineer::compile_file(source_file, registry);
+        if (source_file.extension() == ".emjbc") {
+            std::ifstream bytecode(source_file, std::ios::binary);
+            if (!bytecode) throw std::runtime_error("cannot open bytecode file");
+            chunk = emojineer::read_bytecode(bytecode);
+            if (chunk.source_map.empty())
+                throw std::runtime_error("bytecode does not contain source debug metadata; recompile with Emojineer 0.18+");
+        } else {
+            chunk = emojineer::compile_file(source_file, registry);
+        }
     } catch (const std::exception& e) {
-        error << "Debug session failed to compile: " << e.what() << "\n";
+        error << "Debug session failed to load: " << e.what() << "\n";
         return 1;
     }
-    
-    // Create DebugVM with the compiled chunk using pointer to allow recreation
+
+    auto source_resolver = build_source_resolver(source_file, chunk);
     std::unique_ptr<emojineer::DebugVM> debug_vm = std::make_unique<emojineer::DebugVM>(input, output);
+    debug_vm->set_source_resolver(source_resolver);
     
     // Set up debug callback for pause events
     debug_vm->set_debug_callback([&output](const emojineer::DebugSnapshot& snapshot) {
@@ -1093,6 +1174,7 @@ int run_debug_session(const std::filesystem::path& source_file,
             // Restart the debug session but preserve breakpoints
             auto breakpoints = debug_vm->get_breakpoints();
             debug_vm = std::make_unique<emojineer::DebugVM>(input, output);
+            debug_vm->set_source_resolver(source_resolver);
             debug_vm->set_debug_callback([&output](const emojineer::DebugSnapshot& snapshot) {
                 output << "\n" << snapshot.reason << " at ";
                 output << snapshot.current_position.source_path << ":";

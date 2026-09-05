@@ -37,6 +37,7 @@ public:
     std::optional<std::string> get_source_text(const std::string& identity,
                                                 std::uint32_t start_line,
                                                 std::uint32_t end_line) const;
+    std::optional<std::string> get_source_hash(const std::string& identity) const;
     
     // Register source content directly (for materialized packages)
     void register_source(const std::string& identity, std::string content);
@@ -172,6 +173,7 @@ public:
     
     // Set debugger callback
     void set_debug_callback(DebugCallback callback);
+    void set_source_resolver(std::shared_ptr<SourceResolver> resolver);
     
     // Execute with debugger
     void execute(const Chunk& chunk);

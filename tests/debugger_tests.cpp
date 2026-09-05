@@ -3,11 +3,14 @@
 
 #include "emojineer/compiler.hpp"
 #include "emojineer/debugger.hpp"
+#include "emojineer/hash.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/parser.hpp"
 #include "emojineer/vm.hpp"
 #include "emojineer/bytecode.hpp"
 
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -998,6 +1001,7 @@ void test_bytecode_roundtrip_source_map() {
     emojineer::Compiler compiler;
     compiler.set_source_path("test.emoji");
     auto original_chunk = compiler.compile(program);
+    original_chunk.source_hashes["test.emoji"] = emojineer::sha256_hex(source);
     
     // Serialize to bytecode
     std::stringstream bytes(std::ios::in | std::ios::out | std::ios::binary);
@@ -1010,6 +1014,8 @@ void test_bytecode_roundtrip_source_map() {
     // Verify source map survived roundtrip
     require(restored_chunk.source_map.size() == original_chunk.source_map.size(),
         "source map size should survive roundtrip");
+    require(restored_chunk.source_hashes == original_chunk.source_hashes,
+        "v7 source SHA-256 provenance must survive bytecode roundtrip");
     
     for (std::size_t i = 0; i < original_chunk.source_map.size(); ++i) {
         const auto& orig = original_chunk.source_map[i];
@@ -1238,6 +1244,117 @@ void test_step_over_honors_inner_breakpoint() {
     std::cout << "  ✅ Step over honors explicit inner breakpoint\n";
 }
 
+
+void test_breakpoint_stale_and_source_drift() {
+    std::cout << "Test: breakpoint stale and source-drift diagnostics...\n";
+    const std::string source = "📝 📜hello📜\n";
+    emojineer::Lexer lexer(source, {});
+    emojineer::Parser parser(lexer.tokenize());
+    auto program = parser.parse();
+    emojineer::Compiler compiler;
+    compiler.set_source_path("test.emoji");
+    auto chunk = compiler.compile(program);
+    chunk.source_hashes["test.emoji"] = emojineer::sha256_hex(source);
+    std::istringstream input;
+    std::ostringstream output;
+    emojineer::DebugVM vm(input, output);
+    emojineer::BreakpointLocation bp;
+    bp.source_position.source_path = "test.emoji";
+    bp.source_position.line = 1;
+    vm.add_breakpoint(bp);
+    vm.execute(chunk);
+
+    auto current = std::make_shared<emojineer::SourceResolver>();
+    current->register_source("test.emoji", source);
+    vm.set_source_resolver(current);
+    auto infos = vm.get_breakpoint_info();
+    require(infos.size() == 1 && infos[0].status == emojineer::BreakpointStatus::Bound,
+            "matching current source must report Bound");
+
+    auto changed = std::make_shared<emojineer::SourceResolver>();
+    changed->register_source("test.emoji", "📝 📜changed📜\n");
+    vm.set_source_resolver(changed);
+    infos = vm.get_breakpoint_info();
+    require(infos[0].status == emojineer::BreakpointStatus::Stale,
+            "changed source content must report Stale");
+
+    auto missing = std::make_shared<emojineer::SourceResolver>();
+    vm.set_source_resolver(missing);
+    infos = vm.get_breakpoint_info();
+    require(infos[0].status == emojineer::BreakpointStatus::SourceDrift,
+            "compiled identity with unavailable source must report SourceDrift");
+    std::cout << "  ✅ Breakpoint stale/source-drift diagnostics work\n";
+}
+
+void test_debug_metadata_validation() {
+    std::cout << "Test: debug metadata validation...\n";
+    const std::string source = "📝 📜hello📜\n";
+    emojineer::Lexer lexer(source, {});
+    emojineer::Parser parser(lexer.tokenize());
+    auto program = parser.parse();
+    emojineer::Compiler compiler;
+    compiler.set_source_path("test.emoji");
+    auto chunk = compiler.compile(program);
+    chunk.source_hashes["test.emoji"] = emojineer::sha256_hex(source);
+
+    auto bad_count = chunk;
+    bad_count.source_map.pop_back();
+    bool rejected = false;
+    try { emojineer::verify_bytecode(bad_count); } catch (const std::runtime_error&) { rejected = true; }
+    require(rejected, "source-map cardinality mismatch must be rejected");
+
+    auto bad_path = chunk;
+    bad_path.source_map[0].source_path = "/tmp/checkout/test.emoji";
+    rejected = false;
+    try { emojineer::verify_bytecode(bad_path); } catch (const std::runtime_error&) { rejected = true; }
+    require(rejected, "absolute checkout-specific source identity must be rejected");
+
+    auto bad_range = chunk;
+    bad_range.source_map[0].end_column = 0;
+    rejected = false;
+    try { emojineer::verify_bytecode(bad_range); } catch (const std::runtime_error&) { rejected = true; }
+    require(rejected, "zero/reversed source range metadata must be rejected");
+
+    auto bad_names = chunk;
+    emojineer::FunctionInfo f;
+    f.name = "🚀"; f.entry = 0; f.arity = 1; f.local_count = 1; f.parameter_names = {"🍎", "🍐"};
+    bad_names.functions.push_back(f);
+    rejected = false;
+    try { emojineer::verify_bytecode(bad_names); } catch (const std::runtime_error&) { rejected = true; }
+    require(rejected, "parameter-name count inconsistent with arity must be rejected");
+    std::cout << "  ✅ Debug metadata validation works\n";
+}
+
+void test_emjbc_debug_session() {
+    std::cout << "Test: serialized .emjbc debug session...\n";
+    const std::string source = "📝 📜bytecode-debug📜\n";
+    emojineer::Lexer lexer(source, {});
+    emojineer::Parser parser(lexer.tokenize());
+    auto program = parser.parse();
+    emojineer::Compiler compiler;
+    compiler.set_source_path("fixture.emoji");
+    auto chunk = compiler.compile(program);
+    chunk.source_hashes["fixture.emoji"] = emojineer::sha256_hex(source);
+
+    const auto path = std::filesystem::temp_directory_path() / "emojineer-train18-debug.emjbc";
+    {
+        std::ofstream out(path, std::ios::binary);
+        emojineer::write_bytecode(chunk, out);
+    }
+    std::istringstream commands("continue\n");
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = emojineer::run_debug_session(path, commands, output, error, {});
+    std::filesystem::remove(path);
+    require(result == 0, "debugging serialized .emjbc must succeed");
+    require(error.str().empty(), "serialized bytecode debug session must not report loader errors");
+    require(output.str().find("bytecode-debug") != std::string::npos,
+            "serialized bytecode must execute through the debugger rather than being recompiled as source");
+    require(output.str().find("Program finished") != std::string::npos,
+            "serialized bytecode debugger must run to completion");
+    std::cout << "  ✅ Serialized .emjbc debug session works\n";
+}
+
 } // anonymous namespace
 
 int main() {
@@ -1276,6 +1393,9 @@ int main() {
         test_inspection_does_not_consume_input();
         test_breakpoint_binding_diagnostics();
         test_step_over_honors_inner_breakpoint();
+        test_breakpoint_stale_and_source_drift();
+        test_debug_metadata_validation();
+        test_emjbc_debug_session();
         
         std::cout << "\n✅ All debugger tests passed!\n";
         return 0;
