@@ -19,6 +19,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libicu-dev libcurl4-openssl-dev
       - name: Complete debugger product
         run: python3 .github/scripts/train18_product_completion.py
+      - name: Add serialized-bytecode test includes
+        run: python3 .github/scripts/train18_product_test_include.py
       - name: Validate diff
         run: git diff --check
       - name: Configure Debug
