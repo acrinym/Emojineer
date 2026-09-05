@@ -10,8 +10,6 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# Make the pre-execution hook stateful so it can bind a newly initialized chunk before
-# the first executable instruction and record a real breakpoint pause.
 types = Path('include/emojineer/debug_types.hpp')
 text = types.read_text(encoding='utf-8')
 text = replace_once(
@@ -82,8 +80,6 @@ text = replace_once(
 cpp.write_text(text, encoding='utf-8')
 
 
-# Replace stale test fixtures with canonical Emojineer identifiers and make the input
-# non-consumption test execute a real 📥 after repeated debugger-only inspection.
 tests = Path('tests/debugger_tests.cpp')
 text = tests.read_text(encoding='utf-8')
 
@@ -121,11 +117,11 @@ replacement = r'''void test_inspection_does_not_consume_input() {
     bp.enabled = true;
     vm.add_breakpoint(bp);
 
-    vm.execute(chunk); // initial zero-effect preparation pause
+    vm.execute(chunk);
     require(input.tellg() == std::streampos(0), "preparation must not consume input");
 
     vm.continue_run();
-    vm.execute(chunk); // bind and stop before the line-1 ReadLine instruction
+    vm.execute(chunk);
     auto snapshot1 = vm.get_debug_snapshot();
     require(snapshot1.has_value(), "should pause before the real input read");
     require(snapshot1->current_position.line == 1, "input breakpoint should be on line 1");
@@ -159,7 +155,10 @@ text = text[:start] + region + text[end:]
 start = text.index('void test_step_over_skips_inner_breakpoint() {')
 end = text.index('} // anonymous namespace', start)
 region = text[start:end]
-region = region.replace('inner', '🚀').replace(' x ', ' 🍎 ').replace('(x)', '(🍎)').replace('📝 x', '📝 🍎').replace('📦 x', '📦 🍎')
+region = region.replace('"🛠️ inner 🫴 x 🤲\\n"', '"🛠️ 🚀 🫴 🍎 🤲\\n"')
+region = region.replace('"📝 x\\n"', '"📝 🍎\\n"')
+region = region.replace('"📦 x\\n"', '"📦 🍎\\n"')
+region = region.replace('"📝 inner 🫴 42 🤲\\n"', '"📝 🚀 🫴 42 🤲\\n"')
 text = text[:start] + region + text[end:]
 
 tests.write_text(text, encoding='utf-8')
