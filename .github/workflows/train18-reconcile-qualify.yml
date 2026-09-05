@@ -17,8 +17,10 @@ jobs:
           fetch-depth: 0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libicu-dev libcurl4-openssl-dev
-      - name: Apply exact reconciliation and debugger repairs
+      - name: Apply exact reconciliation
         run: python3 .github/scripts/train18_reconcile_apply.py
+      - name: Apply exact debugger behavior repairs
+        run: python3 .github/scripts/train18_debugger_repair.py
       - name: Validate diff
         run: git diff --check
       - name: Configure Debug
@@ -35,7 +37,7 @@ jobs:
         run: ctest --test-dir build-release --output-on-failure
       - name: Commit qualified reconciliation repairs
         run: |
-          paths=(src/module.cpp include/emojineer/debugger.hpp src/debugger.cpp tests/debugger_tests.cpp)
+          paths=(src/module.cpp include/emojineer/debug_types.hpp include/emojineer/debugger.hpp src/debugger.cpp tests/debugger_tests.cpp)
           if git diff --quiet -- "${paths[@]}"; then
             echo 'No qualified product reconciliation diff to commit.'
             exit 0
