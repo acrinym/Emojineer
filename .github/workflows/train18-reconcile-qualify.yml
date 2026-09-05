@@ -17,7 +17,7 @@ jobs:
           fetch-depth: 0
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build libicu-dev libcurl4-openssl-dev
-      - name: Apply exact module reconciliation
+      - name: Apply exact reconciliation and debugger repairs
         run: python3 .github/scripts/train18_reconcile_apply.py
       - name: Validate diff
         run: git diff --check
@@ -33,14 +33,15 @@ jobs:
         run: cmake --build build-release
       - name: Test Release
         run: ctest --test-dir build-release --output-on-failure
-      - name: Commit reconciled module if qualified
+      - name: Commit qualified reconciliation repairs
         run: |
-          if git diff --quiet -- src/module.cpp; then
-            echo 'No module reconciliation diff to commit.'
+          paths=(src/module.cpp include/emojineer/debugger.hpp src/debugger.cpp tests/debugger_tests.cpp)
+          if git diff --quiet -- "${paths[@]}"; then
+            echo 'No qualified product reconciliation diff to commit.'
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/module.cpp
-          git commit -m 'Train 18: reconcile module debug identities onto current main'
+          git add "${paths[@]}"
+          git commit -m 'Train 18: reconcile debugger control onto current main'
           git push origin HEAD:train-18-reconcile-main
