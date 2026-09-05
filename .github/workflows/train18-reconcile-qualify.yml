@@ -25,6 +25,8 @@ jobs:
         run: python3 .github/scripts/train18_debugger_test_alignment.py
       - name: Repair module-scope debugger inspection
         run: python3 .github/scripts/train18_module_scope_debugger_repair.py
+      - name: Repair breakpoint diagnostics
+        run: python3 .github/scripts/train18_breakpoint_diagnostics_repair.py
       - name: Validate diff
         run: git diff --check
       - name: Configure Debug
