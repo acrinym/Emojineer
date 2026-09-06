@@ -1,231 +1,111 @@
 # Emojineer CLI and Toolchain
 
-Emojineer builds two command-line executables:
+Emojineer 0.19 builds three native C++ executables:
 
-- `emojineer` - source, bytecode, formatting, REPL, standard-library, package-aware linking, execution, and source-level debugging tools;
-- `emji` - project, local dependency, lockfile, package-graph, artifact, and registry workflow.
+- `emojineer` - source, bytecode, formatting, REPL, standard-library, execution, and source-level debugging;
+- `emji` - project/package/registry workflow, authenticated publication, remote dependency sync, and package discovery;
+- `emojineer-lsp` - JSON-RPC/LSP server over the sovereign compiler/module/package model.
 
-The current toolchain version is **0.18**.
+## Build and qualify
 
-## Build
-
-Requirements:
-
-- C++20 compiler;
-- CMake 3.20+;
-- ICU 70+ with `uc` and `i18n`;
-- optional libcurl for HTTPS registry reads.
+Requirements: C++20, CMake 3.20+, ICU 70+. libcurl is optional for HTTPS registry reads/publication/discovery; file registries remain fully available without it.
 
 ```bash
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-debug
+ctest --test-dir build-debug --output-on-failure
+
+cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release
+ctest --test-dir build-release --output-on-failure
 ```
 
-## `emojineer` source and bytecode commands
+## `emojineer`
 
 ```text
-emojineer run program.emoji
-emojineer check program.emoji
-emojineer explain program.emoji
-emojineer fmt program.emoji [-o formatted.emoji]
-emojineer lint program.emoji
-emojineer dump program.emoji
-emojineer compile program.emoji [-o output.emjbc]
-emojineer exec program.emjbc
-emojineer disasm program.emjbc
-emojineer stdlib
 emojineer repl [--cer registry.json ...]
+emojineer stdlib
 emojineer debug <source-or-project>
+emojineer <run|check|explain|dump|lint> <file.emoji> [--cer registry.json ...]
+emojineer fmt <file.emoji> [-o file.emoji] [--cer registry.json ...]
+emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]
+emojineer <exec|disasm> <file.emjbc>
 ```
 
-### Debugger commands
+File/project compilation uses the normal package-aware module linker. The debugger runs over the production compiler/EMJBC/VM, not a second evaluator.
 
-The debugger provides source-level debugging with the following commands:
+## Core `emji` project workflow
 
 ```text
-break <file:line>   - Set breakpoint at source location
-delete <id>         - Delete breakpoint by ID
-list                - List all breakpoints
-run                 - Start/continue execution
-continue            - Continue execution (alias for run)
-step                - Step into function/next instruction
-next                - Step over function call
-out                 - Step out of current function
-pause               - Pause execution
-backtrace           - Show call stack (alias: bt, where)
-frame <n>           - Select frame n
-locals              - Show local variables
-globals             - Show global variables
-print <expr>        - Evaluate expression
-source              - Show current source position
-list                - List source around line
-help                - Show help
-quit                - Exit debugger
+emji init <directory> [--name project_name]
+emji check [directory]
+emji lock [directory]
+emji show [directory]
+emji tree [directory] [--hashes] [--json]
+emji sync [directory] [--offline] [--cache directory]
+emji add <package_name> <relative_path> [directory]
+emji add <package_name> <requirement> --registry <endpoint> [--registry-name <alias>] [directory]
+emji remove <package_name> [directory]
 ```
 
-File compilation resolves local modules, declared `pkg:<dependency>/<module>.emoji` imports, and built-in `std:<module>` imports through the same package-aware linker. Package-qualified module identities remain checkout-portable and never encode absolute package roots.
+Registry dependencies are explicit manifest state. Lock v3 records the selected version, registry identity/endpoint, requirement, content/artifact SHA-256, materialized store path, and dependency edges. Ordinary compilation/execution resolves remote packages from verified lock/store state and does not initiate registry access.
 
-`fmt` produces canonical source form. `lint` diagnoses departures from that form. `compile` writes sovereign `EMJBC`; `exec` and `disasm` read already-compiled bytecode. `stdlib` lists the built-in standard modules. The REPL remains single-source and shares its input stream with the VM for `📥`.
-
-## `emji` project commands
-
-### Initialize
+## Immutable artifacts and registry exchange
 
 ```text
-emji init my-project
-emji init my-project --name signal_lab
+emji pack [directory] [-o package.emjpkg]
+emji artifact <package.emjpkg>
+emji verify-artifact <package.emjpkg>
+emji registry-init <directory> --id <registry_id>
+emji registry-info --registry <endpoint>
+emji versions <package_name> --registry <endpoint>
+emji fetch <package_name> <requirement> --registry <endpoint> [--cache directory]
 ```
 
-Creates a strict `emojineer.toml`, deterministic `emojineer.lock`, and `src/main.emoji` starter source.
+`EMJREGPKG1` indexes bind exact versions to package content SHA-256 and whole-artifact SHA-256. Fetch verifies both identities before cache admission and re-verifies cache hits.
 
-### Check
+## Publication
+
+File registries are credential-free:
 
 ```text
-emji check
-emji check path/to/project
+emji publish [directory] --registry ./registry
 ```
 
-Validates the root manifest/entry, recursively resolves local/path dependencies, validates package-aware source graphs, and checks an existing lockfile for drift.
-
-### Lock
+HTTPS publication uses authenticated `emjpub1` and requires `EMOJINEER_TOKEN` plus a non-secret namespace:
 
 ```text
-emji lock
-emji lock path/to/project
+EMOJINEER_TOKEN='…' emji publish [directory] \
+  --registry https://registry.example/api \
+  --namespace namespace_name \
+  [--receipt receipt.json]
 ```
 
-Writes deterministic lockfile v2 metadata. Dependency records include version, checkout-relative resolved path, direct dependency names, and package content SHA-256.
+The client verifies registry identity before sending credentials, disables redirects, verifies TLS peer/host, uploads the actual immutable `.emjpkg`, verifies the strict receipt, and persists it atomically. Credentials never enter manifests, locks, artifacts, source, or receipts.
 
-### Show
+## Package search and discovery
 
 ```text
-emji show
-emji show path/to/project
+emji search <query> --registry <endpoint> [--include-prerelease] [--json]
+emji package-info <package_name> --registry <endpoint> [--include-prerelease] [--json]
+emji dependents <package_name> --registry <endpoint> [--include-prerelease] [--json]
+emji discovery-index --registry <endpoint>
 ```
 
-Displays root package name, version, entry, canonical manifest hash, and direct dependency declarations.
+Search uses canonical discoverable metadata: package name, entry path, and direct dependency names. `*` lists all eligible packages. Multiple whitespace-separated query terms use deterministic AND semantics.
 
-### Tree
+By default discovery selects the highest stable SemVer for each package. `--include-prerelease` allows prerelease versions and selects the highest SemVer across all releases.
 
-```text
-emji tree
-emji tree path/to/project
-emji tree path/to/project --hashes
-emji tree path/to/project --json
-```
+`package-info` reports the selected release, all discoverable versions, entry, direct dependencies, and immutable content/artifact identities. `dependents` performs direct reverse-dependency queries over one selected release per package.
 
-Resolves the real `PackageGraph` used by locking/linking. Human output labels packages `root`, `direct`, or `transitive`, shows checkout-relative paths and entries, and marks repeated shared-DAG nodes with `(shared)`. `--hashes` adds package content SHA-256. `--json` emits deterministic `emojineer.package-graph.v1` records with full hashes and no absolute checkout roots.
+File registries derive discovery from their real package indexes and verified artifacts. HTTPS registries serve bounded canonical `EMJREGDISC1` metadata at `v1/discovery.index`, whose registry ID must match `EMJREGISTRY1`. `discovery-index` emits the canonical wire representation.
 
-### Add/remove local dependencies
+JSON output schemas are `emojineer.registry-search.v1`, `emojineer.registry-package-info.v1`, and `emojineer.registry-dependents.v1`.
 
-```text
-emji add mathkit ../mathkit
-emji add mathkit ../mathkit path/to/project
-emji remove mathkit
-emji remove mathkit path/to/project
-```
+## LSP
 
-Local dependency paths remain relative and first-class. Candidate graphs are validated before manifest changes are committed, and successful changes refresh canonical lock metadata.
+`emojineer-lsp` speaks JSON-RPC/LSP over stdio and supports document lifecycle, diagnostics, formatting, completion, hover, definition/references, and document/workspace symbols with correct UTF-16 position translation. Editor requests use already-verified package state and do not perform registry networking.
 
-## Immutable package artifacts
+## Authority boundary
 
-### Pack
-
-```text
-emji pack
-emji pack path/to/project
-emji pack path/to/project -o dist/project.emjpkg
-```
-
-Creates deterministic `EMJPKG1` bytes. Without `-o`, output is `<project-root>/<name>-<version>.emjpkg`.
-
-### Inspect
-
-```text
-emji artifact package.emjpkg
-```
-
-Strictly parses/verifies the artifact, then prints package identity, file count, package `content-sha256`, and whole `artifact-sha256`.
-
-### Verify
-
-```text
-emji verify-artifact package.emjpkg
-```
-
-Returns success only after format bounds, canonical manifest metadata, source paths/order, per-source SHA-256, entry presence, package content identity, and trailing-byte checks pass.
-
-## Registry commands
-
-### Initialize a local registry
-
-```text
-emji registry-init ./registry --id local.dev
-```
-
-Creates the `EMJREGISTRY1` descriptor and canonical `v1/packages` / `v1/artifacts/sha256` layout. Repeating initialization with the same ID is idempotent. Reinitializing the same registry with a different ID is rejected.
-
-### Inspect registry identity
-
-```text
-emji registry-info --registry ./registry
-emji registry-info --registry https://registry.example/api
-```
-
-Prints registry ID, canonical endpoint, selected transport, and whether HTTPS support was compiled into the current build.
-
-Network endpoints must use HTTPS. Plain HTTP is rejected.
-
-### Browse package versions
-
-```text
-emji versions mathkit --registry ./registry
-```
-
-Loads the bounded `EMJREGPKG1` package index, verifies that its registry/package identity matches the request, and prints immutable version records with package content SHA-256 and artifact SHA-256.
-
-### Publish an immutable package version
-
-```text
-emji publish path/to/package --registry ./registry
-```
-
-Publication is currently supported for writable local/file registries. It builds and verifies the package artifact, stores it under its exact artifact SHA-256, and adds the version/hash tuple to the package index.
-
-Publishing the exact same package/version again is idempotent. Publishing different content under an existing package/version is rejected.
-
-HTTPS publication is intentionally not available until an authenticated immutable-upload protocol and authorization model are defined.
-
-### Resolve and fetch an artifact
-
-```text
-emji fetch mathkit '^1.2.0' --registry ./registry
-emji fetch mathkit '~1.4.0' --registry https://registry.example/api
-emji fetch mathkit '^1.2.0' --registry ./registry --cache ./cache
-```
-
-`fetch`:
-
-1. verifies registry discovery identity;
-2. loads the package index;
-3. selects the highest matching version using the Train 13 SemVer engine;
-4. retrieves the exact artifact addressed by the index;
-5. verifies package name, exact version, package content SHA-256, and artifact SHA-256;
-6. admits the artifact to a registry-scoped content-addressed cache only after verification.
-
-A verified cache hit avoids retrieval. A malformed or mismatched cache entry is discarded and fetched again.
-
-If `--cache` is omitted, platform cache conventions are used. See [REGISTRY.md](REGISTRY.md) for the exact cache and trust model.
-
-## HTTPS behavior
-
-CMake detects libcurl optionally. When present, HTTPS registry reads use certificate/host verification, disallow redirects, enforce bounded response buffers, and use connection/overall request timeouts. A build without libcurl still supports the complete local registry workflow and emits a clear error for HTTPS endpoints.
-
-Registry support belongs to `emji`; it does not grant ambient network authority to Emojineer programs or the VM.
-
-## Current boundary
-
-The v0.18 toolchain adds a source-level debugger with deterministic bytecode source mappings, VM debugger control API, and interactive `emojineer debug` session. Remote registry packages are **not yet project dependencies**. `emojineer.toml` and lockfile v2 still describe local/path dependencies only.
-
-The next package train must add registry dependency declarations, recursive remote resolution/materialization, registry provenance in deterministic locks, and package-aware linking against the verified materialized graph before remote `emji add` can be considered real.
+Package-manager networking, authenticated publication, and discovery are tooling authority. They do not grant Emojineer programs or the VM ambient network, filesystem, process, clock, randomness, credential, or host-resource authority.

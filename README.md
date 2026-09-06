@@ -8,11 +8,11 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → package-aware module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.17**.
+Current language/toolchain version: **0.19**.
 
 ## What works now
 
-Product Trains 1 through 16 provide:
+Product Trains 1 through 19 provide:
 
 - Unicode/grapheme-aware emoji-native syntax and canonical token identity;
 - variables, optional runtime declaration types, arithmetic, comparisons, booleans, input/output;
@@ -31,7 +31,10 @@ Product Trains 1 through 16 provide:
 - deterministic immutable `.emjpkg` source artifacts, strict checksum verification, content-addressed artifact identity, and full SemVer 2.0 requirement/selection primitives;
 - real registry identity/discovery, immutable local-registry publication, package-version indexes, verified artifact fetching, content-addressed cache reuse/repair, and optional HTTPS read transport through libcurl;
 - first-class registry dependencies with deterministic version selection, verified materialization, lockfile v3 provenance, offline reuse, and remote `emji add`/`sync` workflow;
-- authenticated HTTPS `emji publish` using the `emjpub1` write protocol, registry identity preflight, external credentials, immutable artifact upload, namespace ownership, strict verifiable receipts, and bounded/no-redirect TLS transport.
+- authenticated HTTPS `emji publish` using the `emjpub1` write protocol, registry identity preflight, external credentials, immutable artifact upload, namespace ownership, strict verifiable receipts, and bounded/no-redirect TLS transport;
+- native C++ `emojineer-lsp` editor integration over the real parser/module/package model, with diagnostics, completion, hover, navigation, symbols, formatting, and offline registry behavior;
+- a source-level debugger over the production compiler/EMJBC/VM with deterministic source mappings, breakpoints, stepping, frames, locals/globals, value inspection, and source provenance diagnostics;
+- deterministic package discovery with `EMJREGDISC1`, stable/prerelease selection, package metadata, reverse dependencies, and human/JSON search views.
 
 ## Package workflow
 
@@ -58,6 +61,10 @@ Local registries remain a complete credential-free development path:
 ./build/emji publish my-project --registry ./registry
 ./build/emji registry-info --registry ./registry
 ./build/emji versions my-project --registry ./registry
+./build/emji search '*' --registry ./registry
+./build/emji package-info my-project --registry ./registry
+./build/emji dependents my-project --registry ./registry
+./build/emji discovery-index --registry ./registry
 ./build/emji fetch my-project '^0.1.0' --registry ./registry
 ```
 
@@ -136,6 +143,9 @@ Key references:
 - [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects, local/remote dependencies, package imports, graph inspection, and locks;
 - [`docs/REGISTRY.md`](docs/REGISTRY.md) — immutable artifacts, registry protocol, publishing/fetching, cache identity, and transport boundaries;
 - [`docs/AUTHENTICATED_REGISTRY_PUBLICATION.md`](docs/AUTHENTICATED_REGISTRY_PUBLICATION.md) — `emjpub1` authenticated write protocol and receipt contract;
+- [`docs/LANGUAGE_SERVER.md`](docs/LANGUAGE_SERVER.md) — native C++ LSP/editor integration;
+- [`docs/DEBUGGER.md`](docs/DEBUGGER.md) — source-level debugger and provenance contract;
+- [`docs/PACKAGE_DISCOVERY.md`](docs/PACKAGE_DISCOVERY.md) — deterministic registry search/discovery and reverse dependencies;
 - [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — landed and next product trains.
 
@@ -145,4 +155,4 @@ Emoji are extended grapheme clusters, not reliably one Unicode code point. Emoji
 
 ## Project direction
 
-The next product train is **Train 17: native language-server/editor integration** through `emojineer-lsp`, backed by the existing sovereign parser, module graph, package graph, formatter, diagnostics, CER semantics, and standard library. LSP requests must remain offline with respect to registries and use only already-verified lock/materialized package state. Later work includes debugging, package discovery, capability-gated host facilities, WASM/HIL interop, low-level ABI work, semantic compression/macros, and native compilation.
+Train 19 completes deterministic package search/discovery on top of the immutable registry/package substrate. The next coherent product organ is **Train 20: explicit capability model and native facilities**, so filesystem/network/process/clocks/randomness/host resources remain absent by default and become available only through defined grants and sandboxed/deterministic execution modes. Later work includes WASM/HIL interop, low-level ABI/EASM, semantic compression/macros, native compilation, and ongoing language evolution.

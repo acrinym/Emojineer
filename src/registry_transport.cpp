@@ -558,6 +558,12 @@ std::string lower_ascii(std::string text) {
 
 } // namespace
 
+std::string read_registry_resource(const RegistryEndpoint& endpoint,
+                                   std::string_view resource,
+                                   std::size_t max_bytes) {
+    return read_resource(endpoint, resource, static_cast<std::uintmax_t>(max_bytes));
+}
+
 RegistryEndpoint parse_registry_endpoint(std::string_view raw) {
     if (raw.empty()) throw std::runtime_error("registry endpoint cannot be empty");
     const std::string text(raw);

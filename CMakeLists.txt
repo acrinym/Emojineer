@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Emojineer VERSION 0.18.0 LANGUAGES CXX)
+project(Emojineer VERSION 0.19.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -18,6 +18,7 @@ add_library(emojineer_core
     src/package_artifact.cpp
     src/registry.cpp
     src/registry_transport.cpp
+    src/registry_discovery.cpp
     src/authenticated_publication.cpp
     src/bytecode.cpp
     src/compiler.cpp
@@ -92,4 +93,12 @@ if(BUILD_TESTING)
  add_executable(emojineer_debugger_tests tests/debugger_tests.cpp)
  target_link_libraries(emojineer_debugger_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_debugger_tests COMMAND emojineer_debugger_tests)
+ add_executable(emojineer_registry_discovery_tests tests/registry_discovery_tests.cpp)
+ target_link_libraries(emojineer_registry_discovery_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_registry_discovery_tests COMMAND emojineer_registry_discovery_tests)
+ add_test(NAME emojineer_registry_discovery_cli
+          COMMAND ${CMAKE_COMMAND}
+                  -DEMJI=$<TARGET_FILE:emji>
+                  -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/registry-discovery-cli
+                  -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/registry_discovery_cli.cmake)
 endif()
