@@ -1,11 +1,37 @@
 #include "emojineer/vm.hpp"
 #include "emojineer/unicode.hpp"
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstdlib>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <istream>
+#include <iterator>
+#include <limits>
+#include <memory>
 #include <ostream>
+#include <random>
 #include <stdexcept>
+#include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+#ifdef EMOJINEER_HAVE_CURL
+#include <curl/curl.h>
+#endif
 
 namespace emojineer { namespace {
 constexpr std::size_t MaxCallDepth = 4096;
@@ -44,10 +70,177 @@ std::int64_t checked_mul(std::int64_t a, std::int64_t b, std::uint32_t line, Fai
     }
     return a * b;
 }
+
+constexpr std::size_t MaxFilesystemReadBytes = 16 * 1024 * 1024;
+constexpr std::size_t MaxNetworkReadBytes = 1024 * 1024;
+
+std::string require_native_string(const Value& value, const std::string& facility) {
+    if (const auto* text = std::get_if<std::string>(&value)) return *text;
+    throw std::runtime_error(facility + " requires a text argument");
+}
+
+std::uint64_t require_positive_bound(const Value& value) {
+    if (const auto* integer = std::get_if<std::int64_t>(&value)) {
+        if (*integer > 0) return static_cast<std::uint64_t>(*integer);
+    } else if (const auto* number = std::get_if<double>(&value)) {
+        if (std::isfinite(*number) && std::floor(*number) == *number && *number > 0 &&
+            *number <= static_cast<double>(std::numeric_limits<std::int64_t>::max()))
+            return static_cast<std::uint64_t>(*number);
+    }
+    throw std::runtime_error("random.int requires a positive whole-number bound");
+}
+
+std::string read_host_text(const std::string& raw_path) {
+    if (raw_path.empty()) throw std::runtime_error("filesystem.read-text path cannot be empty");
+    const std::filesystem::path path(raw_path);
+#ifdef _WIN32
+    struct HandleGuard {
+        HANDLE handle{INVALID_HANDLE_VALUE};
+        ~HandleGuard() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+    };
+    HandleGuard file{CreateFileW(path.c_str(), GENERIC_READ,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 nullptr, OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr)};
+    if (file.handle == INVALID_HANDLE_VALUE)
+        throw std::runtime_error("filesystem.read-text cannot open requested path");
+    if (GetFileType(file.handle) != FILE_TYPE_DISK)
+        throw std::runtime_error("filesystem.read-text requires a regular file");
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(file.handle, &info) ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        throw std::runtime_error("filesystem.read-text requires a regular file");
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file.handle, &size) || size.QuadPart < 0 ||
+        static_cast<std::uint64_t>(size.QuadPart) > MaxFilesystemReadBytes)
+        throw std::runtime_error("filesystem.read-text exceeds 16 MiB limit");
+    std::string result(static_cast<std::size_t>(size.QuadPart), '\0');
+    std::size_t offset = 0;
+    while (offset < result.size()) {
+        const auto remaining = result.size() - offset;
+        const DWORD request = static_cast<DWORD>(std::min<std::size_t>(remaining, 1u << 20));
+        DWORD read = 0;
+        if (!ReadFile(file.handle, result.data() + offset, request, &read, nullptr))
+            throw std::runtime_error("filesystem.read-text failed while reading path");
+        if (read == 0) break;
+        offset += read;
+    }
+    if (offset != result.size())
+        throw std::runtime_error("filesystem.read-text file changed while reading");
+    return result;
+#else
+    struct FdGuard {
+        int fd{-1};
+        ~FdGuard() { if (fd >= 0) ::close(fd); }
+    };
+    int flags = O_RDONLY | O_NONBLOCK;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    FdGuard file{::open(path.c_str(), flags)};
+    if (file.fd < 0)
+        throw std::runtime_error("filesystem.read-text cannot open requested path");
+    struct stat status{};
+    if (::fstat(file.fd, &status) != 0)
+        throw std::runtime_error("filesystem.read-text cannot inspect requested path");
+    if (!S_ISREG(status.st_mode))
+        throw std::runtime_error("filesystem.read-text requires a regular file");
+    if (status.st_size < 0 || static_cast<std::uint64_t>(status.st_size) > MaxFilesystemReadBytes)
+        throw std::runtime_error("filesystem.read-text exceeds 16 MiB limit");
+    std::string result(static_cast<std::size_t>(status.st_size), '\0');
+    std::size_t offset = 0;
+    while (offset < result.size()) {
+        const auto count = ::read(file.fd, result.data() + offset, result.size() - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) throw std::runtime_error("filesystem.read-text failed while reading path");
+        if (count == 0) break;
+        offset += static_cast<std::size_t>(count);
+    }
+    if (offset != result.size())
+        throw std::runtime_error("filesystem.read-text file changed while reading");
+    return result;
+#endif
+}
+
+bool valid_environment_name(const std::string& name) {
+    if (name.empty() || name.size() > 256) return false;
+    const auto first = static_cast<unsigned char>(name.front());
+    if (!(std::isalpha(first) || name.front() == '_')) return false;
+    return std::all_of(name.begin() + 1, name.end(), [](unsigned char ch) {
+        return std::isalnum(ch) || ch == '_';
+    });
+}
+
+#ifdef EMOJINEER_HAVE_CURL
+struct CurlBuffer {
+    std::string data;
+    bool overflow{false};
+};
+
+std::size_t curl_write(void* contents, std::size_t size, std::size_t count, void* user) {
+    auto* buffer = static_cast<CurlBuffer*>(user);
+    if (count != 0 && size > std::numeric_limits<std::size_t>::max() / count) {
+        buffer->overflow = true;
+        return 0;
+    }
+    const auto bytes = size * count;
+    if (buffer->data.size() > MaxNetworkReadBytes || bytes > MaxNetworkReadBytes - buffer->data.size()) {
+        buffer->overflow = true;
+        return 0;
+    }
+    buffer->data.append(static_cast<const char*>(contents), bytes);
+    return bytes;
+}
+#endif
+
+std::string https_get(const std::string& url) {
+    if (url.size() > 8192 || url.rfind("https://", 0) != 0)
+        throw std::runtime_error("network.get requires a bounded https:// URL");
+    const auto authority_end = url.find('/', 8);
+    const auto authority = url.substr(8, authority_end == std::string::npos ? std::string::npos : authority_end - 8);
+    if (authority.empty() || authority.find('@') != std::string::npos ||
+        url.find('\r') != std::string::npos || url.find('\n') != std::string::npos)
+        throw std::runtime_error("network.get rejected URL authority");
+#ifndef EMOJINEER_HAVE_CURL
+    throw std::runtime_error("network.get is unavailable because this build has no libcurl support");
+#else
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), &curl_easy_cleanup);
+    if (!handle) throw std::runtime_error("network.get could not initialize libcurl");
+    CurlBuffer buffer;
+    curl_easy_setopt(handle.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle.get(), CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(handle.get(), CURLOPT_MAXREDIRS, 0L);
+    curl_easy_setopt(handle.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(handle.get(), CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, "Emojineer/0.20");
+#if LIBCURL_VERSION_NUM >= 0x075500
+    curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS_STR, "https");
+#else
+    curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+    curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, curl_write);
+    curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, &buffer);
+    const auto result = curl_easy_perform(handle.get());
+    if (buffer.overflow) throw std::runtime_error("network.get response exceeds 1 MiB limit");
+    if (result != CURLE_OK) throw std::runtime_error(std::string("network.get failed: ") + curl_easy_strerror(result));
+    long status = 0;
+    curl_easy_getinfo(handle.get(), CURLINFO_RESPONSE_CODE, &status);
+    if (status < 200 || status >= 300)
+        throw std::runtime_error("network.get received HTTP status " + std::to_string(status));
+    return buffer.data;
+#endif
+}
 } // anonymous namespace
 
-VM::VM(std::istream& i, std::ostream& o, std::uint64_t fuel)
-    : input_(i), output_(o), fuel_(fuel), remaining_fuel_(fuel) {}
+VM::VM(std::istream& i, std::ostream& o, std::uint64_t fuel, ExecutionPolicy policy)
+    : input_(i), output_(o), fuel_(fuel), remaining_fuel_(fuel), policy_(std::move(policy)) {
+    validate_execution_policy(policy_);
+    deterministic_random_state_ = policy_.deterministic_seed ? policy_.deterministic_seed : 0x9E3779B97F4A7C15ULL;
+    deterministic_clock_ms_ = policy_.deterministic_clock_ms;
+}
 
 std::optional<SourcePosition> VM::get_current_source_position() const {
     if (!current_chunk_ || ip_ >= current_chunk_->source_map.size()) {
@@ -156,6 +349,9 @@ std::unordered_map<std::string, Value> VM::get_globals() const {
 
 void VM::initialize_execution(const Chunk& c) {
     verify_bytecode(c);
+    require_execution_capabilities(c.required_capabilities, policy_);
+    deterministic_random_state_ = policy_.deterministic_seed ? policy_.deterministic_seed : 0x9E3779B97F4A7C15ULL;
+    deterministic_clock_ms_ = policy_.deterministic_clock_ms;
     stack_.clear();
     frames_.clear();
     globals_.clear();
@@ -387,6 +583,10 @@ void VM::run_execution_loop() {
                 break;
             }
             
+            case OpCode::HostCall:
+                execute_host_call(ins.operand, line);
+                break;
+
             case OpCode::Return: {
                 if (frames_.empty())
                     runtime_error(line, "Return executed outside a function");
@@ -486,6 +686,93 @@ void VM::run_execution_loop() {
     }
     
     runtime_error(0, "bytecode terminated without Halt");
+}
+
+std::uint64_t VM::next_deterministic_random() {
+    std::uint64_t x = deterministic_random_state_;
+    if (x == 0) x = 0x9E3779B97F4A7C15ULL;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    deterministic_random_state_ = x;
+    return x * 2685821657736338717ULL;
+}
+
+void VM::execute_host_call(std::int32_t operand, std::uint32_t line) {
+    const auto facility = native_facility_from_operand(operand);
+    if (!facility) runtime_error(line, "invalid native facility operand");
+    const auto capability = native_facility_capability(*facility);
+    const auto bit = capability_mask(capability);
+    if ((policy_.grants & bit) == 0)
+        runtime_error(line, "native facility requires capability grant: " + capability_name(capability));
+    if (policy_.mode == ExecutionMode::Sandbox)
+        runtime_error(line, "native facilities are unavailable in sandbox mode");
+    if (policy_.mode == ExecutionMode::Deterministic &&
+        capability != Capability::Clock && capability != Capability::Random)
+        runtime_error(line, "real host facilities are unavailable in deterministic mode");
+
+    const auto arity = native_facility_arity(*facility);
+    if (stack_.size() < arity) runtime_error(line, "not enough native call arguments on VM stack");
+    std::vector<Value> args(arity);
+    for (std::size_t n = arity; n > 0; --n) args[n - 1] = pop(line);
+
+    try {
+        switch (*facility) {
+            case NativeFacility::FilesystemReadText:
+                stack_.emplace_back(read_host_text(require_native_string(args[0], native_facility_name(*facility))));
+                return;
+            case NativeFacility::NetworkGet:
+                stack_.emplace_back(https_get(require_native_string(args[0], native_facility_name(*facility))));
+                return;
+            case NativeFacility::ProcessRun: {
+                const auto command = require_native_string(args[0], native_facility_name(*facility));
+                if (command.empty() || command.size() > 32768 || command.find('\0') != std::string::npos)
+                    throw std::runtime_error("process.run requires a non-empty command up to 32 KiB");
+                const int status = std::system(command.c_str());
+                if (status == -1) throw std::runtime_error("process.run could not invoke the host command processor");
+                stack_.emplace_back(static_cast<std::int64_t>(status));
+                return;
+            }
+            case NativeFacility::ClockMillis:
+                if (policy_.mode == ExecutionMode::Deterministic) {
+                    stack_.emplace_back(deterministic_clock_ms_++);
+                } else {
+                    const auto now = std::chrono::system_clock::now().time_since_epoch();
+                    stack_.emplace_back(static_cast<std::int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(now).count()));
+                }
+                return;
+            case NativeFacility::RandomInt: {
+                const auto bound = require_positive_bound(args[0]);
+                std::uint64_t value = 0;
+                if (policy_.mode == ExecutionMode::Deterministic) {
+                    const auto limit = std::numeric_limits<std::uint64_t>::max() -
+                                       (std::numeric_limits<std::uint64_t>::max() % bound);
+                    do { value = next_deterministic_random(); } while (value >= limit);
+                    value %= bound;
+                } else {
+                    std::random_device source;
+                    const auto seed = (static_cast<std::uint64_t>(source()) << 32) ^
+                                      static_cast<std::uint64_t>(source());
+                    std::mt19937_64 engine(seed);
+                    std::uniform_int_distribution<std::uint64_t> distribution(0, bound - 1);
+                    value = distribution(engine);
+                }
+                stack_.emplace_back(static_cast<std::int64_t>(value));
+                return;
+            }
+            case NativeFacility::HostEnvironment: {
+                const auto name = require_native_string(args[0], native_facility_name(*facility));
+                if (!valid_environment_name(name))
+                    throw std::runtime_error("host.environment requires a portable environment variable name");
+                const char* value = std::getenv(name.c_str());
+                stack_.emplace_back(value ? std::string(value) : std::string{});
+                return;
+            }
+        }
+    } catch (const std::exception& error) {
+        runtime_error(line, native_facility_name(*facility) + ": " + error.what());
+    }
 }
 
 Value VM::pop(std::uint32_t line) {

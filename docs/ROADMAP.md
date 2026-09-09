@@ -178,17 +178,28 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - `emji discovery-index` canonical materialization for registry operators;
 - discovery networking remains explicit package-manager authority and never becomes program/VM authority.
 
-## Next product train
-
 ### Train 20 — Capability model and native facilities
 
-Build explicit host capability grants as one coherent runtime/tooling organ: filesystem, network, process, clocks, randomness, and host resources must remain absent by default and become available only through defined grants, deterministic/sandboxed modes, verifier/runtime enforcement, and acceptance tests that prove authority cannot leak through tooling or dependencies.
+- default VM execution grants no filesystem, network, process, clock, randomness, or host-environment authority;
+- six reserved native facility identifiers lower through the sovereign compiler to EMJBC v8 `HostCall` instructions rather than a second interpreter or foreign-language bridge;
+- the compiler records the exact capability union for the complete linked chunk, including imported local/package code;
+- EMJBC v8 serializes that contract and the verifier independently recomputes it from host-call operands, rejecting forged/unknown masks;
+- VM preflight checks all required grants before instruction zero, preventing partial program effects before a missing-authority failure;
+- REPL and debugger execution use the same production VM policy and cannot become alternate authority paths;
+- runtime grants are accepted only by execution commands; compile/check/LSP/package/registry tooling does not inherit them;
+- `--sandbox` is hard zero-native-host-authority mode;
+- deterministic mode admits only virtual clock/random grants with configurable logical clock and seeded VM-local PRNG state;
+- filesystem reads and HTTPS GETs are bounded, network redirects are disabled/TLS verified, while broad `process` and host-environment grants are documented as intentionally powerful;
+- `emojineer capabilities` reports source or bytecode authority requirements without execution;
+- dedicated C++ and real-CLI acceptance tests prove verifier binding, preflight zero-effects denial, deterministic replay, filesystem gating, policy validation, and dependency authority propagation.
+
+## Next product train
+
+### Train 21 — WASM / Host Interop Layer
+
+Define a first interoperable host/WASM ABI on top of Train 20's explicit capability boundary: typed crossing rules, deterministic value marshaling, capability-controlled adapters, verifier-visible imports/exports, failure semantics, and equivalence tests that do not create a second Emojineer language implementation.
 
 ## Later product trains
-
-### WASM / Host Interop Layer
-
-A defined interop ABI, C ABI and/or WASM boundary, and capability-controlled adapters only after the capability/ABI boundary is stable.
 
 ### Low-level Emojineer / EASM
 
