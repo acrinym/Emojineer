@@ -31,11 +31,11 @@ void help(std::ostream& out) {
 } // namespace
 
 int run_repl(std::istream& input, std::ostream& output, std::ostream& errors,
-             CustomEmojiRegistry registry) {
+             CustomEmojiRegistry registry, ExecutionPolicy policy) {
     std::string session;
     std::string line;
 
-    output << "Emojineer 0.16 REPL\n"
+    output << "Emojineer 0.20 REPL\n"
            << "Enter Emojineer source, then :run. Type :help for commands.\n";
 
     while (true) {
@@ -80,7 +80,7 @@ int run_repl(std::istream& input, std::ostream& output, std::ostream& errors,
             }
             try {
                 Chunk chunk = compile_session(session, registry);
-                VM vm(input, output);
+                VM vm(input, output, 1'000'000, policy);
                 vm.execute(chunk);
             } catch (const std::exception& error) {
                 errors << "emojineer: " << error.what() << '\n';

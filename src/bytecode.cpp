@@ -1,4 +1,5 @@
 #include "emojineer/bytecode.hpp"
+#include "emojineer/capability.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -13,7 +14,7 @@
 #include <stdexcept>
 #include <unordered_set>
 namespace emojineer { namespace {
-constexpr char Magic[]={'E','M','J','B','C'};constexpr std::uint16_t CurrentVersion=7;constexpr std::uint32_t MaxConstants=1'000'000,MaxFunctions=100'000,MaxInstructions=10'000'000,MaxStringBytes=64*1024*1024,MaxSourceFiles=1'000'000;
+constexpr char Magic[]={'E','M','J','B','C'};constexpr std::uint16_t CurrentVersion=8;constexpr std::uint32_t MaxConstants=1'000'000,MaxFunctions=100'000,MaxInstructions=10'000'000,MaxStringBytes=64*1024*1024,MaxSourceFiles=1'000'000;
 void write_u8(std::ostream&o,std::uint8_t v){o.put(static_cast<char>(v));if(!o)throw std::runtime_error("failed to write bytecode");}void write_u16(std::ostream&o,std::uint16_t v){write_u8(o,v&255);write_u8(o,(v>>8)&255);}void write_u32(std::ostream&o,std::uint32_t v){for(unsigned s=0;s<32;s+=8)write_u8(o,(v>>s)&255);}void write_u64(std::ostream&o,std::uint64_t v){for(unsigned s=0;s<64;s+=8)write_u8(o,(v>>s)&255);}std::uint8_t read_u8(std::istream&i){int v=i.get();if(v==std::char_traits<char>::eof())throw std::runtime_error("truncated bytecode");return static_cast<std::uint8_t>(v);}std::uint16_t read_u16(std::istream&i){return static_cast<std::uint16_t>(read_u8(i))|static_cast<std::uint16_t>(read_u8(i)<<8);}std::uint32_t read_u32(std::istream&i){std::uint32_t v=0;for(unsigned s=0;s<32;s+=8)v|=static_cast<std::uint32_t>(read_u8(i))<<s;return v;}std::uint64_t read_u64(std::istream&i){std::uint64_t v=0;for(unsigned s=0;s<64;s+=8)v|=static_cast<std::uint64_t>(read_u8(i))<<s;return v;}
 void write_string(std::ostream&o,const std::string&v){if(v.size()>MaxStringBytes)throw std::runtime_error("string too large for bytecode");write_u32(o,static_cast<std::uint32_t>(v.size()));o.write(v.data(),static_cast<std::streamsize>(v.size()));if(!o)throw std::runtime_error("failed to write bytecode string");}std::string read_string(std::istream&i){auto n=read_u32(i);if(n>MaxStringBytes)throw std::runtime_error("bytecode string exceeds safety limit");std::string v(n,'\0');i.read(v.data(),static_cast<std::streamsize>(n));if(!i)throw std::runtime_error("truncated bytecode string");return v;}
 OpCode decode_v1(std::uint8_t raw){switch(raw){case 0:return OpCode::Constant;case 1:return OpCode::LoadGlobal;case 2:return OpCode::StoreGlobal;case 3:return OpCode::AssertNumber;case 4:return OpCode::AssertString;case 5:return OpCode::AssertBool;case 6:return OpCode::Add;case 7:return OpCode::Subtract;case 8:return OpCode::Multiply;case 9:return OpCode::Divide;case 10:return OpCode::Modulo;case 11:return OpCode::AddInt;case 12:return OpCode::SubtractInt;case 13:return OpCode::MultiplyInt;case 14:return OpCode::Equal;case 15:return OpCode::Less;case 16:return OpCode::Greater;case 17:return OpCode::Negate;case 18:return OpCode::Not;case 19:return OpCode::ReadLine;case 20:return OpCode::Print;case 21:return OpCode::JumpIfFalse;case 22:return OpCode::Jump;case 23:return OpCode::Halt;default:throw std::runtime_error("invalid opcode in v1 bytecode");}}
@@ -49,6 +50,7 @@ void verify_bytecode(const Chunk& c) {
         if (!names.insert(f.name).second) throw std::runtime_error("duplicate function metadata");
     }
 
+    CapabilityMask inferred_capabilities = 0;
     for (const auto& ins : c.code) {
         auto valid_const = [&] { return ins.operand >= 0 && static_cast<std::size_t>(ins.operand) < c.constants.size(); };
         switch (ins.op) {
@@ -76,10 +78,20 @@ void verify_bytecode(const Chunk& c) {
             case OpCode::MakeArray:
                 if (ins.operand < 0) throw std::runtime_error("negative array element count");
                 break;
+            case OpCode::HostCall: {
+                const auto facility = native_facility_from_operand(ins.operand);
+                if (!facility) throw std::runtime_error("invalid native facility operand");
+                inferred_capabilities |= capability_mask(native_facility_capability(*facility));
+                break;
+            }
             default:
                 break;
         }
     }
+
+    validate_capability_mask(c.required_capabilities);
+    if (c.required_capabilities != inferred_capabilities)
+        throw std::runtime_error("bytecode capability metadata does not match host calls");
 
     if (!c.source_map.empty()) {
         if (c.source_map.size() != c.code.size())
@@ -140,6 +152,8 @@ void write_bytecode(const Chunk& c, std::ostream& o) {
     std::sort(hashes.begin(), hashes.end());
     write_u32(o, static_cast<std::uint32_t>(hashes.size()));
     for (const auto& [identity, hash] : hashes) { write_string(o, identity); write_string(o, hash); }
+    // v8 capability contract. The verifier has already proven this exactly matches HostCall opcodes.
+    write_u32(o, c.required_capabilities);
 }
 Chunk read_bytecode(std::istream& i) {
     char magic[sizeof(Magic)]{};
@@ -189,7 +203,9 @@ Chunk read_bytecode(std::istream& i) {
         OpCode op;
         if (version == 1) op = decode_v1(raw);
         else {
-            const auto max = version == 2 ? static_cast<std::uint8_t>(OpCode::Halt) : static_cast<std::uint8_t>(OpCode::SetIndex);
+            const auto max = version == 2 ? static_cast<std::uint8_t>(OpCode::Halt)
+                : (version <= 7 ? static_cast<std::uint8_t>(OpCode::SetIndex)
+                                : static_cast<std::uint8_t>(OpCode::HostCall));
             if (raw > max) throw std::runtime_error("invalid opcode in bytecode");
             op = static_cast<OpCode>(raw);
         }
@@ -228,10 +244,12 @@ Chunk read_bytecode(std::istream& i) {
         }
     }
 
+    if (version >= 8) c.required_capabilities = read_u32(i);
+
     verify_bytecode(c);
     return c;
 }
-std::string opcode_name(OpCode op){switch(op){case OpCode::Constant:return"Constant";case OpCode::LoadGlobal:return"LoadGlobal";case OpCode::StoreGlobal:return"StoreGlobal";case OpCode::LoadLocal:return"LoadLocal";case OpCode::StoreLocal:return"StoreLocal";case OpCode::AssertNumber:return"AssertNumber";case OpCode::AssertString:return"AssertString";case OpCode::AssertBool:return"AssertBool";case OpCode::Add:return"Add";case OpCode::Subtract:return"Subtract";case OpCode::Multiply:return"Multiply";case OpCode::Divide:return"Divide";case OpCode::Modulo:return"Modulo";case OpCode::AddInt:return"AddInt";case OpCode::SubtractInt:return"SubtractInt";case OpCode::MultiplyInt:return"MultiplyInt";case OpCode::Equal:return"Equal";case OpCode::Less:return"Less";case OpCode::Greater:return"Greater";case OpCode::Negate:return"Negate";case OpCode::Not:return"Not";case OpCode::ReadLine:return"ReadLine";case OpCode::Print:return"Print";case OpCode::JumpIfFalse:return"JumpIfFalse";case OpCode::Jump:return"Jump";case OpCode::Call:return"Call";case OpCode::Return:return"Return";case OpCode::Halt:return"Halt";case OpCode::AssertArray:return"AssertArray";case OpCode::MakeArray:return"MakeArray";case OpCode::Index:return"Index";case OpCode::Length:return"Length";case OpCode::Append:return"Append";case OpCode::SetIndex:return"SetIndex";}return"Unknown";}
+std::string opcode_name(OpCode op){switch(op){case OpCode::Constant:return"Constant";case OpCode::LoadGlobal:return"LoadGlobal";case OpCode::StoreGlobal:return"StoreGlobal";case OpCode::LoadLocal:return"LoadLocal";case OpCode::StoreLocal:return"StoreLocal";case OpCode::AssertNumber:return"AssertNumber";case OpCode::AssertString:return"AssertString";case OpCode::AssertBool:return"AssertBool";case OpCode::Add:return"Add";case OpCode::Subtract:return"Subtract";case OpCode::Multiply:return"Multiply";case OpCode::Divide:return"Divide";case OpCode::Modulo:return"Modulo";case OpCode::AddInt:return"AddInt";case OpCode::SubtractInt:return"SubtractInt";case OpCode::MultiplyInt:return"MultiplyInt";case OpCode::Equal:return"Equal";case OpCode::Less:return"Less";case OpCode::Greater:return"Greater";case OpCode::Negate:return"Negate";case OpCode::Not:return"Not";case OpCode::ReadLine:return"ReadLine";case OpCode::Print:return"Print";case OpCode::JumpIfFalse:return"JumpIfFalse";case OpCode::Jump:return"Jump";case OpCode::Call:return"Call";case OpCode::Return:return"Return";case OpCode::Halt:return"Halt";case OpCode::AssertArray:return"AssertArray";case OpCode::MakeArray:return"MakeArray";case OpCode::Index:return"Index";case OpCode::Length:return"Length";case OpCode::Append:return"Append";case OpCode::SetIndex:return"SetIndex";case OpCode::HostCall:return"HostCall";}return"Unknown";}
 std::string value_to_string(const Value&v){if(auto*n=std::get_if<double>(&v)){std::ostringstream o;if(std::isfinite(*n)&&std::floor(*n)==*n)o<<std::fixed<<std::setprecision(0)<<*n;else o<<std::setprecision(15)<<*n;return o.str();}if(auto*i=std::get_if<std::int64_t>(&v))return std::to_string(*i);if(auto*b=std::get_if<bool>(&v))return*b?"✅":"❌";if(auto*s=std::get_if<std::string>(&v))return*s;return array_to_string(std::get<ArrayPtr>(v));}
 bool values_equal(const Value&a,const Value&b){if(a.index()!=b.index())return false;if(auto*x=std::get_if<std::int64_t>(&a))return*x==std::get<std::int64_t>(b);if(auto*x=std::get_if<double>(&a))return*x==std::get<double>(b);if(auto*x=std::get_if<bool>(&a))return*x==std::get<bool>(b);if(auto*x=std::get_if<std::string>(&a))return*x==std::get<std::string>(b);auto x=std::get<ArrayPtr>(a),y=std::get<ArrayPtr>(b);if(!x||!y)return x==y;if(x->elements.size()!=y->elements.size())return false;for(std::size_t i=0;i<x->elements.size();++i)if(!values_equal(x->elements[i],y->elements[i]))return false;return true;}
 } // namespace emojineer

@@ -1,4 +1,4 @@
-# Emojineer Language Reference - v0.11
+# Emojineer Language Reference - v0.20
 
 Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The toolchain owns its lexer, AST, package-aware module linker, bytecode, VM, standard library, package workflow, and semantic evolution.
 
@@ -13,7 +13,7 @@ UTF-8 .emoji
   -> Emojineer VM
 ```
 
-This page describes implemented behavior through Product Train 11.
+This page describes the implemented language through Product Train 20. Package, registry, LSP, debugger, and capability details are split into focused references where appropriate.
 
 ## 1. Source files and Unicode
 
@@ -85,6 +85,8 @@ Examples of valid identifiers include `🍎`, `👤`, `🌍`, and a single ZWJ e
 | `💭` | line comment |
 
 The [Custom Emoji Registry](CER.md) can register additional emoji sequences that lower into these existing semantic token kinds.
+
+Train 20 also reserves six otherwise identifier-shaped emoji for native host facilities: `🗂️` filesystem read, `🌐` HTTPS GET, `⚙️` process execution, `🕰️` clock, `🎲` random integer, and `🖥️` host environment lookup. They use ordinary `IDENTIFIER 🫴 ... 🤲` call grammar but cannot be redefined as user functions. Compilation records their required capabilities and VM execution is denied by default unless the host explicitly grants them. See [Capability Model and Native Facilities](CAPABILITIES.md).
 
 ## 4. Current grammar
 

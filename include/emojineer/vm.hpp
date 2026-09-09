@@ -1,5 +1,6 @@
 #pragma once
 #include "emojineer/bytecode.hpp"
+#include "emojineer/capability.hpp"
 #include "emojineer/debug_types.hpp"
 #include <cstdint>
 #include <functional>
@@ -13,7 +14,8 @@ namespace emojineer {
 // VM with integrated debugger support - single opcode implementation
 class VM {
 public:
-    VM(std::istream& input, std::ostream& output, std::uint64_t fuel = 1'000'000);
+    VM(std::istream& input, std::ostream& output, std::uint64_t fuel = 1'000'000,
+       ExecutionPolicy policy = {});
     void execute(const Chunk& chunk);
     void set_debug_control(VMDebugControl* debug) { debug_control_ = debug; }
     VMDebugControl* debug_control() const { return debug_control_; }
@@ -42,6 +44,8 @@ private:
     double pop_number(std::uint32_t line);
     std::int64_t pop_int64(std::uint32_t line);
     std::string constant_string(const Chunk& chunk, std::int32_t index, std::uint32_t line) const;
+    void execute_host_call(std::int32_t operand, std::uint32_t line);
+    std::uint64_t next_deterministic_random();
     CallFrame& frame(std::uint32_t line);
     const CallFrame& frame(std::uint32_t line) const;
     [[noreturn]] void runtime_error(std::uint32_t line, const std::string& message) const;
@@ -50,6 +54,9 @@ private:
     std::ostream& output_;
     std::uint64_t fuel_;
     std::uint64_t remaining_fuel_;
+    ExecutionPolicy policy_;
+    std::uint64_t deterministic_random_state_{0};
+    std::int64_t deterministic_clock_ms_{0};
     std::vector<Value> stack_;
     std::vector<CallFrame> frames_;
     std::unordered_map<std::string, Value> globals_;

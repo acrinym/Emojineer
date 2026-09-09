@@ -1325,6 +1325,37 @@ void test_debug_metadata_validation() {
     std::cout << "  ✅ Debug metadata validation works\n";
 }
 
+
+void test_debug_restart_preserves_execution_policy() {
+    std::cout << "Test: debugger restart preserves execution policy...\n";
+    const auto path = std::filesystem::temp_directory_path() / "emojineer-train20-debug-policy.emoji";
+    {
+        std::ofstream source(path, std::ios::binary | std::ios::trunc);
+        source << "📝 🕰️ 🫴 🤲\n"
+                  "📝 🎲 🫴 10 🤲\n";
+    }
+
+    emojineer::ExecutionPolicy policy;
+    policy.mode = emojineer::ExecutionMode::Deterministic;
+    policy.grants = emojineer::capability_mask(emojineer::Capability::Clock) |
+                    emojineer::capability_mask(emojineer::Capability::Random);
+    policy.deterministic_seed = 7;
+    policy.deterministic_clock_ms = 4242;
+
+    std::istringstream commands("run\ncontinue\n");
+    std::ostringstream output;
+    std::ostringstream error;
+    const int result = emojineer::run_debug_session(path, commands, output, error, {}, policy);
+    std::filesystem::remove(path);
+    require(result == 0, "restarted deterministic debug session must succeed");
+    require(error.str().empty(), "restarted deterministic debug session must not report loader errors");
+    require(output.str().find("4242\n") != std::string::npos,
+            "restarted debugger must preserve deterministic clock policy");
+    require(output.str().find("Program finished") != std::string::npos,
+            "restarted debugger must execute the program to completion");
+    std::cout << "  ✅ Debugger restart preserves execution policy\n";
+}
+
 void test_emjbc_debug_session() {
     std::cout << "Test: serialized .emjbc debug session...\n";
     const std::string source = "📝 📜bytecode-debug📜\n";
@@ -1395,6 +1426,7 @@ int main() {
         test_step_over_honors_inner_breakpoint();
         test_breakpoint_stale_and_source_drift();
         test_debug_metadata_validation();
+        test_debug_restart_preserves_execution_policy();
         test_emjbc_debug_session();
         
         std::cout << "\n✅ All debugger tests passed!\n";
