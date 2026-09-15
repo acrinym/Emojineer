@@ -9,18 +9,21 @@
 
 namespace emojineer {
 
-// Optional source provider callback for in-memory document overlays.
-// If provided, the module system will check the provider before reading from disk.
-// Returns std::nullopt if the source is not provided (fall back to disk).
-// The callback receives the absolute path to the source file.
+/// Optional source-overlay provider used by editor/LSP callers.
+///
+/// The callback receives an absolute candidate path and returns an in-memory
+/// source replacement when available. nullopt delegates to ordinary disk input;
+/// using an overlay does not change module/package authorization semantics.
 using SourceProvider = std::function<std::optional<std::string>(const std::filesystem::path&)>;
 
-// Compile an entry source file and its module graph into one sovereign EMJBC chunk.
-// If module_root is empty, the nearest enclosing emojineer.toml directory is used when
-// available; otherwise the entry file's directory is the module root. When that root has
-// an emojineer.toml, the resolved local PackageGraph authorizes explicit pkg: imports while
-// ordinary relative imports remain confined to the owning package root.
-// If source_provider is provided, it will be checked before reading from disk.
+/// Compile an entry source and its authorized module graph into one EMJBC chunk.
+///
+/// When module_root is empty, the nearest enclosing emojineer.toml directory is
+/// used when available, otherwise the entry directory is the root. A resolved
+/// PackageGraph authorizes explicit `pkg:` imports while normal relative imports
+/// remain confined to the owning package. Train 20 native facility identifiers
+/// are deliberately preserved across symbol rewriting, so host calls originating
+/// in dependencies contribute to the final chunk's required capability mask.
 Chunk compile_file(const std::filesystem::path& entry,
                    CustomEmojiRegistry registry = {},
                    std::filesystem::path module_root = {},
