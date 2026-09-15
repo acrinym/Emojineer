@@ -16,7 +16,7 @@ namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.19\n"
+        << "emji 0.20\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"

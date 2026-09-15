@@ -11,7 +11,7 @@ struct ArrayValue;
 using ArrayPtr=std::shared_ptr<ArrayValue>;
 using Value=std::variant<std::int64_t,double,bool,std::string,ArrayPtr>;
 struct ArrayValue{std::vector<Value> elements;};
-enum class OpCode:std::uint8_t{Constant,LoadGlobal,StoreGlobal,LoadLocal,StoreLocal,AssertNumber,AssertString,AssertBool,Add,Subtract,Multiply,Divide,Modulo,AddInt,SubtractInt,MultiplyInt,Equal,Less,Greater,Negate,Not,ReadLine,Print,JumpIfFalse,Jump,Call,Return,Halt,AssertArray,MakeArray,Index,Length,Append,SetIndex};
+enum class OpCode:std::uint8_t{Constant,LoadGlobal,StoreGlobal,LoadLocal,StoreLocal,AssertNumber,AssertString,AssertBool,Add,Subtract,Multiply,Divide,Modulo,AddInt,SubtractInt,MultiplyInt,Equal,Less,Greater,Negate,Not,ReadLine,Print,JumpIfFalse,Jump,Call,Return,Halt,AssertArray,MakeArray,Index,Length,Append,SetIndex,HostCall};
 struct Instruction{OpCode op{OpCode::Halt};std::int32_t operand{0};std::uint32_t line{0};};
 struct FunctionInfo{std::string name;std::uint32_t entry{0};std::uint32_t arity{0};std::uint32_t local_count{0};std::vector<std::string> parameter_names;std::vector<std::string> local_names;};
 
@@ -34,6 +34,8 @@ struct Chunk{
     // EMJBC v7: source identity -> SHA-256 of the exact source text used to compile.
     // This is one digest per source, not one digest per instruction.
     std::unordered_map<std::string, std::string> source_hashes;
+    // EMJBC v8: exact host capability contract inferred from HostCall instructions.
+    std::uint32_t required_capabilities{0};
     std::int32_t add_constant(Value value);
 };
 

@@ -1,4 +1,5 @@
 #include "emojineer/module.hpp"
+#include "emojineer/capability.hpp"
 
 #include "emojineer/ast.hpp"
 #include "emojineer/compiler.hpp"
@@ -258,6 +259,10 @@ void analyze_unit(ModuleUnit& unit) {
         }
         saw_runtime = true;
         if (auto* fn = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
+            if (auto native = native_facility_from_identifier(fn->name))
+                throw std::runtime_error("module '" + unit.identity + "' line " + std::to_string(fn->line) +
+                                         ": reserved native facility emoji '" + native_facility_glyph(*native) +
+                                         "' cannot be defined as a function");
             unit.functions.insert(fn->name);
             std::unordered_set<std::string> locals(fn->parameters.begin(), fn->parameters.end());
             collect_function_locals(fn->body, locals);
@@ -423,7 +428,8 @@ void rewrite_expr(ast::Expr& expr, ModuleUnit& unit,
     }
     if (auto* call = dynamic_cast<ast::CallExpr*>(&expr)) {
         for (auto& arg : call->arguments) rewrite_expr(*arg, unit, locals);
-        call->callee = resolve_function(unit, call->callee, call->line);
+        if (!native_facility_from_identifier(call->callee))
+            call->callee = resolve_function(unit, call->callee, call->line);
         return;
     }
     if (auto* array = dynamic_cast<ast::ArrayExpr*>(&expr)) {

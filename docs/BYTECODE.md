@@ -1,157 +1,109 @@
 # EMJBC Bytecode Specification
 
-`EMJBC` is Emojineer's owned bytecode format. It is not Python bytecode, JavaScript, JVM bytecode, WebAssembly, or a serialization of host-language source.
+`EMJBC` is Emojineer's owned bytecode format. It is not Python bytecode, JavaScript, JVM bytecode, WebAssembly, or serialized host-language source.
 
-The current writer emits **version 3**. The reader accepts versions **1, 2, and 3**.
+The current writer emits **version 8**. The reader accepts **versions 1 through 8**.
 
-## Container header
+## Header and scalar encoding
 
-Every bytecode stream begins with the five ASCII magic bytes:
+Every stream begins with the five ASCII bytes `EMJBC`, followed by a little-endian unsigned 16-bit format version. Multi-byte integer fields are serialized little-endian.
 
-```text
-EMJBC
-```
+Safety limits include:
 
-followed by a little-endian unsigned 16-bit format version.
+- constants: 1,000,000;
+- functions: 100,000;
+- instructions: 10,000,000;
+- one serialized string: 64 MiB;
+- source-provenance identities: 1,000,000.
 
-All multi-byte integer fields are explicitly serialized little-endian.
+Malformed, truncated, oversized, unknown-version, or structurally invalid bytecode is rejected before execution.
 
-## Safety limits
+## Compatibility history
 
-The current reader/verifier enforces these format limits before large allocations or execution:
+- **v1**: original stack machine, globals, assertions, arithmetic/comparison, I/O, jumps, halt. The reader retains an explicit v1 opcode decoder.
+- **v2**: function table, parameters/locals, call frames, `Call`, and `Return`.
+- **v3**: first-class collection instructions through `SetIndex`.
+- **v4**: retained reader-compatible format generation in the historical evolution between collections and debugger metadata; no v8-only host opcode is accepted when reading it.
+- **v5**: serialized function parameter/local name metadata used by tooling/debug inspection.
+- **v6**: deterministic per-instruction source map with source identity, exact source range, and function context.
+- **v7**: sorted source SHA-256 provenance table used for debugger source-drift detection.
+- **v8**: `HostCall` plus an exact serialized required-capability mask bound by the verifier to the actual native facilities present in the instruction stream.
 
-- constants: 1,000,000 maximum;
-- functions: 100,000 maximum;
-- instructions: 10,000,000 maximum;
-- one serialized string: 64 MiB maximum.
+Older bytecode cannot contain `HostCall`, so its required capability mask is zero.
 
-Malformed, truncated, oversized, unknown-version, or structurally invalid bytecode is rejected.
+## Constants
 
-## Version history
-
-### Version 1
-
-The original stack-machine format: constants, globals, runtime type assertions, arithmetic/comparison, input/output, control-flow jumps, and halt. Version 1 does not contain a function metadata table.
-
-### Version 2
-
-Adds functions, parameters, local slots, call frames, `Call`, and `Return`. The reader retains explicit v1 opcode decoding so old v1 files remain meaningful after the enum grew.
-
-### Version 3
-
-Adds first-class collection instructions: array type assertion, construction, indexing, length, append, and value-style element replacement.
-
-Train 8 modules do **not** require version 4. Module linking resolves source-unit visibility and rewrites symbols to deterministic internal names before ordinary v3 bytecode generation.
-
-## Constant pool
-
-After the version, the stream stores an unsigned 32-bit constant count followed by tagged constants.
-
-Current tags:
+The stream stores a `u32` constant count and tagged values:
 
 | Tag | Value |
 | ---: | --- |
-| 1 | IEEE-754 binary64 number, serialized as its 64-bit bit pattern |
-| 2 | boolean, followed by one byte `0` or `1` |
-| 3 | UTF-8 string, length-prefixed by unsigned 32-bit byte count |
+| 1 | IEEE-754 binary64 number |
+| 2 | boolean byte `0` or `1` |
+| 3 | length-prefixed UTF-8 string |
 | 4 | signed 64-bit integer bit pattern |
 
-Arrays are runtime values and are deliberately not stored directly in the bytecode constant pool.
+Arrays remain runtime values and are not valid constant-pool entries.
 
 ## Function table
 
-Versions 2 and later store an unsigned 32-bit function count. Each function record contains:
+Versions 2+ store function name, entry instruction index, arity, and local-slot count. Versions 5+ additionally store parameter and local names. The verifier rejects out-of-range entries, arity/local inconsistencies, malformed name metadata, and duplicate function names.
 
-1. UTF-8 function name;
-2. unsigned 32-bit entry instruction index;
-3. unsigned 32-bit arity;
-4. unsigned 32-bit local-slot count.
-
-The verifier requires each function entry to point inside the instruction stream, requires arity not to exceed local count, and rejects duplicate function metadata names.
-
-Train 8 module-linked functions may appear here under deterministic internal names such as:
-
-```text
-@module/lib/math.emoji::🧠
-```
-
-That string is linker metadata, not source syntax.
+Linked functions can use deterministic internal names such as `@module/lib/math.emoji::🧠`; those are linker metadata, not source syntax.
 
 ## Instruction stream
 
-The stream stores an unsigned 32-bit instruction count. Every serialized instruction is fixed-width:
+Each serialized instruction contains:
 
 ```text
-u8 opcode
-u32 operand_bits
+u8  opcode
+u32 signed_operand_bits
 u32 source_line
 ```
 
-`operand_bits` is the bit representation of the instruction's signed 32-bit operand. `source_line` is retained for diagnostics.
+The current in-memory set includes constants, globals/locals, type assertions, arithmetic/comparison, unary operations, stdin/stdout, jumps, calls/returns, halt, collections, and v8 `HostCall`.
 
-## Current opcode set
+`HostCall.operand` is a closed native-facility identifier. The current facilities are filesystem read, HTTPS GET, process execution, clock milliseconds, random integer, and host environment lookup. See [CAPABILITIES.md](CAPABILITIES.md).
 
-The in-memory v3 instruction set is:
+## v6 source map
 
-| Opcode | Purpose |
-| --- | --- |
-| `Constant` | push constant-pool value |
-| `LoadGlobal` / `StoreGlobal` | read/write named global |
-| `LoadLocal` / `StoreLocal` | read/write current call-frame local |
-| `AssertNumber` | runtime number type assertion |
-| `AssertString` | runtime text type assertion |
-| `AssertBool` | runtime boolean type assertion |
-| `Add` / `Subtract` / `Multiply` / `Divide` / `Modulo` | numeric operations; `Add` also supports two text values |
-| `AddInt` / `SubtractInt` / `MultiplyInt` | checked signed-integer operations used by bytecode/runtime support |
-| `Equal` / `Less` / `Greater` | comparison |
-| `Negate` / `Not` | unary numeric negation / boolean NOT |
-| `ReadLine` / `Print` | stdin/stdout I/O |
-| `JumpIfFalse` / `Jump` | control flow |
-| `Call` / `Return` | function calls and returns |
-| `Halt` | terminate the program |
-| `AssertArray` | runtime array type assertion |
-| `MakeArray` | construct an array from stack values |
-| `Index` | read array element |
-| `Length` | array size or Unicode-grapheme-aware text length |
-| `Append` | return an array with an appended value |
-| `SetIndex` | return an array with one replaced element |
+The writer stores one deterministic source-map record per instruction. Each record contains source identity, start/end line and column, and function context. The verifier rejects absolute checkout-specific identities, zero/reversed source ranges, and source-map cardinality that does not match the instruction stream.
 
-## Verification
+## v7 source provenance
 
-`verify_bytecode` checks structural safety independently of source parsing. Among other checks it validates:
+The writer sorts source identities and stores SHA-256 values for compiled sources. The verifier bounds the table, requires portable identities, and validates digest shape. This supports debugger stale-source diagnostics without embedding checkout roots.
 
-- safety-limit counts;
-- absence of arrays in the constant pool;
+## v8 capability contract
+
+After the v7 provenance table, v8 stores a `u32 required_capabilities` mask.
+
+`verify_bytecode` independently walks all `HostCall` instructions, validates each facility operand, maps it to its capability, and recomputes the exact union. Verification fails when the serialized mask contains unknown bits or differs from the inferred union.
+
+The VM verifies again and performs whole-program capability preflight before executing instruction zero. Serialized metadata therefore cannot lie about a host call merely to bypass the runtime grant check.
+
+## Structural verification
+
+The verifier checks, among other invariants:
+
+- all safety-limit counts;
+- no arrays in the constant pool;
 - function metadata integrity;
-- constant operands;
-- global operands referencing string constants;
+- constant and global-string operands;
 - nonnegative local slots;
 - jump targets;
 - function-call indices;
-- nonnegative array construction counts.
-
-The VM verifies a chunk again before execution.
+- nonnegative array construction counts;
+- valid native facility operands;
+- exact capability-mask/instruction agreement;
+- source map and provenance invariants.
 
 ## VM execution model
 
-The VM uses:
+The VM uses an operand stack, global map, call-frame stack, configurable instruction fuel (default 1,000,000), host-provided stdin/stdout, and an explicit Train 20 `ExecutionPolicy`.
 
-- an operand stack;
-- a global-value map;
-- a call-frame stack for function locals and return instruction pointers;
-- a configurable execution-fuel budget, defaulting to 1,000,000 instructions;
-- stdin and stdout references supplied by the host executable.
+Maximum call depth is 4096. `Halt` with live call frames or leaked stack values is an error; function returns also reject operand-stack leakage.
 
-Maximum call depth is currently 4096 frames.
-
-A `Halt` reached while call frames remain, or with leaked values on the operand stack, is a runtime error. A function return also checks that its operand-stack segment did not leak values.
-
-## Value behavior
-
-Runtime values currently include numbers, signed integers used by bytecode support, booleans, UTF-8 text, and arrays. Array equality is structural and recursive. Array append/replacement operations use value-style semantics: the prior array value is preserved and a transformed array is returned.
-
-Text length counts Unicode extended grapheme clusters through the same ICU-based Unicode machinery used by the language.
+Default execution grants no native host capabilities. REPL and debugger execution use the same production VM policy. Deterministic mode virtualizes only Train 20 clock/random facilities; sandbox mode grants none.
 
 ## Compatibility rule
 
-A bytecode-format bump is required only when serialized representation or opcode compatibility requires it. Source-language growth alone is not a reason to increment EMJBC. Train 8 modules are the current example: they add substantial language semantics while continuing to emit ordinary v3 chunks.
+EMJBC advances when serialized representation or opcode compatibility requires it. Source-only language growth does not require a bytecode bump. Train 8 modules, for example, were resolved by the source linker without adding an opcode; Train 20 requires v8 because host calls and their verifier-bound authority contract are serialized semantics.

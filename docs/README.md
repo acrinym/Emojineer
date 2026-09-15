@@ -15,6 +15,7 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 - [Language server](LANGUAGE_SERVER.md) - native C++ LSP behavior and offline editor boundaries.
 - [Source debugger](DEBUGGER.md) - source breakpoints, stepping, frames, values, and provenance.
 - [Package discovery](PACKAGE_DISCOVERY.md) - deterministic search, package metadata, release filtering, and reverse dependencies.
+- [Capability model and native facilities](CAPABILITIES.md) - default-deny host authority, grants, EMJBC binding, sandbox, and deterministic execution.
 - [Product roadmap](ROADMAP.md) - landed and future product trains.
 
 ## Focused references
@@ -29,16 +30,16 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 ## Current implemented product level
 
-The compiler/toolchain reports Emojineer **0.19**. Product Trains **1 through 19** are implemented on this train.
+The compiler/toolchain reports Emojineer **0.20**. Product Trains **1 through 20** are implemented on this train.
 
-The product now includes the sovereign language/compiler/VM core; functions and collections; CER; REPL/source tooling; project workflow; modules; native standard modules; local and remote package dependency graphs; immutable `.emjpkg` artifacts; verified file/HTTPS registry reads; reproducible materialization and lock v3; authenticated HTTPS publication; native C++ LSP/editor integration; the source-level debugger; and deterministic package search/discovery with stable/prerelease filtering and reverse-dependency queries.
+The product now includes the sovereign language/compiler/VM core; functions and collections; CER; REPL/source tooling; project workflow; modules; native standard modules; local and remote package dependency graphs; immutable `.emjpkg` artifacts; verified file/HTTPS registry reads; reproducible materialization and lock v3; authenticated HTTPS publication; native C++ LSP/editor integration; the source-level debugger; deterministic package search/discovery with stable/prerelease filtering and reverse-dependency queries; and the default-deny capability/native-facility model with EMJBC v8 verifier/runtime enforcement.
 
 The documentation describes implemented behavior unless a section is explicitly labeled as future work or as a historical train contract.
 
 ## File, module, package, and registry forms
 
 - `.emoji` - Emojineer UTF-8 source.
-- `.emjbc` - serialized Emojineer bytecode with deterministic debug metadata where present.
+- `.emjbc` - serialized Emojineer bytecode; current writer v8 includes deterministic debug/provenance metadata and an exact verifier-bound required-capability mask.
 - `.emjpkg` - deterministic immutable package source artifact.
 - `emojineer.toml` - strict package/project manifest with local/path and registry dependency declarations.
 - `emojineer.lock` - deterministic lock v3 provenance for path and registry dependencies.
@@ -52,4 +53,4 @@ The documentation describes implemented behavior unless a section is explicitly 
 - `EMJREGDISC1` - deterministic registry discovery index for package search metadata.
 - `emojineer.registry-search.v1`, `emojineer.registry-package-info.v1`, `emojineer.registry-dependents.v1` - deterministic discovery JSON schemas.
 
-Ordinary source compilation, execution, LSP requests, and debugger operation do not contact registries. Registry networking remains explicit `emji` package-manager authority. Package discovery does not weaken immutable fetch/materialization verification or make transitive dependencies ambient imports.
+Ordinary source compilation, LSP requests, and debugger source inspection do not contact registries. Registry networking remains explicit `emji` package-manager authority. Program execution begins with zero Train 20 host grants and can use native host facilities only through an explicit execution policy; REPL/debugger execution uses the same production VM policy. Package discovery does not weaken immutable fetch/materialization verification or make transitive dependencies ambient imports.

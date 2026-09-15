@@ -1,5 +1,6 @@
 #pragma once
 #include "emojineer/bytecode.hpp"
+#include "emojineer/capability.hpp"
 #include "emojineer/cer.hpp"
 #include "emojineer/debug_types.hpp"
 #include <filesystem>
@@ -168,7 +169,8 @@ class DebugVM {
 public:
     using DebugCallback = std::function<void(const DebugSnapshot&)>;
     
-    DebugVM(std::istream& input, std::ostream& output, std::uint64_t fuel = 1'000'000);
+    DebugVM(std::istream& input, std::ostream& output, std::uint64_t fuel = 1'000'000,
+            ExecutionPolicy policy = {});
     ~DebugVM();
     
     // Set debugger callback
@@ -240,6 +242,7 @@ int run_debug_session(const std::filesystem::path& source_file,
                      std::istream& input,
                      std::ostream& output,
                      std::ostream& error,
-                     const CustomEmojiRegistry& registry);
+                     const CustomEmojiRegistry& registry,
+                     ExecutionPolicy policy = {});
 
 } // namespace emojineer

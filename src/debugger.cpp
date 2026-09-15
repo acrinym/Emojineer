@@ -687,8 +687,8 @@ std::optional<SourcePosition> DebugController::find_breakpoint_position(const Br
 }
 
 // DebugVM implementation - wraps VM with DebugController for backward compatibility
-DebugVM::DebugVM(std::istream& input, std::ostream& output, std::uint64_t fuel)
-    : vm_(std::make_unique<VM>(input, output, fuel)),
+DebugVM::DebugVM(std::istream& input, std::ostream& output, std::uint64_t fuel, ExecutionPolicy policy)
+    : vm_(std::make_unique<VM>(input, output, fuel, std::move(policy))),
       controller_(std::make_unique<DebugController>(*vm_)) {
     vm_->set_debug_control(controller_.get());
 }
@@ -889,7 +889,8 @@ int run_debug_session(const std::filesystem::path& source_file,
                      std::istream& input,
                      std::ostream& output,
                      std::ostream& error,
-                     const CustomEmojiRegistry& registry) {
+                     const CustomEmojiRegistry& registry,
+                     ExecutionPolicy policy) {
     emojineer::Chunk chunk;
     try {
         if (source_file.extension() == ".emjbc") {
@@ -907,7 +908,10 @@ int run_debug_session(const std::filesystem::path& source_file,
     }
 
     auto source_resolver = build_source_resolver(source_file, chunk);
-    std::unique_ptr<emojineer::DebugVM> debug_vm = std::make_unique<emojineer::DebugVM>(input, output);
+    constexpr std::uint64_t DebugSessionFuel = 1'000'000;
+    const ExecutionPolicy session_policy = policy;
+    std::unique_ptr<emojineer::DebugVM> debug_vm =
+        std::make_unique<emojineer::DebugVM>(input, output, DebugSessionFuel, session_policy);
     debug_vm->set_source_resolver(source_resolver);
     
     // Set up debug callback for pause events
@@ -1173,7 +1177,7 @@ int run_debug_session(const std::filesystem::path& source_file,
         else if (cmd == "run") {
             // Restart the debug session but preserve breakpoints
             auto breakpoints = debug_vm->get_breakpoints();
-            debug_vm = std::make_unique<emojineer::DebugVM>(input, output);
+            debug_vm = std::make_unique<emojineer::DebugVM>(input, output, DebugSessionFuel, session_policy);
             debug_vm->set_source_resolver(source_resolver);
             debug_vm->set_debug_callback([&output](const emojineer::DebugSnapshot& snapshot) {
                 output << "\n" << snapshot.reason << " at ";

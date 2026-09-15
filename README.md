@@ -8,11 +8,11 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → package-aware module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.19**.
+Current language/toolchain version: **0.20**.
 
 ## What works now
 
-Product Trains 1 through 19 provide:
+Product Trains 1 through 20 provide:
 
 - Unicode/grapheme-aware emoji-native syntax and canonical token identity;
 - variables, optional runtime declaration types, arithmetic, comparisons, booleans, input/output;
@@ -34,7 +34,8 @@ Product Trains 1 through 19 provide:
 - authenticated HTTPS `emji publish` using the `emjpub1` write protocol, registry identity preflight, external credentials, immutable artifact upload, namespace ownership, strict verifiable receipts, and bounded/no-redirect TLS transport;
 - native C++ `emojineer-lsp` editor integration over the real parser/module/package model, with diagnostics, completion, hover, navigation, symbols, formatting, and offline registry behavior;
 - a source-level debugger over the production compiler/EMJBC/VM with deterministic source mappings, breakpoints, stepping, frames, locals/globals, value inspection, and source provenance diagnostics;
-- deterministic package discovery with `EMJREGDISC1`, stable/prerelease selection, package metadata, reverse dependencies, and human/JSON search views.
+- deterministic package discovery with `EMJREGDISC1`, stable/prerelease selection, package metadata, reverse dependencies, and human/JSON search views;
+- an explicit default-deny host capability model with EMJBC v8 verifier-bound authority metadata, filesystem/network/process/clock/random/host facilities, whole-program preflight, and sandboxed/deterministic execution modes.
 
 ## Package workflow
 
@@ -104,7 +105,7 @@ Only the current package's declared **direct** dependencies are available throug
 
 ## Build
 
-Requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`). libcurl is optional and enables HTTPS registry reads and authenticated HTTPS publication; local file registries remain available without it.
+Requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`). libcurl is optional and enables HTTPS registry reads/publication/discovery plus the explicitly granted `🌐` runtime facility; local file registries and all non-network language behavior remain available without it.
 
 ```bash
 cmake -S . -B build
@@ -126,6 +127,9 @@ ctest --test-dir build --output-on-failure
 ./build/emojineer compile examples/countdown.emoji
 ./build/emojineer exec examples/countdown.emjbc
 ./build/emojineer dump examples/collections.emoji
+./build/emojineer capabilities examples/countdown.emoji
+./build/emojineer run app.emoji --grant filesystem
+./build/emojineer run simulation.emoji --deterministic --grant clock --grant random --seed 7 --clock-ms 1000
 ./build/emojineer repl
 ```
 
@@ -137,7 +141,7 @@ Key references:
 
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — current language reference and grammar;
 - [`docs/STDLIB.md`](docs/STDLIB.md) — native standard-library modules;
-- [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1/v2/v3 format and VM contract;
+- [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1-v8 compatibility, verifier, source provenance, and VM contract;
 - [`docs/CLI.md`](docs/CLI.md) — full command-line/toolchain guide;
 - [`docs/MODULES.md`](docs/MODULES.md) — local, package, and standard module/import/export semantics;
 - [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects, local/remote dependencies, package imports, graph inspection, and locks;
@@ -146,6 +150,7 @@ Key references:
 - [`docs/LANGUAGE_SERVER.md`](docs/LANGUAGE_SERVER.md) — native C++ LSP/editor integration;
 - [`docs/DEBUGGER.md`](docs/DEBUGGER.md) — source-level debugger and provenance contract;
 - [`docs/PACKAGE_DISCOVERY.md`](docs/PACKAGE_DISCOVERY.md) — deterministic registry search/discovery and reverse dependencies;
+- [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) — default-deny runtime authority, native facilities, grants, sandbox, and deterministic execution;
 - [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — landed and next product trains.
 
@@ -155,4 +160,4 @@ Emoji are extended grapheme clusters, not reliably one Unicode code point. Emoji
 
 ## Project direction
 
-Train 19 completes deterministic package search/discovery on top of the immutable registry/package substrate. The next coherent product organ is **Train 20: explicit capability model and native facilities**, so filesystem/network/process/clocks/randomness/host resources remain absent by default and become available only through defined grants and sandboxed/deterministic execution modes. Later work includes WASM/HIL interop, low-level ABI/EASM, semantic compression/macros, native compilation, and ongoing language evolution.
+Train 20 establishes the default-deny runtime authority boundary and EMJBC v8 capability contract. The next coherent product organ is **WASM / Host Interop**, built on this explicit grant model rather than introducing ambient host access. Later work includes low-level ABI/EASM, semantic compression/macros, native compilation, and ongoing language evolution.
