@@ -26,6 +26,10 @@ struct SourceLocation{
     std::string function_name;   // Function context (empty for module-level code)
 };
 
+/// Complete in-memory bytecode unit consumed by verification, serialization, and the VM.
+///
+/// Chunk is intentionally constructible before verification; write_bytecode(),
+/// read_bytecode(), and VM execution enforce structural validity at their boundaries.
 struct Chunk{
     std::vector<Value> constants;
     std::vector<FunctionInfo> functions;
@@ -36,8 +40,34 @@ struct Chunk{
     std::unordered_map<std::string, std::string> source_hashes;
     // EMJBC v8: exact host capability contract inferred from HostCall instructions.
     std::uint32_t required_capabilities{0};
+
+    /// Append a serializable constant and return its stable pool index.
+    ///
+    /// Rejects arrays and pool growth beyond the bytecode safety bound.
     std::int32_t add_constant(Value value);
 };
 
-void write_bytecode(const Chunk& chunk,std::ostream& out);Chunk read_bytecode(std::istream& in);void verify_bytecode(const Chunk& chunk);std::string opcode_name(OpCode op);std::string value_to_string(const Value& value);bool values_equal(const Value& left,const Value& right);
+/// Verify a chunk and serialize it using the current EMJBC writer version.
+///
+/// Serialization never bypasses structural verification; malformed capability,
+/// source-map, provenance, function, or instruction metadata is rejected first.
+void write_bytecode(const Chunk& chunk,std::ostream& out);
+
+/// Parse bounded EMJBC v1-v8 input and verify the resulting chunk before return.
+Chunk read_bytecode(std::istream& in);
+
+/// Validate structural safety independently of source parsing.
+///
+/// In v8-era chunks this includes recomputing the exact capability union from
+/// HostCall instructions and requiring it to equal required_capabilities.
+void verify_bytecode(const Chunk& chunk);
+
+/// Return the stable diagnostic/disassembly name for an opcode.
+std::string opcode_name(OpCode op);
+
+/// Render one runtime value deterministically for language-visible output/tooling.
+std::string value_to_string(const Value& value);
+
+/// Compare runtime values using Emojineer's structural value semantics.
+bool values_equal(const Value& left,const Value& right);
 }
