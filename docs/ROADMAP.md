@@ -193,17 +193,27 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - `emojineer capabilities` reports source or bytecode authority requirements without execution;
 - dedicated C++ and real-CLI acceptance tests prove verifier binding, preflight zero-effects denial, deterministic replay, filesystem gating, policy validation, and dependency authority propagation.
 
-## Next product train
-
 ### Train 21 — WASM / Host Interop Layer
 
-Define a first interoperable host/WASM ABI on top of Train 20's explicit capability boundary: typed crossing rules, deterministic value marshaling, capability-controlled adapters, verifier-visible imports/exports, failure semantics, and equivalence tests that do not create a second Emojineer language implementation.
+- explicit `🔌` typed adapter imports and `📡` typed Emojineer function exports;
+- EMJBC v9 verifier-visible import/export tables and `InteropCall` instructions;
+- deterministic bounded `EMJABI1` request/response envelopes for numbers, text, booleans, and nested arrays;
+- adapter-declared capability masks participate in the Train 20 whole-program authority contract;
+- exact adapter capability matching and binding availability are preflighted before instruction zero;
+- deterministic execution accepts only adapters explicitly bound as deterministic;
+- production-VM export invocation initializes ordinary module/global state and executes the same function bytecode used by normal programs;
+- direct-value and ABI export invocation share one typed signature contract;
+- `emojineer interop` inspects source or serialized bytecode without execution;
+- dedicated C++ and real-CLI tests cover v9 round-trip, forged metadata, zero-effect denial, deterministic adapters, ABI bounds/failures, dependency authority propagation, and direct/ABI equivalence;
+- no second Emojineer interpreter and no ambient host authority.
+
+## Next product train
+
+### Train 22 — Low-level Emojineer / EASM
+
+Define typed buffers/memory, a low-level instruction representation, verifier/sandbox boundaries, and a high-level/low-level ABI that composes with Train 21 instead of bypassing it.
 
 ## Later product trains
-
-### Low-level Emojineer / EASM
-
-Typed buffers/memory model, low-level instruction representation, verifier/sandbox boundaries, and a defined high-level/low-level ABI.
 
 ### Semantic compression and metaprogramming research
 

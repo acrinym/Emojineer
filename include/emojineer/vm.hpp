@@ -1,10 +1,13 @@
 #pragma once
 #include "emojineer/bytecode.hpp"
 #include "emojineer/capability.hpp"
+#include "emojineer/interop.hpp"
 #include "emojineer/debug_types.hpp"
 #include <cstdint>
 #include <functional>
 #include <iosfwd>
+#include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -22,13 +25,21 @@ public:
     ///
     /// The default policy grants no Train 20 host capabilities.
     VM(std::istream& input, std::ostream& output, std::uint64_t fuel = 1'000'000,
-       ExecutionPolicy policy = {});
+       ExecutionPolicy policy = {}, const InteropRegistry* interop = nullptr);
 
     /// Start a new chunk or resume a paused execution of the same chunk.
     ///
     /// New chunks are verified and capability-preflighted before instruction zero.
     /// Resuming the same paused chunk continues its already-preflighted VM state.
     void execute(const Chunk& chunk);
+
+    /// Invoke one verifier-visible exported function through the production VM.
+    Value invoke_export(const Chunk& chunk, std::string_view external_name,
+                        const std::vector<Value>& arguments);
+
+    /// Invoke an export using the deterministic EMJABI1 request/response envelope.
+    InteropBytes invoke_export_abi(const Chunk& chunk, std::string_view external_name,
+                                   std::span<const std::uint8_t> request);
 
     /// Attach the debugger control hook used by the production execution loop.
     void set_debug_control(VMDebugControl* debug) { debug_control_ = debug; }
@@ -95,8 +106,14 @@ private:
     /// Read a string constant after bounds and variant validation.
     std::string constant_string(const Chunk& chunk, std::int32_t index, std::uint32_t line) const;
 
+    /// Validate all referenced interop bindings before instruction zero.
+    void preflight_interop_bindings(const Chunk& chunk) const;
+
     /// Execute one already-preflighted HostCall with defense-in-depth grant checks.
     void execute_host_call(std::int32_t operand, std::uint32_t line);
+
+    /// Execute one typed interop adapter call through the deterministic ABI.
+    void execute_interop_call(std::int32_t operand, std::uint32_t line);
 
     /// Advance the deterministic VM-local PRNG state used only in deterministic mode.
     std::uint64_t next_deterministic_random();
@@ -113,6 +130,7 @@ private:
     std::uint64_t fuel_;
     std::uint64_t remaining_fuel_;
     ExecutionPolicy policy_;
+    const InteropRegistry* interop_registry_{nullptr};
     std::uint64_t deterministic_random_state_{0};
     std::int64_t deterministic_clock_ms_{0};
     std::vector<Value> stack_;
@@ -124,6 +142,8 @@ private:
     bool initial_execution_{true};
     std::size_t ip_{0};
     const Chunk* current_chunk_{nullptr};
+    bool host_invoke_active_{false};
+    std::optional<Value> host_invoke_result_;
 };
 
 } // namespace emojineer

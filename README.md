@@ -8,11 +8,11 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → package-aware module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.20**.
+Current language/toolchain version: **0.21**.
 
 ## What works now
 
-Product Trains 1 through 20 provide:
+Product Trains 1 through 21 provide:
 
 - Unicode/grapheme-aware emoji-native syntax and canonical token identity;
 - variables, optional runtime declaration types, arithmetic, comparisons, booleans, input/output;
@@ -35,7 +35,8 @@ Product Trains 1 through 20 provide:
 - native C++ `emojineer-lsp` editor integration over the real parser/module/package model, with diagnostics, completion, hover, navigation, symbols, formatting, and offline registry behavior;
 - a source-level debugger over the production compiler/EMJBC/VM with deterministic source mappings, breakpoints, stepping, frames, locals/globals, value inspection, and source provenance diagnostics;
 - deterministic package discovery with `EMJREGDISC1`, stable/prerelease selection, package metadata, reverse dependencies, and human/JSON search views;
-- an explicit default-deny host capability model with EMJBC v8 verifier-bound authority metadata, filesystem/network/process/clock/random/host facilities, whole-program preflight, and sandboxed/deterministic execution modes.
+- an explicit default-deny host capability model with EMJBC v8 verifier-bound authority metadata, filesystem/network/process/clock/random/host facilities, whole-program preflight, and sandboxed/deterministic execution modes;
+- a typed host/WASM interop layer with `🔌` imports, `📡` exports, deterministic `EMJABI1` value marshaling, verifier-visible EMJBC v9 metadata, capability-controlled adapters, and production-VM export invocation.
 
 ## Package workflow
 
@@ -128,6 +129,7 @@ ctest --test-dir build --output-on-failure
 ./build/emojineer exec examples/countdown.emjbc
 ./build/emojineer dump examples/collections.emoji
 ./build/emojineer capabilities examples/countdown.emoji
+./build/emojineer interop examples/interop.emoji
 ./build/emojineer run app.emoji --grant filesystem
 ./build/emojineer run simulation.emoji --deterministic --grant clock --grant random --seed 7 --clock-ms 1000
 ./build/emojineer repl
@@ -141,7 +143,7 @@ Key references:
 
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — current language reference and grammar;
 - [`docs/STDLIB.md`](docs/STDLIB.md) — native standard-library modules;
-- [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1-v8 compatibility, verifier, source provenance, and VM contract;
+- [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1-v9 compatibility, verifier, source provenance, and VM contract;
 - [`docs/CLI.md`](docs/CLI.md) — full command-line/toolchain guide;
 - [`docs/MODULES.md`](docs/MODULES.md) — local, package, and standard module/import/export semantics;
 - [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects, local/remote dependencies, package imports, graph inspection, and locks;
@@ -151,6 +153,7 @@ Key references:
 - [`docs/DEBUGGER.md`](docs/DEBUGGER.md) — source-level debugger and provenance contract;
 - [`docs/PACKAGE_DISCOVERY.md`](docs/PACKAGE_DISCOVERY.md) — deterministic registry search/discovery and reverse dependencies;
 - [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) — default-deny runtime authority, native facilities, grants, sandbox, and deterministic execution;
+- [`docs/INTEROP.md`](docs/INTEROP.md) — typed host/WASM imports/exports, EMJABI1, adapter contracts, and verifier/runtime boundaries;
 - [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — landed and next product trains.
 
@@ -160,4 +163,4 @@ Emoji are extended grapheme clusters, not reliably one Unicode code point. Emoji
 
 ## Project direction
 
-Train 20 establishes the default-deny runtime authority boundary and EMJBC v8 capability contract. The next coherent product organ is **WASM / Host Interop**, built on this explicit grant model rather than introducing ambient host access. Later work includes low-level ABI/EASM, semantic compression/macros, native compilation, and ongoing language evolution.
+Train 20 establishes the default-deny runtime authority boundary and EMJBC v8 capability contract. Train 21 builds the typed host/WASM interop layer on that boundary through EMJBC v9 and `EMJABI1`, without creating ambient host access or a second Emojineer interpreter. The next coherent product organ is low-level Emojineer / EASM, followed by semantic compression/macros, native compilation, and ongoing language evolution.

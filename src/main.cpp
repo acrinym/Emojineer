@@ -5,6 +5,7 @@
 #include "emojineer/disassembler.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/module.hpp"
+#include "emojineer/interop.hpp"
 #include "emojineer/repl.hpp"
 #include "emojineer/source_tools.hpp"
 #include "emojineer/stdlib.hpp"
@@ -50,7 +51,7 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.20\n"
+        << "Emojineer 0.21\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...] [execution-policy]\n"
         << "  emojineer stdlib\n"
@@ -62,6 +63,7 @@ void usage() {
         << "  emojineer exec <file.emjbc> [execution-policy]\n"
         << "  emojineer disasm <file.emjbc>\n"
         << "  emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]\n"
+        << "  emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]\n"
         << "execution-policy:\n"
         << "  --grant <filesystem|network|process|clock|random|host|all>  repeatable\n"
         << "  --sandbox                 hard zero-host-authority mode\n"
@@ -172,6 +174,32 @@ emojineer::CustomEmojiRegistry registry_for(const Cli& cli) {
     return registry;
 }
 
+std::string render_interop_signature(const emojineer::InteropSignature& signature) {
+    std::string out = "(";
+    for (std::size_t i = 0; i < signature.parameters.size(); ++i) {
+        if (i) out += ", ";
+        out += emojineer::interop_type_name(signature.parameters[i]);
+    }
+    out += ") -> ";
+    out += emojineer::interop_type_name(signature.result);
+    return out;
+}
+
+void print_interop_contract(const emojineer::Chunk& chunk) {
+    std::cout << "interop imports: " << chunk.interop_imports.size() << '\n';
+    for (const auto& import : chunk.interop_imports) {
+        std::cout << "  " << import.internal_name << " -> " << import.external_name << ' '
+                  << render_interop_signature(import.signature) << " capabilities="
+                  << emojineer::capability_mask_string(import.required_capabilities) << '\n';
+    }
+    std::cout << "interop exports: " << chunk.interop_exports.size() << '\n';
+    for (const auto& export_info : chunk.interop_exports) {
+        std::cout << "  " << export_info.external_name << " <- "
+                  << chunk.functions.at(export_info.function_index).name << ' '
+                  << render_interop_signature(export_info.signature) << '\n';
+    }
+}
+
 emojineer::Chunk read_chunk(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
@@ -232,6 +260,20 @@ int main(int argc, char** argv) {
             }
             std::cout << "required capabilities: "
                       << emojineer::capability_mask_string(chunk.required_capabilities) << '\n';
+            return 0;
+        }
+
+        if (cli.command == "interop") {
+            reject_execution_policy_options(cli, "interop");
+            if (cli.output) throw std::runtime_error("interop does not accept -o");
+            emojineer::Chunk chunk;
+            if (cli.input->extension() == ".emjbc") {
+                if (!cli.cer.empty()) throw std::runtime_error("bytecode interop inspection does not use source CER");
+                chunk = read_chunk(*cli.input);
+            } else {
+                chunk = emojineer::compile_file(*cli.input, std::move(registry));
+            }
+            print_interop_contract(chunk);
             return 0;
         }
 

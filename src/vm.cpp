@@ -215,7 +215,7 @@ std::string https_get(const std::string& url) {
     curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, "Emojineer/0.20");
+    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, "Emojineer/0.21");
 #if LIBCURL_VERSION_NUM >= 0x075500
     curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS_STR, "https");
 #else
@@ -235,8 +235,10 @@ std::string https_get(const std::string& url) {
 }
 } // anonymous namespace
 
-VM::VM(std::istream& i, std::ostream& o, std::uint64_t fuel, ExecutionPolicy policy)
-    : input_(i), output_(o), fuel_(fuel), remaining_fuel_(fuel), policy_(std::move(policy)) {
+VM::VM(std::istream& i, std::ostream& o, std::uint64_t fuel, ExecutionPolicy policy,
+       const InteropRegistry* interop)
+    : input_(i), output_(o), fuel_(fuel), remaining_fuel_(fuel), policy_(std::move(policy)),
+      interop_registry_(interop) {
     validate_execution_policy(policy_);
     deterministic_random_state_ = policy_.deterministic_seed ? policy_.deterministic_seed : 0x9E3779B97F4A7C15ULL;
     deterministic_clock_ms_ = policy_.deterministic_clock_ms;
@@ -347,9 +349,28 @@ std::unordered_map<std::string, Value> VM::get_globals() const {
     return globals_;
 }
 
+void VM::preflight_interop_bindings(const Chunk& c) const {
+    std::vector<bool> checked(c.interop_imports.size(), false);
+    for (const auto& instruction : c.code) {
+        if (instruction.op != OpCode::InteropCall) continue;
+        const auto index = static_cast<std::size_t>(instruction.operand);
+        if (index >= c.interop_imports.size() || checked[index]) continue;
+        checked[index] = true;
+        const auto& import = c.interop_imports[index];
+        if (!interop_registry_) throw std::runtime_error("interop adapter registry is required for '" + import.external_name + "'");
+        const auto* binding = interop_registry_->find(import.external_name);
+        if (!binding) throw std::runtime_error("no interop adapter bound for '" + import.external_name + "'");
+        if (binding->required_capabilities != import.required_capabilities)
+            throw std::runtime_error("interop adapter capability contract mismatch for '" + import.external_name + "'");
+        if (policy_.mode == ExecutionMode::Deterministic && !binding->deterministic)
+            throw std::runtime_error("interop adapter is not deterministic: '" + import.external_name + "'");
+    }
+}
+
 void VM::initialize_execution(const Chunk& c) {
     verify_bytecode(c);
     require_execution_capabilities(c.required_capabilities, policy_);
+    preflight_interop_bindings(c);
     deterministic_random_state_ = policy_.deterministic_seed ? policy_.deterministic_seed : 0x9E3779B97F4A7C15ULL;
     deterministic_clock_ms_ = policy_.deterministic_clock_ms;
     stack_.clear();
@@ -359,6 +380,8 @@ void VM::initialize_execution(const Chunk& c) {
     current_chunk_ = &c;
     remaining_fuel_ = fuel_;
     execution_finished_ = false;
+    host_invoke_active_ = false;
+    host_invoke_result_.reset();
     initial_execution_ = false;
 }
 
@@ -367,6 +390,51 @@ void VM::execute(const Chunk& c) {
         initialize_execution(c);
     }
     run_execution_loop();
+}
+
+Value VM::invoke_export(const Chunk& c, std::string_view external_name, const std::vector<Value>& arguments) {
+    const InteropExportInfo* export_info = nullptr;
+    for (const auto& candidate : c.interop_exports) if (candidate.external_name == external_name) { export_info = &candidate; break; }
+    if (!export_info) throw std::runtime_error("unknown interop export '" + std::string(external_name) + "'");
+    if (arguments.size() != export_info->signature.parameters.size()) throw std::runtime_error("interop export argument count does not match signature");
+    for (std::size_t i = 0; i < arguments.size(); ++i) validate_interop_value(arguments[i], export_info->signature.parameters[i]);
+
+    if (initial_execution_ || current_chunk_ != &c) {
+        initialize_execution(c);
+        run_execution_loop();
+        if (!execution_finished_) throw std::runtime_error("cannot invoke interop export while program initialization is paused");
+    } else if (!execution_finished_) {
+        throw std::runtime_error("cannot invoke interop export while VM execution is active");
+    }
+
+    const auto& function = c.functions.at(export_info->function_index);
+    stack_.clear(); frames_.clear(); host_invoke_result_.reset();
+    CallFrame frame; frame.return_ip = c.code.size(); frame.stack_base = 0; frame.function_index = export_info->function_index;
+    frame.locals.resize(function.local_count, false);
+    for (std::size_t i = 0; i < arguments.size(); ++i) frame.locals[i] = arguments[i];
+    frames_.push_back(std::move(frame)); ip_ = function.entry; remaining_fuel_ = fuel_; execution_finished_ = false; host_invoke_active_ = true;
+    run_execution_loop();
+    if (!host_invoke_result_) throw std::runtime_error("interop export returned without a host result");
+    Value result = std::move(*host_invoke_result_); host_invoke_result_.reset();
+    validate_interop_value(result, export_info->signature.result);
+    return result;
+}
+
+InteropBytes VM::invoke_export_abi(const Chunk& c, std::string_view external_name, std::span<const std::uint8_t> request) {
+    try {
+        const InteropExportInfo* export_info = nullptr;
+        for (const auto& candidate : c.interop_exports) if (candidate.external_name == external_name) { export_info = &candidate; break; }
+        if (!export_info) throw std::runtime_error("unknown interop export '" + std::string(external_name) + "'");
+        auto arguments = decode_interop_request(export_info->signature, request);
+        auto result = invoke_export(c, external_name, arguments);
+        return encode_interop_success(export_info->signature.result, result);
+    } catch (const std::exception& error) {
+        try {
+            return encode_interop_failure(error.what());
+        } catch (const std::exception&) {
+            return encode_interop_failure("interop invocation failed");
+        }
+    }
 }
 
 void VM::run_execution_loop() {
@@ -587,6 +655,10 @@ void VM::run_execution_loop() {
                 execute_host_call(ins.operand, line);
                 break;
 
+            case OpCode::InteropCall:
+                execute_interop_call(ins.operand, line);
+                break;
+
             case OpCode::Return: {
                 if (frames_.empty())
                     runtime_error(line, "Return executed outside a function");
@@ -595,6 +667,12 @@ void VM::run_execution_loop() {
                 frames_.pop_back();
                 if (stack_.size() != f.stack_base)
                     runtime_error(line, "function returned with leaked operand stack values");
+                if (host_invoke_active_ && frames_.empty() && f.return_ip == c.code.size()) {
+                    host_invoke_result_ = std::move(result);
+                    host_invoke_active_ = false;
+                    execution_finished_ = true;
+                    return;
+                }
                 ip_ = f.return_ip;
                 stack_.push_back(std::move(result));
                 break;
@@ -772,6 +850,33 @@ void VM::execute_host_call(std::int32_t operand, std::uint32_t line) {
         }
     } catch (const std::exception& error) {
         runtime_error(line, native_facility_name(*facility) + ": " + error.what());
+    }
+}
+
+void VM::execute_interop_call(std::int32_t operand, std::uint32_t line) {
+    if (!current_chunk_ || operand < 0 || static_cast<std::size_t>(operand) >= current_chunk_->interop_imports.size())
+        runtime_error(line, "invalid interop import operand");
+    const auto& import = current_chunk_->interop_imports[static_cast<std::size_t>(operand)];
+    const auto required = import.required_capabilities;
+    if ((policy_.grants & required) != required)
+        runtime_error(line, "interop adapter requires capability grant(s): " + capability_mask_string(required));
+    if (!interop_registry_) runtime_error(line, "interop adapter registry is not bound");
+    const auto* binding = interop_registry_->find(import.external_name);
+    if (!binding) runtime_error(line, "no interop adapter bound for '" + import.external_name + "'");
+    if (binding->required_capabilities != required)
+        runtime_error(line, "interop adapter capability contract mismatch for '" + import.external_name + "'");
+    if (policy_.mode == ExecutionMode::Deterministic && !binding->deterministic)
+        runtime_error(line, "interop adapter is not deterministic: '" + import.external_name + "'");
+    const auto arity = import.signature.parameters.size();
+    if (stack_.size() < arity) runtime_error(line, "not enough interop call arguments on VM stack");
+    std::vector<Value> arguments(arity);
+    for (std::size_t n = arity; n > 0; --n) arguments[n - 1] = pop(line);
+    try {
+        const auto request = encode_interop_request(import.signature, arguments);
+        const auto response = binding->invoke(request);
+        stack_.push_back(decode_interop_response(import.signature.result, response));
+    } catch (const std::exception& error) {
+        runtime_error(line, "interop '" + import.external_name + "': " + error.what());
     }
 }
 

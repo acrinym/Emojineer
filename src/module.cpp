@@ -45,6 +45,8 @@ struct ModuleUnit {
     std::unordered_set<std::string> declared_globals;
     std::unordered_set<std::string> implicit_globals;
     std::unordered_set<std::string> functions;
+    std::unordered_set<std::string> interop_imports;
+    std::vector<std::pair<std::string, std::size_t>> interop_exports;
     std::unordered_map<std::string, std::string> imported_globals;
     std::unordered_map<std::string, std::string> imported_functions;
 };
@@ -160,7 +162,9 @@ void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
     for (const auto& stmt : block) {
         if (dynamic_cast<const ast::ModuleDecl*>(stmt.get()) ||
             dynamic_cast<const ast::ImportStmt*>(stmt.get()) ||
-            dynamic_cast<const ast::ExportStmt*>(stmt.get())) {
+            dynamic_cast<const ast::ExportStmt*>(stmt.get()) ||
+            dynamic_cast<const ast::InteropImportDecl*>(stmt.get()) ||
+            dynamic_cast<const ast::InteropExportDecl*>(stmt.get())) {
             throw SourceLocationException("🧩, 🔗, and 📤 are top-level only",
                                              source_path, identity, stmt->line, 1);
         }
@@ -257,6 +261,17 @@ void analyze_unit(ModuleUnit& unit) {
             }
             continue;
         }
+        if (auto* interop_import = dynamic_cast<ast::InteropImportDecl*>(stmt.get())) {
+            if (native_facility_from_identifier(interop_import->name))
+                throw std::runtime_error("module '" + unit.identity + "': interop import cannot shadow a native facility");
+            if (!unit.interop_imports.insert(interop_import->name).second)
+                throw std::runtime_error("module '" + unit.identity + "': duplicate interop import");
+            continue;
+        }
+        if (auto* interop_export = dynamic_cast<ast::InteropExportDecl*>(stmt.get())) {
+            unit.interop_exports.emplace_back(interop_export->function_name, interop_export->line);
+            continue;
+        }
         saw_runtime = true;
         if (auto* fn = dynamic_cast<ast::FunctionDecl*>(stmt.get())) {
             if (auto native = native_facility_from_identifier(fn->name))
@@ -281,6 +296,15 @@ void analyze_unit(ModuleUnit& unit) {
         }
     }
     collect_module_globals(unit.program.statements, unit);
+
+    for (const auto& name : unit.interop_imports) {
+        if (unit.functions.contains(name))
+            throw std::runtime_error("module '" + unit.identity + "': interop import collides with a function");
+    }
+    for (const auto& [name, line] : unit.interop_exports) {
+        if (!unit.functions.contains(name))
+            throw std::runtime_error("module '" + unit.identity + "' line " + std::to_string(line) + ": interop export references a function not declared in this module");
+    }
 
     for (const auto& name : unit.exports) {
         if (!unit.declared_globals.contains(name) && !unit.functions.contains(name)) {
@@ -402,6 +426,14 @@ void rewrite_stmt(ast::Stmt& stmt, ModuleUnit& unit,
         fn->name = internal_name(unit, fn->name);
         return;
     }
+    if (auto* interop_import = dynamic_cast<ast::InteropImportDecl*>(&stmt)) {
+        interop_import->name = internal_name(unit, interop_import->name);
+        return;
+    }
+    if (auto* interop_export = dynamic_cast<ast::InteropExportDecl*>(&stmt)) {
+        interop_export->function_name = internal_name(unit, interop_export->function_name);
+        return;
+    }
     if (dynamic_cast<ast::ModuleDecl*>(&stmt) || dynamic_cast<ast::ImportStmt*>(&stmt) ||
         dynamic_cast<ast::ExportStmt*>(&stmt)) {
         throw std::runtime_error("module linker encountered an unresolved module statement");
@@ -428,8 +460,12 @@ void rewrite_expr(ast::Expr& expr, ModuleUnit& unit,
     }
     if (auto* call = dynamic_cast<ast::CallExpr*>(&expr)) {
         for (auto& arg : call->arguments) rewrite_expr(*arg, unit, locals);
-        if (!native_facility_from_identifier(call->callee))
-            call->callee = resolve_function(unit, call->callee, call->line);
+        if (native_facility_from_identifier(call->callee)) return;
+        if (unit.interop_imports.contains(call->callee)) {
+            call->callee = internal_name(unit, call->callee);
+            return;
+        }
+        call->callee = resolve_function(unit, call->callee, call->line);
         return;
     }
     if (auto* array = dynamic_cast<ast::ArrayExpr*>(&expr)) {

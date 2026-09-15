@@ -1,6 +1,6 @@
 # Emojineer CLI and Toolchain
 
-Emojineer 0.20 builds three native C++ executables:
+Emojineer 0.21 builds three native C++ executables:
 
 - `emojineer` - source, bytecode, formatting, REPL, capability inspection, execution, and source-level debugging;
 - `emji` - project/package/registry workflow, authenticated publication, remote dependency sync, and package discovery;
@@ -33,6 +33,7 @@ emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]
 emojineer exec <file.emjbc> [execution-policy]
 emojineer disasm <file.emjbc>
 emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]
+emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]
 ```
 
 File/project compilation uses the normal package-aware module linker. The debugger and REPL execute through the production VM, not alternate evaluators.
@@ -52,6 +53,8 @@ File/project compilation uses the normal package-aware module linker. The debugg
 Default execution has no Train 20 host grants. `--sandbox` is hard zero-host-capability mode and rejects grants. `--deterministic` accepts only `clock` and `random`; `--seed` and `--clock-ms` configure their reproducible VM-local state. See [CAPABILITIES.md](CAPABILITIES.md).
 
 `capabilities` compiles source or reads EMJBC and reports the exact whole-program capability mask without executing it.
+
+`interop` compiles source or reads EMJBC and reports verifier-visible typed adapter imports and exported function surfaces without executing the program or accepting runtime grants. See [INTEROP.md](INTEROP.md).
 
 ## Core `emji` project workflow
 
@@ -124,6 +127,6 @@ JSON schemas are `emojineer.registry-search.v1`, `emojineer.registry-package-inf
 There are two deliberately separate authority planes:
 
 1. `emji` package-manager authority may perform explicit registry reads/publication without granting anything to programs.
-2. Emojineer VM authority starts empty and receives only explicit Train 20 execution grants.
+2. Emojineer VM authority starts empty and receives only explicit Train 20 execution grants; Train 21 adapter calls are checked against the same authority before instruction zero.
 
 Neither plane implicitly inherits the other. Imported dependencies contribute to the linked program's required capability mask, and the VM checks the entire mask before the first instruction executes.

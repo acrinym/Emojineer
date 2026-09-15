@@ -120,6 +120,7 @@ TokenKind token_kind_from_name(const std::string& n) {
         {"If",TokenKind::If},{"Else",TokenKind::Else},{"While",TokenKind::While},{"End",TokenKind::End},
         {"Input",TokenKind::Input},{"True",TokenKind::True},{"False",TokenKind::False},
         {"Module",TokenKind::Module},{"Import",TokenKind::Import},{"Export",TokenKind::Export},
+        {"InteropImport",TokenKind::InteropImport},{"InteropExport",TokenKind::InteropExport},
         {"TypeNumber",TokenKind::TypeNumber},{"TypeString",TokenKind::TypeString},{"TypeBool",TokenKind::TypeBool},
         {"Function",TokenKind::Function},{"Return",TokenKind::Return},{"Add",TokenKind::Add},
         {"Subtract",TokenKind::Subtract},{"Multiply",TokenKind::Multiply},{"Divide",TokenKind::Divide},
@@ -144,6 +145,8 @@ CustomEmojiRegistry::CustomEmojiRegistry() {
     core("✅",TokenKind::True,"boolean true"); core("❌",TokenKind::False,"boolean false");
     core("🧩",TokenKind::Module,"declare module"); core("🔗",TokenKind::Import,"import local module");
     core("📤",TokenKind::Export,"export module symbol");
+    core("🔌",TokenKind::InteropImport,"declare typed host/WASM import");
+    core("📡",TokenKind::InteropExport,"export typed Emojineer function to host/WASM");
     core("🔢",TokenKind::TypeNumber,"number type"); core("🔤",TokenKind::TypeString,"text type");
     core("🎯",TokenKind::TypeBool,"boolean type"); core("🛠️",TokenKind::Function,"define function");
     core("📦",TokenKind::Return,"return from function"); core("➕",TokenKind::Add,"addition or text concatenation");

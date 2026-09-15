@@ -1,4 +1,4 @@
-# Emojineer Language Reference - v0.20
+# Emojineer Language Reference - v0.21
 
 Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The toolchain owns its lexer, AST, package-aware module linker, bytecode, VM, standard library, package workflow, and semantic evolution.
 
@@ -13,7 +13,7 @@ UTF-8 .emoji
   -> Emojineer VM
 ```
 
-This page describes the implemented language through Product Train 20. Package, registry, LSP, debugger, and capability details are split into focused references where appropriate.
+This page describes the implemented language through Product Train 21. Package, registry, LSP, debugger, capability, and host/WASM interop details are split into focused references where appropriate.
 
 ## 1. Source files and Unicode
 
@@ -68,6 +68,8 @@ Examples of valid identifiers include `🍎`, `👤`, `🌍`, and a single ZWJ e
 | `🧩` | module declaration |
 | `🔗` | module import |
 | `📤` | module export |
+| `🔌` | typed host/WASM adapter import |
+| `📡` | typed host/WASM function export |
 | `➕` | addition or text concatenation |
 | `➖` | subtraction or unary negation |
 | `✖️` | multiplication |
@@ -98,6 +100,8 @@ program       := (NEWLINE | statement)* EOF
 statement     := module_decl
                | import_stmt
                | export_stmt
+               | interop_import_decl
+               | interop_export_decl
                | var_decl
                | assignment
                | print_stmt
@@ -109,6 +113,8 @@ statement     := module_decl
 module_decl   := 🧩 IDENTIFIER LINE_END
 import_stmt   := 🔗 STRING LINE_END
 export_stmt   := 📤 IDENTIFIER LINE_END
+interop_import_decl := 🔌 IDENTIFIER STRING STRING type 🫴 type* 🤲 LINE_END
+interop_export_decl := 📡 IDENTIFIER STRING type 🫴 type* 🤲 LINE_END
 
 var_decl      := 🐍 IDENTIFIER type? 🟰 expression LINE_END
 assignment    := ✏️ IDENTIFIER 🟰 expression LINE_END
@@ -276,6 +282,19 @@ Nested function declarations are not supported. If execution reaches the end of 
 
 See [FUNCTIONS.md](FUNCTIONS.md).
 
+### 10.1 Host/WASM interop declarations
+
+Train 21 adds explicit typed interop declarations without introducing a second interpreter. `🔌` declares an adapter-backed callable and `📡` exposes an Emojineer function to a host or WASM embedding.
+
+```emoji
+🔌 🧮 📜fixture.double📜 📜none📜 🔢 🫴 🔢 🤲
+📡 🚀 📜fixture.echo📜 🔢 🫴 🔢 🤲
+```
+
+For `🔌`, the first string is the external adapter name and the second is a capability specification such as `none`, `network`, `filesystem,network`, or `all`. The type before `🫴` is the result type; types inside `🫴 ... 🤲` are positional parameters. `📡` uses the same result/parameter signature but names an Emojineer function instead of an adapter. Supported crossing types are the current number, text, boolean, and array value families.
+
+Interop calls lower to verifier-visible `InteropCall` instructions. Their declared capability requirements contribute to the same whole-program mask as Train 20 native facilities. The production VM preflights required grants and exact adapter bindings before instruction zero. Values cross the host/WASM boundary using the bounded deterministic `EMJABI1` binary envelope. See [INTEROP.md](INTEROP.md).
+
 ## 11. Arrays and collections
 
 Create an array:
@@ -419,11 +438,9 @@ mathkit = "../mathkit"
 
 The package resolver recursively validates dependency manifests, dependency-key/target-name agreement, package-name/root uniqueness, and package cycles.
 
-`emojineer.lock` format 2 records deterministic transitive package metadata. Package content identity is SHA-256 over the canonical manifest plus package-owned `.emoji` source. Source owned by resolved nested packages is excluded from ancestor hashes, including independently declared nested-package layouts.
+`emojineer.lock` format 3 records deterministic path and registry dependency provenance, including selected remote versions and immutable identities. Package content identity is SHA-256 over the canonical manifest plus package-owned `.emoji` source. Source owned by resolved nested packages is excluded from ancestor hashes, including independently declared nested-package layouts.
 
-`emji add` and `emji remove` modify direct local dependencies after validating the candidate package graph. `emji lock` writes deterministic lock metadata. `emji check` validates manifests, package graphs, package-aware source graphs, dependency entries, and lock drift.
-
-No remote registry, publication protocol, download cache, or remote version solver exists in v0.11.
+`emji add` and `emji remove` modify direct dependencies after validating the candidate package graph. Registry requirements can be added explicitly, `emji sync` materializes verified remote packages, `emji lock` writes deterministic lock metadata, and `emji check` validates manifests, package graphs, package-aware source graphs, dependency entries, and lock drift. Registry/package-manager authority remains separate from program runtime authority.
 
 See [PROJECTS.md](PROJECTS.md).
 
@@ -449,11 +466,11 @@ See [CER.md](CER.md).
 
 Current compile/runtime diagnostics cover malformed source, undefined symbols, arity mismatch, invalid module graphs, invalid package graphs, package-boundary violations, unknown standard modules, bytecode corruption, division/modulo by zero, invalid collection operations, input failure, stack/call-frame errors, fuel exhaustion, and type assertions.
 
-The language does not currently expose implicit filesystem, network, process, shell, host FFI, or remote package-registry capabilities.
+The language does not expose implicit filesystem, network, process, shell, host interop, or remote package-registry capabilities. Native facilities and Train 21 adapter calls are explicit, verifier-visible, and capability-preflighted; package-registry authority remains a separate `emji` tooling plane.
 
 ## 18. Bytecode and VM
 
-The current compiler writes `EMJBC` version 3. The reader supports v1, v2, and v3. Bytecode is verified before execution and bounded against oversized constants, strings, function tables, and instruction streams.
+The current compiler writes `EMJBC` version 9. The reader supports versions 1 through 9. Bytecode is verified before execution and bounded against oversized constants, strings, function tables, instruction streams, source metadata, capability metadata, and Train 21 interop tables.
 
 Modules, stdlib source, and package-qualified imports are linked before bytecode generation, so Product Trains 8, 9, and 11 do not require an EMJBC format bump.
 
@@ -461,26 +478,19 @@ See [BYTECODE.md](BYTECODE.md) for the serialized format and VM contract.
 
 ## 19. Toolchain
 
-The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm plus `stdlib` for listing built-in standard modules. File-based compile/check/run/dump commands are package aware when their discovered module root contains `emojineer.toml`.
+The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm/capabilities/interop plus `stdlib` for listing built-in standard modules. File-based compilation commands are package aware when their discovered module root contains `emojineer.toml`.
 
-`emji` provides init/check/lock/show/add/remove for local packages and dependencies.
+`emji` provides project validation, local/registry dependency management, locking/materialization, immutable artifact operations, registry publication/fetch/discovery, and package graph inspection.
 
 See [CLI.md](CLI.md) and [PROJECTS.md](PROJECTS.md).
 
 ## 20. Deliberate future work
 
-Not yet implemented as of v0.11:
+Not yet implemented as of v0.21:
 
-- real remote registry/publication/cache/version-resolution protocol;
-- richer package graph inspection such as `emji tree`;
-- records/user-defined structures and interfaces;
-- richer error values and pattern matching;
-- language server and editor integration;
-- source debugger;
-- capability-gated filesystem/network/process standard-library APIs;
-- C/WASM/host interop boundary;
-- low-level EASM/ABI work;
-- semantic-compression/macros with inspectable expansion;
-- native/LLVM backend.
+- low-level Emojineer / EASM with typed buffers, memory, verifier boundaries, and a defined high-level/low-level ABI;
+- records/user-defined structures, interfaces/protocols, richer error values, and pattern matching;
+- semantic-compression/macros with inspectable expansion into ordinary Emojineer semantics;
+- a native/LLVM backend with equivalence testing against the production VM.
 
 These are product extensions to the sovereign compiler/runtime rather than replacements for it.
