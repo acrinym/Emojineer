@@ -400,15 +400,20 @@ Value VM::invoke_export(const Chunk& c, std::string_view external_name, const st
     for (std::size_t i = 0; i < arguments.size(); ++i) validate_interop_value(arguments[i], export_info->signature.parameters[i]);
 
     if (initial_execution_ || current_chunk_ != &c) {
+        InvocationScope scope{*this};
         initialize_execution(c);
         run_execution_loop();
         if (!execution_finished_) throw std::runtime_error("cannot invoke interop export while program initialization is paused");
+        scope.initialization_completed = true;
+        scope.committed = true;
     } else if (!execution_finished_) {
         throw std::runtime_error("cannot invoke interop export while VM execution is active");
     }
 
     const auto& function = c.functions.at(export_info->function_index);
     stack_.clear(); frames_.clear(); host_invoke_result_.reset();
+    InvocationScope scope{*this};
+    scope.initialization_completed = true;
     CallFrame frame; frame.return_ip = c.code.size(); frame.stack_base = 0; frame.function_index = export_info->function_index;
     frame.locals.resize(function.local_count, false);
     for (std::size_t i = 0; i < arguments.size(); ++i) frame.locals[i] = arguments[i];
@@ -417,7 +422,18 @@ Value VM::invoke_export(const Chunk& c, std::string_view external_name, const st
     if (!host_invoke_result_) throw std::runtime_error("interop export returned without a host result");
     Value result = std::move(*host_invoke_result_); host_invoke_result_.reset();
     validate_interop_value(result, export_info->signature.result);
+    scope.committed = true;
     return result;
+}
+
+void VM::restore_invocation_state(bool initialization_completed) {
+    frames_.clear();
+    stack_.clear();
+    ip_ = 0;
+    host_invoke_active_ = false;
+    host_invoke_result_.reset();
+    execution_finished_ = true;
+    if (!initialization_completed) initial_execution_ = true;
 }
 
 InteropBytes VM::invoke_export_abi(const Chunk& c, std::string_view external_name, std::span<const std::uint8_t> request) {

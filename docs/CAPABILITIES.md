@@ -2,7 +2,7 @@
 
 Train 20 gives Emojineer programs an explicit path to host resources without making host authority ambient.
 
-The default execution policy grants **no filesystem, network, process, clock, randomness, or host-environment authority**. A program that contains a native host call carries its exact required capability mask in EMJBC v8, and the production VM checks the complete mask before the first instruction executes.
+The default execution policy grants **no filesystem, network, process, clock, randomness, or host-environment authority**. A program that contains a native host call carries its exact required capability mask in EMJBC v8 and later (Train 21 emits v9), and the production VM checks the complete mask before the first instruction executes.
 
 This is a coarse-grained capability boundary, not a claim of operating-system-grade containment. Grant only capabilities appropriate for source you trust.
 
@@ -147,7 +147,13 @@ The verifier independently walks every `HostCall`, maps its native-facility oper
 
 A bytecode producer therefore cannot suppress the runtime preflight simply by writing a false zero-capability header.
 
-The reader remains compatible with EMJBC v1 through v7. Older bytecode contains no `HostCall` instruction and therefore has a zero required-capability mask.
+The reader remains compatible with EMJBC v1 through v8. Older bytecode contains no `HostCall` instruction and therefore has a zero required-capability mask.
+
+## EMJBC v9 contract
+
+Train 21 (EMJBC v9) appends the interop import/export metadata table to the v8 layout and adds the `InteropCall` opcode. Each interop import carries its internal name, external name, typed signature, and exact declared capability mask. The same verifier rule applies: the serialized `required_capabilities` mask must equal the union of native-facility capabilities and interop-import capabilities inferred from the instruction stream, so interop adapters cannot suppress the pre-execution preflight.
+
+The reader rejects trailing content after an otherwise valid bytecode payload rather than silently ignoring it.
 
 ## Authority model summary
 
@@ -159,5 +165,6 @@ The reader remains compatible with EMJBC v1 through v7. Older bytecode contains 
 - **Tooling:** compile/check/LSP/package/registry work does not inherit program-runtime grants.
 - **Deterministic mode:** virtual clock/random only.
 - **Sandbox mode:** zero native host facilities.
+- **Interop adapters (Train 21):** an `InteropCall` carries the capability mask of its declared import, is included in the same serialized `required_capabilities` union, and is subject to the same pre-verification and per-call preflight as `HostCall`. An adapter's declared capability mask must exactly equal the compiled import contract, and deterministic mode rejects adapters not explicitly marked deterministic. Interop does not add a bypass around this boundary.
 
-This boundary is the prerequisite for later WASM/host interop and lower-level ABI work: new adapters should compose with this capability model rather than smuggling authority around it.
+Train 20's explicit capability boundary is the substrate for WASM/host interop: the Train 21 adapter registry composes with this model rather than smuggling authority around it.

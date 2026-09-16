@@ -5,6 +5,7 @@
 #include "emojineer/lexer.hpp"
 #include "emojineer/module.hpp"
 #include "emojineer/parser.hpp"
+#include "emojineer/source_diagnostic.hpp"
 #include "emojineer/vm.hpp"
 #include <chrono>
 #include <filesystem>
@@ -106,6 +107,159 @@ void test_compile_time_contract_errors(){
 )");},"arity");
 }
 
+void test_failed_invocation_leaves_vm_reusable(){
+ auto c=compile_text(R"(🔌 🧮 📜fixture.net📜 📜none📜 🔢 🫴 🔢 🤲
+📡 🚀 📜fixture.fragile📜 🔢 🫴 🔢 🤲
+📡 🥁 📜fixture.plain📜 🔢 🫴 🔢 🤲
+🛠️ 🚀 🫴 🍎 🤲
+📦 🧮 🫴 🍎 🤲
+🏁
+🛠️ 🥁 🫴 🍎 🤲
+📦 🍎
+🏁
+)");
+ int calls=0;bool explode=true;emojineer::InteropRegistry registry;
+ registry.bind("fixture.net",0,true,[&](std::span<const std::uint8_t> bytes){++calls;if(explode)throw std::runtime_error("first call explodes");auto a=emojineer::decode_interop_request(c.interop_imports[0].signature,bytes);return emojineer::encode_interop_success(emojineer::InteropType::Number,std::get<double>(a[0]));});
+ auto request=emojineer::encode_interop_request(c.interop_exports[0].signature,{2.0});
+
+ std::istringstream in;std::ostringstream out;emojineer::VM abi_vm(in,out,1'000'000,{},&registry);
+ auto failed=abi_vm.invoke_export_abi(c,"fixture.fragile",request);
+ expect_error([&]{(void)emojineer::decode_interop_response(emojineer::InteropType::Number,failed);},"first call explodes");
+ explode=false;
+ require(calls==1,"first ABI invocation reached the adapter exactly once");
+ auto recovered=abi_vm.invoke_export_abi(c,"fixture.fragile",request);
+ require(std::get<double>(emojineer::decode_interop_response(emojineer::InteropType::Number,recovered))==2.0,"same export is usable after an ABI failure");
+ require(calls==2,"second ABI invocation reaches the adapter");
+ auto unrelated=abi_vm.invoke_export_abi(c,"fixture.plain",emojineer::encode_interop_request(c.interop_exports[1].signature,{9.0}));
+ require(std::get<double>(emojineer::decode_interop_response(emojineer::InteropType::Number,unrelated))==9.0,"unrelated export is usable after an ABI failure");
+ require(abi_vm.is_execution_finished(),"failed invocation leaves the VM in a finished state");
+
+ std::istringstream direct_in;std::ostringstream direct_out;emojineer::VM direct_vm(direct_in,direct_out,1'000'000,{},&registry);
+ explode=true;
+ expect_error([&]{(void)direct_vm.invoke_export(c,"fixture.fragile",{3.0});},"first call explodes");
+ explode=false;
+ require(std::get<double>(direct_vm.invoke_export(c,"fixture.fragile",{3.0}))==3.0,"same export is usable after a direct failure");
+ require(std::get<double>(direct_vm.invoke_export(c,"fixture.plain",{7.0}))==7.0,"unrelated export is usable after a direct failure");
+ require(direct_vm.is_execution_finished(),"failed direct invocation leaves the VM in a finished state");
+}
+
+void test_cross_module_identical_adapter_composes(){
+ TempRoot root;
+ write_text(root.path/"dep.emoji",R"(🧩 🌲
+🔌 🧮 📜fixture.net📜 📜network📜 🔢 🫴 🔢 🤲
+🛠️ 🧠 🫴 🍎 🤲
+📦 🧮 🫴 🍎 🤲
+🏁
+📤 🧠
+)");
+ write_text(root.path/"dep2.emoji",R"(🧩 🌊
+🔌 🧰 📜fixture.net📜 📜network📜 🔢 🫴 🔢 🤲
+🛠️ 🍏 🫴 🍎 🤲
+📦 🧰 🫴 🍎 🤲
+🏁
+📤 🍏
+)");
+ write_text(root.path/"main.emoji",R"(🧩 🚀
+🔗 📜dep.emoji📜
+🔗 📜dep2.emoji📜
+📝 🧠 🫴 1 🤲
+📝 🍏 🫴 2 🤲
+)");
+ auto c=emojineer::compile_file(root.path/"main.emoji",{},root.path);
+ require(c.interop_imports.size()==1,"identical adapter declarations across modules fold into one import row");
+ require(c.required_capabilities==emojineer::capability_mask(emojineer::Capability::Network),"folded adapter still contributes whole-program authority");
+ int calls=0;emojineer::InteropRegistry registry;
+ registry.bind("fixture.net",emojineer::capability_mask(emojineer::Capability::Network),false,[&](std::span<const std::uint8_t> bytes){++calls;auto a=emojineer::decode_interop_request(c.interop_imports[0].signature,bytes);return emojineer::encode_interop_success(emojineer::InteropType::Number,std::get<double>(a[0]));});
+ emojineer::ExecutionPolicy policy;policy.grants=emojineer::capability_mask(emojineer::Capability::Network);
+ std::istringstream in;std::ostringstream out;emojineer::VM vm(in,out,1'000'000,policy,&registry);vm.execute(c);
+ require(out.str()=="1\n2\n","both modules call the single shared adapter binding");
+ require(calls==2,"one shared adapter row serves both modules");
+}
+
+void test_cross_module_incompatible_adapter_is_source_located(){
+ TempRoot root;
+ write_text(root.path/"dep.emoji",R"(🧩 🌲
+🔌 🧮 📜fixture.net📜 📜network📜 🔢 🫴 🔢 🤲
+🛠️ 🧠 🫴 🍎 🤲
+📦 🧮 🫴 🍎 🤲
+🏁
+📤 🧠
+)");
+ write_text(root.path/"cap.emoji",R"(🧩 🌪
+🔌 🧰 📜fixture.net📜 📜none📜 🔢 🫴 🔢 🤲
+🛠️ 🍏 🫴 🍎 🤲
+📦 🧰 🫴 🍎 🤲
+🏁
+📤 🍏
+)");
+ write_text(root.path/"sig.emoji",R"(🧩 🌋
+🔌 🧰 📜fixture.net📜 📜network📜 🔤 🫴 🔤 🤲
+🛠️ 🍏 🫴 🍎 🤲
+📦 🧰 🫴 🍎 🤲
+🏁
+📤 🍏
+)");
+ write_text(root.path/"cap_main.emoji",R"(🧩 🚀
+🔗 📜dep.emoji📜
+🔗 📜cap.emoji📜
+📝 🍏 🫴 2 🤲
+)");
+ write_text(root.path/"sig_main.emoji",R"(🧩 🚀
+🔗 📜dep.emoji📜
+🔗 📜sig.emoji📜
+📝 🍏 🫴 2 🤲
+)");
+ bool caught=false;
+ try{(void)emojineer::compile_file(root.path/"cap_main.emoji",{},root.path);}
+ catch(const emojineer::SourceLocationException& e){
+  caught=true;
+  require(std::string(e.what()).find("fixture.net")!=std::string::npos,"capability conflict names the external adapter");
+  require(std::string(e.what()).find("dep.emoji")!=std::string::npos,"capability conflict names the other module");
+  require(e.sourceIdentity=="cap.emoji"&&e.line!=0,"capability conflict carries the offending module identity and line");
+ }
+ require(caught,"capability disagreement must raise a source-located diagnostic");
+ caught=false;
+ try{(void)emojineer::compile_file(root.path/"sig_main.emoji",{},root.path);}
+ catch(const emojineer::SourceLocationException& e){
+  caught=true;
+  require(std::string(e.what()).find("fixture.net")!=std::string::npos,"signature conflict names the external adapter");
+  require(std::string(e.what()).find("dep.emoji")!=std::string::npos,"signature conflict names the other module");
+  require(e.sourceIdentity=="sig.emoji"&&e.line!=0,"signature conflict carries the offending module identity and line");
+ }
+ require(caught,"signature disagreement must raise a source-located diagnostic");
+}
+
+void test_cross_module_duplicate_export_is_source_located(){
+ TempRoot root;
+ write_text(root.path/"a.emoji",R"(🧩 🌲
+📡 🚀 📜fixture.dup📜 🔢 🫴 🔢 🤲
+🛠️ 🚀 🫴 🍎 🤲
+📦 🍎
+🏁
+📤 🚀
+)");
+ write_text(root.path/"b.emoji",R"(🧩 🌊
+📡 🥁 📜fixture.dup📜 🔢 🫴 🔢 🤲
+🛠️ 🥁 🫴 🍎 🤲
+📦 🍎
+🏁
+📤 🥁
+)");
+ write_text(root.path/"main.emoji",R"(🧩 🚀
+🔗 📜a.emoji📜
+🔗 📜b.emoji📜
+📝 🚀 🫴 2 🤲
+)");
+ bool caught=false;
+ try{(void)emojineer::compile_file(root.path/"main.emoji",{},root.path);}
+ catch(const emojineer::SourceLocationException& e){
+  caught=true;
+  require(std::string(e.what()).find("fixture.dup")!=std::string::npos,"export conflict names the external export");
+  require(e.sourceIdentity=="b.emoji"&&e.line!=0,"export conflict carries the offending module identity and line");
+ }
+ require(caught,"two functions cannot share one external export name");
+}
+
 void test_linked_dependency_authority(){
  TempRoot root;write_text(root.path/"dep.emoji",R"(🧩 🌲
 🔌 🧮 📜fixture.net📜 📜network📜 🔢 🫴 🔢 🤲
@@ -120,4 +274,4 @@ void test_linked_dependency_authority(){
 )");auto c=emojineer::compile_file(root.path/"main.emoji",{},root.path);require(c.required_capabilities==emojineer::capability_mask(emojineer::Capability::Network),"dependency interop call contributes whole-program authority");std::istringstream in;std::ostringstream out;emojineer::VM vm(in,out);expect_error([&]{vm.execute(c);},"network");require(out.str().empty(),"dependency adapter authority is denied before main effects");
 }
 }
-int main(){try{test_compile_and_adapter_success();test_v9_roundtrip_and_verifier_binding();test_preflight_and_binding_contract();test_missing_and_deterministic_binding();test_abi_roundtrip_and_bounds();test_adapter_failure();test_exports_and_abi();test_oversized_adapter_failure_is_bounded();test_compile_time_contract_errors();test_linked_dependency_authority();std::cout<<"all Train 21 interop tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(){try{test_compile_and_adapter_success();test_v9_roundtrip_and_verifier_binding();test_preflight_and_binding_contract();test_missing_and_deterministic_binding();test_abi_roundtrip_and_bounds();test_adapter_failure();test_exports_and_abi();test_oversized_adapter_failure_is_bounded();test_compile_time_contract_errors();test_failed_invocation_leaves_vm_reusable();test_cross_module_identical_adapter_composes();test_cross_module_incompatible_adapter_is_source_located();test_cross_module_duplicate_export_is_source_located();test_linked_dependency_authority();std::cout<<"all Train 21 interop tests passed\n";return 0;}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}
