@@ -16,7 +16,7 @@ struct Instruction{OpCode op{OpCode::Halt};std::int32_t operand{0};std::uint32_t
 struct FunctionInfo{std::string name;std::uint32_t entry{0};std::uint32_t arity{0};std::uint32_t local_count{0};std::vector<std::string> parameter_names;std::vector<std::string> local_names;};
 
 enum class InteropType : std::uint8_t { Number = 1, String = 2, Bool = 3, Array = 4 };
-struct InteropSignature { std::vector<InteropType> parameters; InteropType result{InteropType::Bool}; };
+struct InteropSignature { std::vector<InteropType> parameters; InteropType result{InteropType::Bool}; friend bool operator==(const InteropSignature&, const InteropSignature&) = default; };
 struct InteropImportInfo {
     std::string internal_name;
     std::string external_name;

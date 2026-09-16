@@ -7,6 +7,12 @@
 
 namespace emojineer {
 
+/// Shared text for the single rule that module and interop declarations are top-level only.
+///
+/// The single-file compiler path and the module linker both enforce this rule and
+/// must report it identically regardless of which other syntax the file contains.
+constexpr char TopLevelOnlyMessage[] = "🧩, 🔗, 📤, 🔌, and 📡 declarations are top-level only";
+
 // Source location exception - carries typed source position info for lexer/parser/compiler.
 // This is a protocol-neutral error type owned by the core (lexer, parser, compiler, module).
 // LSP may include this header to access source diagnostics.
