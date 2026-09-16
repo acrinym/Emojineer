@@ -4,6 +4,7 @@
 #include "emojineer/ast.hpp"
 #include "emojineer/compiler.hpp"
 #include "emojineer/hash.hpp"
+#include "emojineer/interop.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/package.hpp"
 #include "emojineer/parser.hpp"
@@ -47,6 +48,9 @@ struct ModuleUnit {
     std::unordered_set<std::string> functions;
     std::unordered_set<std::string> interop_imports;
     std::vector<std::pair<std::string, std::size_t>> interop_exports;
+    // Source interop name -> canonical linked internal name, for declarations
+    // that were folded into an identical declaration in another module.
+    std::unordered_map<std::string, std::string> interop_import_canonical;
     std::unordered_map<std::string, std::string> imported_globals;
     std::unordered_map<std::string, std::string> imported_functions;
 };
@@ -105,6 +109,10 @@ bool has_module_syntax_stmt(const ast::Stmt& stmt) {
     if (dynamic_cast<const ast::ModuleDecl*>(&stmt) ||
         dynamic_cast<const ast::ImportStmt*>(&stmt) ||
         dynamic_cast<const ast::ExportStmt*>(&stmt)) return true;
+    // Interop declarations are deliberately excluded: unlike 🧩/🔗/📤 they do not
+    // require a module root, link graph, or 🧩 header, so a source file that only
+    // declares 🔌/📡 still compiles through the single-file compiler path.
+    // Nested interop declarations are rejected by both paths with the same rule.
     if (const auto* branch = dynamic_cast<const ast::IfStmt*>(&stmt)) {
         for (const auto& child : branch->then_branch) if (has_module_syntax_stmt(*child)) return true;
         for (const auto& child : branch->else_branch) if (has_module_syntax_stmt(*child)) return true;
@@ -156,6 +164,16 @@ std::string internal_name(const ModuleUnit& unit, const std::string& source_name
     return "@module/" + unit.identity + "::" + source_name;
 }
 
+InteropType interop_type_for(ast::DeclaredType type) {
+    switch (type) {
+        case ast::DeclaredType::Number: return InteropType::Number;
+        case ast::DeclaredType::String: return InteropType::String;
+        case ast::DeclaredType::Bool: return InteropType::Bool;
+        case ast::DeclaredType::Array: return InteropType::Array;
+    }
+    throw std::runtime_error("invalid interop source type");
+}
+
 void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
                                  const std::filesystem::path& source_path,
                                  const std::string& identity) {
@@ -165,8 +183,7 @@ void reject_nested_module_syntax(const std::vector<ast::StmtPtr>& block,
             dynamic_cast<const ast::ExportStmt*>(stmt.get()) ||
             dynamic_cast<const ast::InteropImportDecl*>(stmt.get()) ||
             dynamic_cast<const ast::InteropExportDecl*>(stmt.get())) {
-            throw SourceLocationException("🧩, 🔗, and 📤 are top-level only",
-                                             source_path, identity, stmt->line, 1);
+            throw SourceLocationException(TopLevelOnlyMessage, source_path, identity, stmt->line, 1);
         }
         if (const auto* branch = dynamic_cast<const ast::IfStmt*>(stmt.get())) {
             reject_nested_module_syntax(branch->then_branch, source_path, identity);
@@ -462,6 +479,11 @@ void rewrite_expr(ast::Expr& expr, ModuleUnit& unit,
         for (auto& arg : call->arguments) rewrite_expr(*arg, unit, locals);
         if (native_facility_from_identifier(call->callee)) return;
         if (unit.interop_imports.contains(call->callee)) {
+            if (auto it = unit.interop_import_canonical.find(call->callee);
+                it != unit.interop_import_canonical.end()) {
+                call->callee = it->second;
+                return;
+            }
             call->callee = internal_name(unit, call->callee);
             return;
         }
@@ -512,6 +534,7 @@ public:
         const std::string entry_id = visit(entry, package_name, stack);
         (void)entry_id;
         build_import_bindings();
+        compose_interop_declarations();
 
         ast::Program linked;
         for (const auto& identity : order_) {
@@ -520,6 +543,8 @@ public:
                 if (dynamic_cast<ast::ModuleDecl*>(stmt.get()) ||
                     dynamic_cast<ast::ImportStmt*>(stmt.get()) ||
                     dynamic_cast<ast::ExportStmt*>(stmt.get())) continue;
+                if (dynamic_cast<ast::InteropImportDecl*>(stmt.get()) && folded_imports_.contains(&stmt->source)) continue;
+                if (dynamic_cast<ast::InteropExportDecl*>(stmt.get()) && folded_exports_.contains(&stmt->source)) continue;
                 rewrite_stmt(*stmt, unit, nullptr);
                 stamp_stmt(*stmt, identity);
                 linked.statements.push_back(std::move(stmt));
@@ -870,6 +895,113 @@ private:
         }
     }
 
+    /// Fold interop declarations that name the same external adapter/export.
+    ///
+    /// Identical import declarations (external name, signature, and capability
+    /// mask) describe the same host adapter, so the link emits one row and remaps
+    /// later modules' calls onto it. Incompatible imports, and exports that name
+    /// the same external symbol from two different functions, are source-located
+    /// errors that name both declaring modules.
+    void compose_interop_declarations() {
+        struct ImportOrigin {
+            std::string identity;
+            std::string source_name;
+            InteropSignature signature;
+            CapabilityMask capabilities{0};
+        };
+        struct ExportOrigin {
+            std::string identity;
+            std::string function_name;
+            InteropSignature signature;
+        };
+        std::unordered_map<std::string, ImportOrigin> import_by_external;
+        std::unordered_map<std::string, ExportOrigin> export_by_external;
+
+        for (const auto& identity : order_) {
+            auto& unit = units_.at(identity);
+            for (auto& stmt : unit.program.statements) {
+                if (auto* decl = dynamic_cast<ast::InteropImportDecl*>(stmt.get())) {
+                    auto [it, inserted] = import_by_external.try_emplace(decl->external_name);
+                    auto& origin = it->second;
+                    if (inserted) {
+                        origin.identity = identity;
+                        origin.source_name = decl->name;
+                        origin.signature = interop_signature_for(decl, unit);
+                        origin.capabilities = capability_mask_for(decl, unit);
+                        continue;
+                    }
+                    const auto candidate_signature = interop_signature_for(decl, unit);
+                    const auto candidate_capabilities = capability_mask_for(decl, unit);
+                    if (origin.signature != candidate_signature ||
+                        origin.capabilities != candidate_capabilities) {
+                        throw SourceLocationException(
+                            "interop import '" + decl->external_name + "' conflicts with the declaration in module '" +
+                                origin.identity + "': external name, signature, and capability mask must all agree",
+                            unit.path, unit.identity, decl->line, 1, decl->name);
+                    }
+                    unit.interop_import_canonical[decl->name] =
+                        internal_name(units_.at(origin.identity), origin.source_name);
+                    folded_imports_.insert(&decl->source);
+                } else if (auto* decl = dynamic_cast<ast::InteropExportDecl*>(stmt.get())) {
+                    auto [it, inserted] = export_by_external.try_emplace(decl->external_name);
+                    auto& origin = it->second;
+                    if (inserted) {
+                        origin.identity = identity;
+                        origin.function_name = decl->function_name;
+                        origin.signature = interop_signature_for(decl, unit);
+                        continue;
+                    }
+                    const bool same_target =
+                        origin.identity == identity && origin.function_name == decl->function_name;
+                    const auto candidate_signature = interop_signature_for(decl, unit);
+                    if (!same_target || origin.signature != candidate_signature) {
+                        throw SourceLocationException(
+                            "interop export '" + decl->external_name + "' is already exported by module '" +
+                                origin.identity + "': one external name can only name a single function",
+                            unit.path, unit.identity, decl->line, 1, decl->function_name);
+                    }
+                    folded_exports_.insert(&decl->source);
+                }
+            }
+        }
+    }
+
+    /// Build the linked interop signature for one declaration in one module.
+    InteropSignature interop_signature_for(const ast::InteropImportDecl* decl,
+                                           const ModuleUnit& unit) const {
+        return interop_signature_for(decl->parameter_types, decl->result_type, unit);
+    }
+
+    InteropSignature interop_signature_for(const ast::InteropExportDecl* decl,
+                                           const ModuleUnit& unit) const {
+        return interop_signature_for(decl->parameter_types, decl->result_type, unit);
+    }
+
+    InteropSignature interop_signature_for(const std::vector<ast::DeclaredType>& parameters,
+                                           ast::DeclaredType result,
+                                           const ModuleUnit& unit) const {
+        try {
+            InteropSignature signature;
+            signature.result = interop_type_for(result);
+            for (const auto type : parameters) signature.parameters.push_back(interop_type_for(type));
+            return signature;
+        } catch (const std::exception& error) {
+            throw SourceLocationException(std::string("invalid interop declaration: ") + error.what(),
+                                          unit.path, unit.identity, 1, 1);
+        }
+    }
+
+    /// Parse a declaration's capability specification into its exact mask.
+    CapabilityMask capability_mask_for(const ast::InteropImportDecl* decl,
+                                       const ModuleUnit& unit) const {
+        try {
+            return parse_interop_capability_spec(decl->capability_spec);
+        } catch (const std::exception& error) {
+            throw SourceLocationException(std::string("invalid interop capability specification: ") + error.what(),
+                                          unit.path, unit.identity, decl->line, 1, decl->name);
+        }
+    }
+
     std::filesystem::path root_;
     CustomEmojiRegistry registry_;
     std::optional<PackageGraph> package_graph_;
@@ -878,6 +1010,10 @@ private:
     std::unordered_map<std::string, VisitState> states_;
     std::unordered_map<std::string, std::string> module_names_;
     std::vector<std::string> order_;
+    // Source ranges of interop declarations folded into an identical declaration
+    // emitted by an earlier module; those statements are dropped from the link.
+    std::unordered_set<const ast::SourceRange*> folded_imports_;
+    std::unordered_set<const ast::SourceRange*> folded_exports_;
 };
 
 } // namespace

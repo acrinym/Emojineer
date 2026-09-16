@@ -85,6 +85,26 @@ private:
     /// Reset execution state only after bytecode verification and authority preflight.
     void initialize_execution(const Chunk& chunk);
 
+    /// Restore invocation-visible state after a host export invocation unwinds.
+    ///
+    /// When initialization never completed, the chunk is marked uninitialized so
+    /// the next invocation rebuilds from scratch instead of running against
+    /// partially initialized globals.
+    void restore_invocation_state(bool initialization_completed);
+
+    /// Scoped reset of export-invocation bookkeeping across every exit path.
+    ///
+    /// The scope commits only when the invocation returns normally; any throw
+    /// restores the VM to a reusable state.
+    struct InvocationScope {
+        VM& owner;
+        bool committed{false};
+        bool initialization_completed{false};
+        ~InvocationScope() {
+            if (!committed) owner.restore_invocation_state(initialization_completed);
+        }
+    };
+
     /// Execute the production opcode loop until halt, pause, or runtime failure.
     void run_execution_loop();
 

@@ -1,6 +1,8 @@
 #include "emojineer/bytecode.hpp"
+#include "emojineer/compiler.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/module.hpp"
+#include "emojineer/parser.hpp"
 #include "emojineer/project.hpp"
 #include "emojineer/source_diagnostic.hpp"
 #include "emojineer/vm.hpp"
@@ -304,6 +306,57 @@ void test_package_import_error_preserves_importer_source() {
     require(caught, "package import authority failure must be a SourceLocationException");
 }
 
+void test_nested_interop_and_module_syntax_share_one_diagnostic() {
+    // A file with only interop declarations compiles through the single-file path,
+    // so nesting must be reported by the compiler rule.
+    {
+        emojineer::Lexer lexer(
+            "🛠️ 🧠 🫴 🤲\n"
+            "🔌 🧮 📜fixture.net📜 📜none📜 🔢 🫴 🔢 🤲\n"
+            "📦 1\n"
+            "🏁\n"
+            "📝 🧠 🫴 🤲\n");
+        emojineer::Parser parser(lexer.tokenize());
+        emojineer::Compiler compiler;
+        bool caught = false;
+        try {
+            (void)compiler.compile(parser.parse());
+        } catch (const emojineer::SourceLocationException& error) {
+            caught = true;
+            require(std::string(error.what()) == emojineer::TopLevelOnlyMessage,
+                    "single-file nesting must use the shared top-level-only text");
+            require(error.line == 2, "single-file nesting must carry the declaration line");
+        }
+        require(caught, "nested 🔌 in a plain file must be rejected");
+    }
+
+    // A real module file must report the identical rule, not a module-only message.
+    TempRoot root("nested-interop");
+    write_source(root.path / "mod.emoji",
+                 "🧩 🚀\n"
+                 "🛠️ 🧠 🫴 🤲\n"
+                 "🔌 🧮 📜fixture.net📜 📜none📜 🔢 🫴 🔢 🤲\n"
+                 "📦 1\n"
+                 "🏁\n"
+                 "📤 🧠\n");
+    write_source(root.path / "main.emoji",
+                 "🧩 🌲\n"
+                 "🔗 📜mod.emoji📜\n"
+                 "📝 🧠 🫴 🤲\n");
+    bool caught = false;
+    try {
+        (void)emojineer::compile_file(root.path / "main.emoji", {}, root.path);
+    } catch (const emojineer::SourceLocationException& error) {
+        caught = true;
+        require(std::string(error.what()) == emojineer::TopLevelOnlyMessage,
+                "module nesting must use the same shared top-level-only text");
+        require(error.sourceIdentity.find("mod.emoji") != std::string::npos,
+                "module nesting diagnostic must name the offending module");
+        require(error.line == 3, "module nesting diagnostic must carry the declaration line");
+    }
+    require(caught, "nested 🔌 in a module file must be rejected");
+}
+
 } // namespace
 
 int main() {
@@ -318,6 +371,7 @@ int main() {
         test_deterministic_identity_and_bytecode_compatibility();
         test_dependency_initialization_once_and_project_check();
         test_package_import_error_preserves_importer_source();
+        test_nested_interop_and_module_syntax_share_one_diagnostic();
         std::cout << "✅ module/import tests passed\n";
         return 0;
     } catch (const std::exception& error) {
