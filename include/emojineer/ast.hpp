@@ -51,5 +51,18 @@ struct FunctionDecl final:Stmt{std::string name;std::vector<std::string> paramet
 struct ModuleDecl final:Stmt{std::string name;};
 struct ImportStmt final:Stmt{std::string path;};
 struct ExportStmt final:Stmt{std::string name;};
+struct InteropImportDecl final:Stmt{
+    std::string name;
+    std::string external_name;
+    std::string capability_spec;
+    DeclaredType result_type{DeclaredType::Bool};
+    std::vector<DeclaredType> parameter_types;
+};
+struct InteropExportDecl final:Stmt{
+    std::string function_name;
+    std::string external_name;
+    DeclaredType result_type{DeclaredType::Bool};
+    std::vector<DeclaredType> parameter_types;
+};
 struct Program{std::vector<StmtPtr> statements;};
 }

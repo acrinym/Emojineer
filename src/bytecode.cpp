@@ -1,5 +1,6 @@
 #include "emojineer/bytecode.hpp"
 #include "emojineer/capability.hpp"
+#include "emojineer/interop.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -14,7 +15,7 @@
 #include <stdexcept>
 #include <unordered_set>
 namespace emojineer { namespace {
-constexpr char Magic[]={'E','M','J','B','C'};constexpr std::uint16_t CurrentVersion=8;constexpr std::uint32_t MaxConstants=1'000'000,MaxFunctions=100'000,MaxInstructions=10'000'000,MaxStringBytes=64*1024*1024,MaxSourceFiles=1'000'000;
+constexpr char Magic[]={'E','M','J','B','C'};constexpr std::uint16_t CurrentVersion=9;constexpr std::uint32_t MaxConstants=1'000'000,MaxFunctions=100'000,MaxInstructions=10'000'000,MaxStringBytes=64*1024*1024,MaxSourceFiles=1'000'000,MaxInteropEntries=100'000,MaxInteropParameters=1024;
 void write_u8(std::ostream&o,std::uint8_t v){o.put(static_cast<char>(v));if(!o)throw std::runtime_error("failed to write bytecode");}void write_u16(std::ostream&o,std::uint16_t v){write_u8(o,v&255);write_u8(o,(v>>8)&255);}void write_u32(std::ostream&o,std::uint32_t v){for(unsigned s=0;s<32;s+=8)write_u8(o,(v>>s)&255);}void write_u64(std::ostream&o,std::uint64_t v){for(unsigned s=0;s<64;s+=8)write_u8(o,(v>>s)&255);}std::uint8_t read_u8(std::istream&i){int v=i.get();if(v==std::char_traits<char>::eof())throw std::runtime_error("truncated bytecode");return static_cast<std::uint8_t>(v);}std::uint16_t read_u16(std::istream&i){return static_cast<std::uint16_t>(read_u8(i))|static_cast<std::uint16_t>(read_u8(i)<<8);}std::uint32_t read_u32(std::istream&i){std::uint32_t v=0;for(unsigned s=0;s<32;s+=8)v|=static_cast<std::uint32_t>(read_u8(i))<<s;return v;}std::uint64_t read_u64(std::istream&i){std::uint64_t v=0;for(unsigned s=0;s<64;s+=8)v|=static_cast<std::uint64_t>(read_u8(i))<<s;return v;}
 void write_string(std::ostream&o,const std::string&v){if(v.size()>MaxStringBytes)throw std::runtime_error("string too large for bytecode");write_u32(o,static_cast<std::uint32_t>(v.size()));o.write(v.data(),static_cast<std::streamsize>(v.size()));if(!o)throw std::runtime_error("failed to write bytecode string");}std::string read_string(std::istream&i){auto n=read_u32(i);if(n>MaxStringBytes)throw std::runtime_error("bytecode string exceeds safety limit");std::string v(n,'\0');i.read(v.data(),static_cast<std::streamsize>(n));if(!i)throw std::runtime_error("truncated bytecode string");return v;}
 OpCode decode_v1(std::uint8_t raw){switch(raw){case 0:return OpCode::Constant;case 1:return OpCode::LoadGlobal;case 2:return OpCode::StoreGlobal;case 3:return OpCode::AssertNumber;case 4:return OpCode::AssertString;case 5:return OpCode::AssertBool;case 6:return OpCode::Add;case 7:return OpCode::Subtract;case 8:return OpCode::Multiply;case 9:return OpCode::Divide;case 10:return OpCode::Modulo;case 11:return OpCode::AddInt;case 12:return OpCode::SubtractInt;case 13:return OpCode::MultiplyInt;case 14:return OpCode::Equal;case 15:return OpCode::Less;case 16:return OpCode::Greater;case 17:return OpCode::Negate;case 18:return OpCode::Not;case 19:return OpCode::ReadLine;case 20:return OpCode::Print;case 21:return OpCode::JumpIfFalse;case 22:return OpCode::Jump;case 23:return OpCode::Halt;default:throw std::runtime_error("invalid opcode in v1 bytecode");}}
@@ -28,6 +29,37 @@ bool portable_source_identity(const std::string& identity) {
 bool valid_sha256(const std::string& hash) {
     if (hash.size() != 64) return false;
     return std::all_of(hash.begin(), hash.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
+}
+bool valid_interop_type(InteropType type) {
+    switch (type) {
+        case InteropType::Number: case InteropType::String: case InteropType::Bool: case InteropType::Array: return true;
+    }
+    return false;
+}
+InteropType read_interop_type(std::istream& input) {
+    const auto raw = read_u8(input);
+    const auto type = static_cast<InteropType>(raw);
+    if (!valid_interop_type(type)) throw std::runtime_error("invalid interop type in bytecode");
+    return type;
+}
+void write_signature(std::ostream& out, const InteropSignature& signature) {
+    if (signature.parameters.size() > MaxInteropParameters) throw std::runtime_error("interop signature exceeds parameter limit");
+    write_u32(out, static_cast<std::uint32_t>(signature.parameters.size()));
+    for (const auto type : signature.parameters) {
+        if (!valid_interop_type(type)) throw std::runtime_error("invalid interop parameter type");
+        write_u8(out, static_cast<std::uint8_t>(type));
+    }
+    if (!valid_interop_type(signature.result)) throw std::runtime_error("invalid interop result type");
+    write_u8(out, static_cast<std::uint8_t>(signature.result));
+}
+InteropSignature read_signature(std::istream& input) {
+    InteropSignature signature;
+    const auto count = read_u32(input);
+    if (count > MaxInteropParameters) throw std::runtime_error("interop signature exceeds parameter limit");
+    signature.parameters.reserve(count);
+    for (std::uint32_t n = 0; n < count; ++n) signature.parameters.push_back(read_interop_type(input));
+    signature.result = read_interop_type(input);
+    return signature;
 }
 std::string array_to_string(const ArrayPtr&a){if(!a)return"<null-array>";std::ostringstream o;o<<'[';for(std::size_t i=0;i<a->elements.size();++i){if(i)o<<", ";o<<value_to_string(a->elements[i]);}o<<']';return o.str();}
 } // namespace
@@ -48,6 +80,33 @@ void verify_bytecode(const Chunk& c) {
         if (!f.local_names.empty() && f.local_names.size() != f.local_count)
             throw std::runtime_error("function local-name metadata does not match local count");
         if (!names.insert(f.name).second) throw std::runtime_error("duplicate function metadata");
+    }
+
+    if (c.interop_imports.size() > MaxInteropEntries || c.interop_exports.size() > MaxInteropEntries)
+        throw std::runtime_error("interop table exceeds safety limit");
+    std::unordered_set<std::string> interop_internal_names;
+    std::unordered_set<std::string> interop_import_external_names;
+    for (const auto& import : c.interop_imports) {
+        if (import.internal_name.empty()) throw std::runtime_error("interop import internal name cannot be empty");
+        validate_interop_external_name(import.external_name);
+        validate_capability_mask(import.required_capabilities);
+        if (import.signature.parameters.size() > MaxInteropParameters || !valid_interop_type(import.signature.result))
+            throw std::runtime_error("invalid interop import signature");
+        for (const auto type : import.signature.parameters) if (!valid_interop_type(type)) throw std::runtime_error("invalid interop import signature");
+        if (!interop_internal_names.insert(import.internal_name).second) throw std::runtime_error("duplicate interop import internal name");
+        if (!interop_import_external_names.insert(import.external_name).second) throw std::runtime_error("duplicate interop import external name");
+        if (names.contains(import.internal_name)) throw std::runtime_error("interop import collides with function name");
+    }
+    std::unordered_set<std::string> interop_export_external_names;
+    for (const auto& export_info : c.interop_exports) {
+        validate_interop_external_name(export_info.external_name);
+        if (!interop_export_external_names.insert(export_info.external_name).second) throw std::runtime_error("duplicate interop export external name");
+        if (export_info.function_index >= c.functions.size()) throw std::runtime_error("interop export references invalid function index");
+        if (export_info.signature.parameters.size() > MaxInteropParameters || !valid_interop_type(export_info.signature.result))
+            throw std::runtime_error("invalid interop export signature");
+        for (const auto type : export_info.signature.parameters) if (!valid_interop_type(type)) throw std::runtime_error("invalid interop export signature");
+        if (export_info.signature.parameters.size() != c.functions[export_info.function_index].arity)
+            throw std::runtime_error("interop export signature arity does not match function");
     }
 
     CapabilityMask inferred_capabilities = 0;
@@ -84,6 +143,11 @@ void verify_bytecode(const Chunk& c) {
                 inferred_capabilities |= capability_mask(native_facility_capability(*facility));
                 break;
             }
+            case OpCode::InteropCall:
+                if (ins.operand < 0 || static_cast<std::size_t>(ins.operand) >= c.interop_imports.size())
+                    throw std::runtime_error("invalid interop import operand");
+                inferred_capabilities |= c.interop_imports[static_cast<std::size_t>(ins.operand)].required_capabilities;
+                break;
             default:
                 break;
         }
@@ -152,8 +216,19 @@ void write_bytecode(const Chunk& c, std::ostream& o) {
     std::sort(hashes.begin(), hashes.end());
     write_u32(o, static_cast<std::uint32_t>(hashes.size()));
     for (const auto& [identity, hash] : hashes) { write_string(o, identity); write_string(o, hash); }
-    // v8 capability contract. The verifier has already proven this exactly matches HostCall opcodes.
+    // v8+ capability contract. Verifier binds this to HostCall and InteropCall authority.
     write_u32(o, c.required_capabilities);
+    // v9 verifier-visible typed interop imports/exports.
+    write_u32(o, static_cast<std::uint32_t>(c.interop_imports.size()));
+    for (const auto& import : c.interop_imports) {
+        write_string(o, import.internal_name); write_string(o, import.external_name);
+        write_u32(o, import.required_capabilities); write_signature(o, import.signature);
+    }
+    write_u32(o, static_cast<std::uint32_t>(c.interop_exports.size()));
+    for (const auto& export_info : c.interop_exports) {
+        write_string(o, export_info.external_name); write_u32(o, export_info.function_index);
+        write_signature(o, export_info.signature);
+    }
 }
 Chunk read_bytecode(std::istream& i) {
     char magic[sizeof(Magic)]{};
@@ -205,7 +280,8 @@ Chunk read_bytecode(std::istream& i) {
         else {
             const auto max = version == 2 ? static_cast<std::uint8_t>(OpCode::Halt)
                 : (version <= 7 ? static_cast<std::uint8_t>(OpCode::SetIndex)
-                                : static_cast<std::uint8_t>(OpCode::HostCall));
+                   : (version == 8 ? static_cast<std::uint8_t>(OpCode::HostCall)
+                                   : static_cast<std::uint8_t>(OpCode::InteropCall)));
             if (raw > max) throw std::runtime_error("invalid opcode in bytecode");
             op = static_cast<OpCode>(raw);
         }
@@ -245,11 +321,27 @@ Chunk read_bytecode(std::istream& i) {
     }
 
     if (version >= 8) c.required_capabilities = read_u32(i);
+    if (version >= 9) {
+        const auto imports = read_u32(i);
+        if (imports > MaxInteropEntries) throw std::runtime_error("interop import table exceeds safety limit");
+        for (std::uint32_t n = 0; n < imports; ++n) {
+            InteropImportInfo info; info.internal_name = read_string(i); info.external_name = read_string(i);
+            info.required_capabilities = read_u32(i); info.signature = read_signature(i); c.interop_imports.push_back(std::move(info));
+        }
+        const auto exports = read_u32(i);
+        if (exports > MaxInteropEntries) throw std::runtime_error("interop export table exceeds safety limit");
+        for (std::uint32_t n = 0; n < exports; ++n) {
+            InteropExportInfo info; info.external_name = read_string(i); info.function_index = read_u32(i);
+            info.signature = read_signature(i); c.interop_exports.push_back(std::move(info));
+        }
+    }
 
+    if (i.peek() != std::char_traits<char>::eof())
+        throw std::runtime_error("trailing content after Emojineer bytecode payload");
     verify_bytecode(c);
     return c;
 }
-std::string opcode_name(OpCode op){switch(op){case OpCode::Constant:return"Constant";case OpCode::LoadGlobal:return"LoadGlobal";case OpCode::StoreGlobal:return"StoreGlobal";case OpCode::LoadLocal:return"LoadLocal";case OpCode::StoreLocal:return"StoreLocal";case OpCode::AssertNumber:return"AssertNumber";case OpCode::AssertString:return"AssertString";case OpCode::AssertBool:return"AssertBool";case OpCode::Add:return"Add";case OpCode::Subtract:return"Subtract";case OpCode::Multiply:return"Multiply";case OpCode::Divide:return"Divide";case OpCode::Modulo:return"Modulo";case OpCode::AddInt:return"AddInt";case OpCode::SubtractInt:return"SubtractInt";case OpCode::MultiplyInt:return"MultiplyInt";case OpCode::Equal:return"Equal";case OpCode::Less:return"Less";case OpCode::Greater:return"Greater";case OpCode::Negate:return"Negate";case OpCode::Not:return"Not";case OpCode::ReadLine:return"ReadLine";case OpCode::Print:return"Print";case OpCode::JumpIfFalse:return"JumpIfFalse";case OpCode::Jump:return"Jump";case OpCode::Call:return"Call";case OpCode::Return:return"Return";case OpCode::Halt:return"Halt";case OpCode::AssertArray:return"AssertArray";case OpCode::MakeArray:return"MakeArray";case OpCode::Index:return"Index";case OpCode::Length:return"Length";case OpCode::Append:return"Append";case OpCode::SetIndex:return"SetIndex";case OpCode::HostCall:return"HostCall";}return"Unknown";}
+std::string opcode_name(OpCode op){switch(op){case OpCode::Constant:return"Constant";case OpCode::LoadGlobal:return"LoadGlobal";case OpCode::StoreGlobal:return"StoreGlobal";case OpCode::LoadLocal:return"LoadLocal";case OpCode::StoreLocal:return"StoreLocal";case OpCode::AssertNumber:return"AssertNumber";case OpCode::AssertString:return"AssertString";case OpCode::AssertBool:return"AssertBool";case OpCode::Add:return"Add";case OpCode::Subtract:return"Subtract";case OpCode::Multiply:return"Multiply";case OpCode::Divide:return"Divide";case OpCode::Modulo:return"Modulo";case OpCode::AddInt:return"AddInt";case OpCode::SubtractInt:return"SubtractInt";case OpCode::MultiplyInt:return"MultiplyInt";case OpCode::Equal:return"Equal";case OpCode::Less:return"Less";case OpCode::Greater:return"Greater";case OpCode::Negate:return"Negate";case OpCode::Not:return"Not";case OpCode::ReadLine:return"ReadLine";case OpCode::Print:return"Print";case OpCode::JumpIfFalse:return"JumpIfFalse";case OpCode::Jump:return"Jump";case OpCode::Call:return"Call";case OpCode::Return:return"Return";case OpCode::Halt:return"Halt";case OpCode::AssertArray:return"AssertArray";case OpCode::MakeArray:return"MakeArray";case OpCode::Index:return"Index";case OpCode::Length:return"Length";case OpCode::Append:return"Append";case OpCode::SetIndex:return"SetIndex";case OpCode::HostCall:return"HostCall";case OpCode::InteropCall:return"InteropCall";}return"Unknown";}
 std::string value_to_string(const Value&v){if(auto*n=std::get_if<double>(&v)){std::ostringstream o;if(std::isfinite(*n)&&std::floor(*n)==*n)o<<std::fixed<<std::setprecision(0)<<*n;else o<<std::setprecision(15)<<*n;return o.str();}if(auto*i=std::get_if<std::int64_t>(&v))return std::to_string(*i);if(auto*b=std::get_if<bool>(&v))return*b?"✅":"❌";if(auto*s=std::get_if<std::string>(&v))return*s;return array_to_string(std::get<ArrayPtr>(v));}
 bool values_equal(const Value&a,const Value&b){if(a.index()!=b.index())return false;if(auto*x=std::get_if<std::int64_t>(&a))return*x==std::get<std::int64_t>(b);if(auto*x=std::get_if<double>(&a))return*x==std::get<double>(b);if(auto*x=std::get_if<bool>(&a))return*x==std::get<bool>(b);if(auto*x=std::get_if<std::string>(&a))return*x==std::get<std::string>(b);auto x=std::get<ArrayPtr>(a),y=std::get<ArrayPtr>(b);if(!x||!y)return x==y;if(x->elements.size()!=y->elements.size())return false;for(std::size_t i=0;i<x->elements.size();++i)if(!values_equal(x->elements[i],y->elements[i]))return false;return true;}
 } // namespace emojineer

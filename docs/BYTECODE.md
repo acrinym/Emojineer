@@ -2,7 +2,7 @@
 
 `EMJBC` is Emojineer's owned bytecode format. It is not Python bytecode, JavaScript, JVM bytecode, WebAssembly, or serialized host-language source.
 
-The current writer emits **version 8**. The reader accepts **versions 1 through 8**.
+The current writer emits **version 9**. The reader accepts **versions 1 through 9**.
 
 ## Header and scalar encoding
 
@@ -28,8 +28,9 @@ Malformed, truncated, oversized, unknown-version, or structurally invalid byteco
 - **v6**: deterministic per-instruction source map with source identity, exact source range, and function context.
 - **v7**: sorted source SHA-256 provenance table used for debugger source-drift detection.
 - **v8**: `HostCall` plus an exact serialized required-capability mask bound by the verifier to the actual native facilities present in the instruction stream.
+- **v9**: typed interop import/export tables plus `InteropCall`; adapter capability requirements participate in the same verifier-bound whole-program capability contract.
 
-Older bytecode cannot contain `HostCall`, so its required capability mask is zero.
+Versions 1 through 7 cannot contain `HostCall` or `InteropCall`, so their required capability mask is zero. Version 8 can contain `HostCall` but has no interop tables or `InteropCall`.
 
 ## Constants
 
@@ -60,7 +61,7 @@ u32 signed_operand_bits
 u32 source_line
 ```
 
-The current in-memory set includes constants, globals/locals, type assertions, arithmetic/comparison, unary operations, stdin/stdout, jumps, calls/returns, halt, collections, and v8 `HostCall`.
+The current in-memory set includes constants, globals/locals, type assertions, arithmetic/comparison, unary operations, stdin/stdout, jumps, calls/returns, halt, collections, v8 `HostCall`, and v9 `InteropCall`.
 
 `HostCall.operand` is a closed native-facility identifier. The current facilities are filesystem read, HTTPS GET, process execution, clock milliseconds, random integer, and host environment lookup. See [CAPABILITIES.md](CAPABILITIES.md).
 
@@ -76,9 +77,15 @@ The writer sorts source identities and stores SHA-256 values for compiled source
 
 After the v7 provenance table, v8 stores a `u32 required_capabilities` mask.
 
-`verify_bytecode` independently walks all `HostCall` instructions, validates each facility operand, maps it to its capability, and recomputes the exact union. Verification fails when the serialized mask contains unknown bits or differs from the inferred union.
+For v8, `verify_bytecode` independently walks all `HostCall` instructions, validates each facility operand, maps it to its capability, and recomputes the exact union. In v9 the same recomputation also includes every `InteropCall` import entry's declared capability mask. Verification fails when the serialized mask contains unknown bits or differs from the inferred union.
 
-The VM verifies again and performs whole-program capability preflight before executing instruction zero. Serialized metadata therefore cannot lie about a host call merely to bypass the runtime grant check.
+The VM verifies again and performs whole-program capability preflight before executing instruction zero. Serialized metadata therefore cannot lie about a host or interop call merely to bypass the runtime grant check.
+
+## v9 interop contract
+
+After the v8 capability mask, v9 stores bounded typed interop import and export tables. An import records its compiler-internal name, printable-ASCII external adapter name, required capability mask, parameter types, and result type. An export records a printable-ASCII external name, target function index, parameter types, and result type.
+
+`InteropCall.operand` is an index into the import table. The verifier rejects invalid indices, malformed/duplicate external names, invalid capability bits, invalid signatures, exports that target missing functions, and export/function arity disagreement. The runtime then requires an exact host adapter binding before instruction zero. See [INTEROP.md](INTEROP.md).
 
 ## Structural verification
 
@@ -93,7 +100,8 @@ The verifier checks, among other invariants:
 - function-call indices;
 - nonnegative array construction counts;
 - valid native facility operands;
-- exact capability-mask/instruction agreement;
+- valid interop import/export metadata and `InteropCall` indices;
+- exact capability-mask/instruction agreement across native and interop calls;
 - source map and provenance invariants.
 
 ## VM execution model
@@ -106,4 +114,4 @@ Default execution grants no native host capabilities. REPL and debugger executio
 
 ## Compatibility rule
 
-EMJBC advances when serialized representation or opcode compatibility requires it. Source-only language growth does not require a bytecode bump. Train 8 modules, for example, were resolved by the source linker without adding an opcode; Train 20 requires v8 because host calls and their verifier-bound authority contract are serialized semantics.
+EMJBC advances when serialized representation or opcode compatibility requires it. Source-only language growth does not require a bytecode bump. Train 8 modules, for example, were resolved by the source linker without adding an opcode; Train 20 requires v8 because host calls and their verifier-bound authority contract are serialized semantics, and Train 21 requires v9 because typed interop imports/exports and `InteropCall` are serialized semantics.

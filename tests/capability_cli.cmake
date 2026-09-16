@@ -69,7 +69,7 @@ run_expect_failure("non-execution option rejection" "does not accept execution p
                    "${EMOJINEER}" check "${SOURCE}" --grant clock)
 
 set(BYTECODE "${TEST_ROOT}/native.emjbc")
-run_expect_success("compile v8" "${EMOJINEER}" compile "${SOURCE}" -o "${BYTECODE}")
+run_expect_success("compile current bytecode" "${EMOJINEER}" compile "${SOURCE}" -o "${BYTECODE}")
 run_expect_success("capabilities bytecode" "${EMOJINEER}" capabilities "${BYTECODE}")
 if(NOT LAST_OUTPUT STREQUAL "required capabilities: clock, random\n")
   message(FATAL_ERROR "unexpected bytecode capability report: ${LAST_OUTPUT}")

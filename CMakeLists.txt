@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Emojineer VERSION 0.20.0 LANGUAGES CXX)
+project(Emojineer VERSION 0.21.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -21,6 +21,7 @@ add_library(emojineer_core
     src/registry_discovery.cpp
     src/authenticated_publication.cpp
     src/capability.cpp
+    src/interop.cpp
     src/bytecode.cpp
     src/compiler.cpp
     src/vm.cpp
@@ -105,9 +106,17 @@ if(BUILD_TESTING)
  add_executable(emojineer_capability_tests tests/capability_tests.cpp)
  target_link_libraries(emojineer_capability_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_capability_tests COMMAND emojineer_capability_tests)
+ add_executable(emojineer_interop_tests tests/interop_tests.cpp)
+ target_link_libraries(emojineer_interop_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_interop_tests COMMAND emojineer_interop_tests)
  add_test(NAME emojineer_capability_cli
           COMMAND ${CMAKE_COMMAND}
                   -DEMOJINEER=$<TARGET_FILE:emojineer>
                   -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/capability-cli
                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/capability_cli.cmake)
+ add_test(NAME emojineer_interop_cli
+          COMMAND ${CMAKE_COMMAND}
+                  -DEMOJINEER=$<TARGET_FILE:emojineer>
+                  -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/interop-cli
+                  -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/interop_cli.cmake)
 endif()

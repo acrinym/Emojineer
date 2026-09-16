@@ -97,19 +97,19 @@ void test_reserved_names_and_arity() {
     }, "expects 0 arguments");
 }
 
-void test_bytecode_v8_and_verifier_binding() {
+void test_bytecode_current_version_and_verifier_binding() {
     auto chunk = compile_text("📝 🕰️ 🫴 🤲\n");
     std::ostringstream encoded(std::ios::binary);
     emojineer::write_bytecode(chunk, encoded);
     const auto bytes = encoded.str();
     require(bytes.size() > 7, "encoded bytecode should contain a header");
-    require(static_cast<unsigned char>(bytes[5]) == 8 && static_cast<unsigned char>(bytes[6]) == 0,
-            "Train 20 bytecode should be EMJBC v8");
+    require(static_cast<unsigned char>(bytes[5]) == 9 && static_cast<unsigned char>(bytes[6]) == 0,
+            "current bytecode writer should emit EMJBC v9");
 
     std::istringstream input(bytes, std::ios::binary);
     const auto decoded = emojineer::read_bytecode(input);
     require(decoded.required_capabilities == emojineer::capability_mask(emojineer::Capability::Clock),
-            "v8 round-trip should preserve required capabilities");
+            "current round-trip should preserve required capabilities");
 
     auto dishonest = chunk;
     dishonest.required_capabilities = 0;
@@ -281,7 +281,7 @@ int main() {
     try {
         test_intrinsic_compilation_and_mask();
         test_reserved_names_and_arity();
-        test_bytecode_v8_and_verifier_binding();
+        test_bytecode_current_version_and_verifier_binding();
         test_preflight_denial_has_zero_program_effects();
         test_deterministic_clock_and_random();
         test_sandbox_and_deterministic_policy_validation();

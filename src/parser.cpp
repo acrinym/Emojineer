@@ -35,6 +35,8 @@ ast::StmtPtr Parser::statement(){
     if(check(TokenKind::Module))return module_declaration();
     if(check(TokenKind::Import))return import_statement();
     if(check(TokenKind::Export))return export_statement();
+    if(check(TokenKind::InteropImport))return interop_import_declaration();
+    if(check(TokenKind::InteropExport))return interop_export_declaration();
     if(check(TokenKind::Var))return var_declaration();
     if(check(TokenKind::Assign))return assignment();
     if(check(TokenKind::Print))return print_statement();
@@ -75,6 +77,55 @@ ast::StmtPtr Parser::export_statement(){
     s->line=start.line;
     set_source_range(s->source, start, name);
     s->name=name.canonical;
+    return s;
+}
+
+ast::DeclaredType Parser::required_declared_type(const std::string& message){
+    if(match(TokenKind::TypeNumber))return ast::DeclaredType::Number;
+    if(match(TokenKind::TypeString))return ast::DeclaredType::String;
+    if(match(TokenKind::TypeBool))return ast::DeclaredType::Bool;
+    if(match(TokenKind::Array))return ast::DeclaredType::Array;
+    error(peek(),message);
+}
+
+ast::StmtPtr Parser::interop_import_declaration(){
+    const Token start=advance();
+    const Token name=consume(TokenKind::Identifier,"expected an emoji adapter name after interop import");
+    const Token external=consume(TokenKind::String,"expected external adapter name string");
+    const Token capabilities=consume(TokenKind::String,"expected capability spec string");
+    const auto result=required_declared_type("expected interop result type");
+    consume(TokenKind::GroupStart,"expected argument signature start");
+    std::vector<ast::DeclaredType> parameters;
+    while(!check(TokenKind::GroupEnd)){
+        if(check(TokenKind::Eof)||check(TokenKind::Newline))error(peek(),"expected end of interop parameter signature");
+        parameters.push_back(required_declared_type("expected interop parameter type"));
+    }
+    consume(TokenKind::GroupEnd,"expected end of interop parameter signature");
+    const Token end=previous();
+    consume_line_end();
+    auto s=std::make_unique<ast::InteropImportDecl>();
+    s->line=start.line;set_source_range(s->source,start,end);s->name=name.canonical;
+    s->external_name=external.literal;s->capability_spec=capabilities.literal;s->result_type=result;s->parameter_types=std::move(parameters);
+    return s;
+}
+
+ast::StmtPtr Parser::interop_export_declaration(){
+    const Token start=advance();
+    const Token function=consume(TokenKind::Identifier,"expected an emoji function name after interop export");
+    const Token external=consume(TokenKind::String,"expected external export name string");
+    const auto result=required_declared_type("expected interop export result type");
+    consume(TokenKind::GroupStart,"expected export argument signature start");
+    std::vector<ast::DeclaredType> parameters;
+    while(!check(TokenKind::GroupEnd)){
+        if(check(TokenKind::Eof)||check(TokenKind::Newline))error(peek(),"expected end of interop export signature");
+        parameters.push_back(required_declared_type("expected interop export parameter type"));
+    }
+    consume(TokenKind::GroupEnd,"expected end of interop export signature");
+    const Token end=previous();
+    consume_line_end();
+    auto s=std::make_unique<ast::InteropExportDecl>();
+    s->line=start.line;set_source_range(s->source,start,end);s->function_name=function.canonical;
+    s->external_name=external.literal;s->result_type=result;s->parameter_types=std::move(parameters);
     return s;
 }
 

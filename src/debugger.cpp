@@ -1,4 +1,5 @@
 #include "emojineer/debugger.hpp"
+#include <algorithm>
 #include "emojineer/vm.hpp"
 #include "emojineer/module.hpp"
 #include "emojineer/unicode.hpp"

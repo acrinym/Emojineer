@@ -58,6 +58,7 @@ private:
     std::string source_path_;  // Deterministic module identity (no absolute roots)
     std::unordered_map<std::string,std::optional<ast::DeclaredType>> declared_types_;
     std::unordered_map<std::string,std::size_t> function_indices_;
+    std::unordered_map<std::string,std::size_t> interop_import_indices_;
     std::unordered_map<std::string,std::int32_t> locals_;
     std::unordered_map<std::string,std::optional<ast::DeclaredType>> local_types_;
     bool in_function_{false};
