@@ -8,11 +8,11 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → package-aware module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.21**.
+Current language/toolchain version: **0.22**.
 
 ## What works now
 
-Product Trains 1 through 21 provide:
+Product Trains 1 through 22 provide:
 
 - Unicode/grapheme-aware emoji-native syntax and canonical token identity;
 - variables, optional runtime declaration types, arithmetic, comparisons, booleans, input/output;
@@ -36,7 +36,8 @@ Product Trains 1 through 21 provide:
 - a source-level debugger over the production compiler/EMJBC/VM with deterministic source mappings, breakpoints, stepping, frames, locals/globals, value inspection, and source provenance diagnostics;
 - deterministic package discovery with `EMJREGDISC1`, stable/prerelease selection, package metadata, reverse dependencies, and human/JSON search views;
 - an explicit default-deny host capability model with EMJBC v8 verifier-bound authority metadata, filesystem/network/process/clock/random/host facilities, whole-program preflight, and sandboxed/deterministic execution modes;
-- a typed host/WASM interop layer with `🔌` imports, `📡` exports, deterministic `EMJABI1` value marshaling, verifier-visible EMJBC v9 metadata, capability-controlled adapters, and production-VM export invocation.
+- a typed host/WASM interop layer with `🔌` imports, `📡` exports, deterministic `EMJABI1` value marshaling, verifier-visible EMJBC v9 metadata, capability-controlled adapters, and production-VM export invocation;
+- low-level `EASM1` with statically typed `i64`/`f64`/`bool` registers, bounded `u8`/`i64`/`f64` buffers, verified control flow, fuel-bounded execution, explicit imports/exports, and a high-level/low-level ABI that composes through Train 21 rather than bypassing it.
 
 ## Package workflow
 
@@ -130,6 +131,9 @@ ctest --test-dir build --output-on-failure
 ./build/emojineer dump examples/collections.emoji
 ./build/emojineer capabilities examples/countdown.emoji
 ./build/emojineer interop examples/interop.emoji
+./build/emojineer easm-check examples/lowlevel.easm
+./build/emojineer easm-info examples/lowlevel.easm
+./build/emojineer easm-run examples/lowlevel.easm
 ./build/emojineer run app.emoji --grant filesystem
 ./build/emojineer run simulation.emoji --deterministic --grant clock --grant random --seed 7 --clock-ms 1000
 ./build/emojineer repl
@@ -154,6 +158,7 @@ Key references:
 - [`docs/PACKAGE_DISCOVERY.md`](docs/PACKAGE_DISCOVERY.md) — deterministic registry search/discovery and reverse dependencies;
 - [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) — default-deny runtime authority, native facilities, grants, sandbox, and deterministic execution;
 - [`docs/INTEROP.md`](docs/INTEROP.md) — typed host/WASM imports/exports, EMJABI1, adapter contracts, and verifier/runtime boundaries;
+- [`docs/EASM.md`](docs/EASM.md) — low-level EASM1 syntax, typed memory/registers, verifier/runtime rules, and Train 21 composition;
 - [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — landed and next product trains.
 
@@ -163,4 +168,4 @@ Emoji are extended grapheme clusters, not reliably one Unicode code point. Emoji
 
 ## Project direction
 
-Train 20 establishes the default-deny runtime authority boundary and EMJBC v8 capability contract. Train 21 builds the typed host/WASM interop layer on that boundary through EMJBC v9 and `EMJABI1`, without creating ambient host access or a second Emojineer interpreter. The next coherent product organ is low-level Emojineer / EASM, followed by semantic compression/macros, native compilation, and ongoing language evolution.
+Train 20 establishes the default-deny runtime authority boundary and EMJBC v8 capability contract. Train 21 builds the typed host/WASM interop layer on that boundary through EMJBC v9 and `EMJABI1`. Train 22 adds verified low-level `EASM1`, typed buffers/registers, and an ABI bridge that reuses Train 21 instead of creating ambient host access. The next product frontier is semantic compression/metaprogramming research, followed by native compilation and ongoing language evolution.

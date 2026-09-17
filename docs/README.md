@@ -17,6 +17,7 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 - [Package discovery](PACKAGE_DISCOVERY.md) - deterministic search, package metadata, release filtering, and reverse dependencies.
 - [Capability model and native facilities](CAPABILITIES.md) - default-deny host authority, grants, EMJBC binding, sandbox, and deterministic execution.
 - [Host/WASM interop](INTEROP.md) - typed imports/exports, deterministic EMJABI1 marshaling, adapter contracts, and VM export invocation.
+- [Low-level Emojineer / EASM](EASM.md) - EASM1 syntax, typed registers/buffers, verifier/runtime bounds, and Train 21 ABI composition.
 - [Product roadmap](ROADMAP.md) - landed and future product trains.
 
 ## Focused references
@@ -31,15 +32,16 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 ## Current implemented product level
 
-The compiler/toolchain reports Emojineer **0.21**. Product Trains **1 through 21** are implemented on this train.
+The compiler/toolchain reports Emojineer **0.22**. Product Trains **1 through 22** are implemented on this train.
 
-The product now includes the sovereign language/compiler/VM core; functions and collections; CER; REPL/source tooling; project workflow; modules; native standard modules; local and remote package dependency graphs; immutable `.emjpkg` artifacts; verified file/HTTPS registry reads; reproducible materialization and lock v3; authenticated HTTPS publication; native C++ LSP/editor integration; the source-level debugger; deterministic package search/discovery with stable/prerelease filtering and reverse-dependency queries; the default-deny capability/native-facility model with EMJBC v8 verifier/runtime enforcement; and typed host/WASM interop with verifier-visible EMJBC v9 imports/exports plus deterministic EMJABI1 marshaling.
+The product now includes the sovereign language/compiler/VM core; functions and collections; CER; REPL/source tooling; project workflow; modules; native standard modules; local and remote package dependency graphs; immutable `.emjpkg` artifacts; verified file/HTTPS registry reads; reproducible materialization and lock v3; authenticated HTTPS publication; native C++ LSP/editor integration; the source-level debugger; deterministic package search/discovery with stable/prerelease filtering and reverse-dependency queries; the default-deny capability/native-facility model with EMJBC v8 verifier/runtime enforcement; typed host/WASM interop with verifier-visible EMJBC v9 imports/exports plus deterministic EMJABI1 marshaling; and low-level `EASM1` with typed registers, bounded typed buffers, verifier-enforced control flow, fuel-bounded execution, and explicit composition through Train 21 adapters.
 
 The documentation describes implemented behavior unless a section is explicitly labeled as future work or as a historical train contract.
 
 ## File, module, package, and registry forms
 
 - `.emoji` - Emojineer UTF-8 source.
+- `.easm` - verified low-level `EASM1` text with typed registers, buffers, imports, functions, and exports.
 - `.emjbc` - serialized Emojineer bytecode; current writer v9 includes deterministic debug/provenance metadata, an exact verifier-bound required-capability mask, and typed interop import/export metadata.
 - `.emjpkg` - deterministic immutable package source artifact.
 - `emojineer.toml` - strict package/project manifest with local/path and registry dependency declarations.
@@ -54,4 +56,4 @@ The documentation describes implemented behavior unless a section is explicitly 
 - `EMJREGDISC1` - deterministic registry discovery index for package search metadata.
 - `emojineer.registry-search.v1`, `emojineer.registry-package-info.v1`, `emojineer.registry-dependents.v1` - deterministic discovery JSON schemas.
 
-Ordinary source compilation, LSP requests, and debugger source inspection do not contact registries. Registry networking remains explicit `emji` package-manager authority. Program execution begins with zero Train 20 host grants; native facilities and Train 21 interop adapters remain behind the same explicit execution policy and whole-program preflight. REPL/debugger execution uses the same production VM policy. Package discovery does not weaken immutable fetch/materialization verification or make transitive dependencies ambient imports.
+Ordinary source compilation, LSP requests, debugger source inspection, and EASM inspection do not contact registries. Registry networking remains explicit `emji` package-manager authority. Program execution begins with zero Train 20 host grants; native facilities, Train 21 interop adapters, and Train 22 EASM imports remain behind explicit execution policy and preflight. EASM exports cross into high-level Emojineer only through Train 21 `EMJABI1` bindings. REPL/debugger execution uses the same production VM policy. Package discovery does not weaken immutable fetch/materialization verification or make transitive dependencies ambient imports.

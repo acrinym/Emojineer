@@ -62,6 +62,12 @@ On first export invocation the VM initializes the chunk through its normal verif
 
 `emojineer interop <file.emoji|file.emjbc>` prints the verifier-visible import/export surface without executing the program. `emojineer capabilities` continues to report the complete authority union, now including capabilities required by interop calls. `disasm` shows v9 interop tables and `InteropCall` instructions.
 
+## Train 22 EASM composition
+
+Train 22 reuses this boundary for low-level code instead of adding a privileged host path. EASM imports invoke ordinary `InteropRegistry` bindings through `EMJABI1`, with exact capability-mask and deterministic-eligibility checks. An EASM export can be bound back into `InteropRegistry` with `bind_easm_export`; the exposed adapter's capability mask and deterministic flag are derived from the low-level imports that export actually calls.
+
+This means high-level `🔌` calls into EASM still pass through the same Train 21 binding/preflight contract. See [EASM.md](EASM.md).
+
 ## Boundary rule
 
-Train 21 is an explicit embedding boundary, not ambient FFI. An Emojineer program cannot discover or invoke arbitrary host functions. Only compiler-declared imports can emit `InteropCall`, only matching host bindings can satisfy them, and capability/binding preflight occurs before program effects.
+Train 21 is an explicit embedding boundary, not ambient FFI. An Emojineer program cannot discover or invoke arbitrary host functions. Only compiler-declared imports can emit `InteropCall`, only matching host bindings can satisfy them, and capability/binding preflight occurs before program effects. Train 22 EASM deliberately composes through this boundary rather than weakening it.

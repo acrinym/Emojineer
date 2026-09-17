@@ -1,0 +1,11 @@
+EASM1
+buffer scratch i64 4
+func main () -> i64 regs (i64,i64,i64)
+  i64.const r0 0
+  i64.const r1 21
+  buffer.store.i64 scratch r0 r1
+  buffer.load.i64 r2 scratch r0
+  i64.add r2 r2 r1
+  return r2
+end
+export main main

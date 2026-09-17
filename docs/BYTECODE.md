@@ -114,4 +114,4 @@ Default execution grants no native host capabilities. REPL and debugger executio
 
 ## Compatibility rule
 
-EMJBC advances when serialized representation or opcode compatibility requires it. Source-only language growth does not require a bytecode bump. Train 8 modules, for example, were resolved by the source linker without adding an opcode; Train 20 requires v8 because host calls and their verifier-bound authority contract are serialized semantics, and Train 21 requires v9 because typed interop imports/exports and `InteropCall` are serialized semantics.
+EMJBC advances when serialized representation or opcode compatibility requires it. Source-only or separately represented growth does not require a bytecode bump. Train 8 modules, for example, were resolved by the source linker without adding an opcode; Train 20 requires v8 because host calls and their verifier-bound authority contract are serialized semantics, and Train 21 requires v9 because typed interop imports/exports and `InteropCall` are serialized semantics. Train 22 `EASM1` is a separate verified low-level text representation that composes through Train 21 `EMJABI1`, so the EMJBC writer remains v9.

@@ -215,7 +215,7 @@ std::string https_get(const std::string& url) {
     curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, "Emojineer/0.21");
+    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, "Emojineer/0.22");
 #if LIBCURL_VERSION_NUM >= 0x075500
     curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS_STR, "https");
 #else

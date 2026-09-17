@@ -1,6 +1,6 @@
-# Emojineer Language Reference - v0.21
+# Emojineer Language Reference - v0.22
 
-Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The toolchain owns its lexer, AST, package-aware module linker, bytecode, VM, standard library, package workflow, and semantic evolution.
+Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The toolchain owns its lexer, AST, package-aware module linker, bytecode, VM, low-level EASM representation, standard library, package workflow, and semantic evolution.
 
 ```text
 UTF-8 .emoji
@@ -13,7 +13,7 @@ UTF-8 .emoji
   -> Emojineer VM
 ```
 
-This page describes the implemented language through Product Train 21. Package, registry, LSP, debugger, capability, and host/WASM interop details are split into focused references where appropriate.
+This page describes the implemented product through Product Train 22. Package, registry, LSP, debugger, capability, host/WASM interop, and low-level EASM details are split into focused references where appropriate.
 
 ## 1. Source files and Unicode
 
@@ -466,29 +466,34 @@ See [CER.md](CER.md).
 
 Current compile/runtime diagnostics cover malformed source, undefined symbols, arity mismatch, invalid module graphs, invalid package graphs, package-boundary violations, unknown standard modules, bytecode corruption, division/modulo by zero, invalid collection operations, input failure, stack/call-frame errors, fuel exhaustion, and type assertions.
 
-The language does not expose implicit filesystem, network, process, shell, host interop, or remote package-registry capabilities. Native facilities and Train 21 adapter calls are explicit, verifier-visible, and capability-preflighted; package-registry authority remains a separate `emji` tooling plane.
+The language does not expose implicit filesystem, network, process, shell, host interop, low-level host calls, or remote package-registry capabilities. Native facilities, Train 21 adapter calls, and Train 22 EASM imports are explicit and capability-preflighted; package-registry authority remains a separate `emji` tooling plane.
 
 ## 18. Bytecode and VM
 
 The current compiler writes `EMJBC` version 9. The reader supports versions 1 through 9. Bytecode is verified before execution and bounded against oversized constants, strings, function tables, instruction streams, source metadata, capability metadata, and Train 21 interop tables.
 
-Modules, stdlib source, and package-qualified imports are linked before bytecode generation, so Product Trains 8, 9, and 11 do not require an EMJBC format bump.
+Modules, stdlib source, and package-qualified imports are linked before bytecode generation, so Product Trains 8, 9, and 11 do not require an EMJBC format bump. Train 22 `EASM1` is a separately verified low-level representation that composes through Train 21 `EMJABI1`; it does not alter EMJBC v9.
 
 See [BYTECODE.md](BYTECODE.md) for the serialized format and VM contract.
 
 ## 19. Toolchain
 
-The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm/capabilities/interop plus `stdlib` for listing built-in standard modules. File-based compilation commands are package aware when their discovered module root contains `emojineer.toml`.
+The `emojineer` executable provides run/check/explain/fmt/lint/repl/compile/exec/dump/disasm/capabilities/interop, the Train 22 `easm-check`/`easm-dump`/`easm-info`/`easm-run` commands, plus `stdlib` for listing built-in standard modules. File-based `.emoji` compilation commands are package aware when their discovered module root contains `emojineer.toml`.
 
 `emji` provides project validation, local/registry dependency management, locking/materialization, immutable artifact operations, registry publication/fetch/discovery, and package graph inspection.
 
 See [CLI.md](CLI.md) and [PROJECTS.md](PROJECTS.md).
 
-## 20. Deliberate future work
+## 20. Low-level Emojineer / EASM
 
-Not yet implemented as of v0.21:
+Train 22 adds textual `EASM1` as a separately verified low-level representation with typed `i64`/`f64`/`bool` registers, bounded `u8`/`i64`/`f64` buffers, explicit branches/imports/exports, checked arithmetic and memory access, and instruction fuel. EASM imports use the existing Train 21 `InteropRegistry` and `EMJABI1` codec; EASM exports can be exposed back to high-level Emojineer only as ordinary Train 21 adapter bindings with derived capability/determinism contracts.
 
-- low-level Emojineer / EASM with typed buffers, memory, verifier boundaries, and a defined high-level/low-level ABI;
+See [EASM.md](EASM.md).
+
+## 21. Deliberate future work
+
+Not yet implemented as of v0.22:
+
 - records/user-defined structures, interfaces/protocols, richer error values, and pattern matching;
 - semantic-compression/macros with inspectable expansion into ordinary Emojineer semantics;
 - a native/LLVM backend with equivalence testing against the production VM.

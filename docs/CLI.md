@@ -1,6 +1,6 @@
 # Emojineer CLI and Toolchain
 
-Emojineer 0.21 builds three native C++ executables:
+Emojineer 0.22 builds three native C++ executables:
 
 - `emojineer` - source, bytecode, formatting, REPL, capability inspection, execution, and source-level debugging;
 - `emji` - project/package/registry workflow, authenticated publication, remote dependency sync, and package discovery;
@@ -34,6 +34,8 @@ emojineer exec <file.emjbc> [execution-policy]
 emojineer disasm <file.emjbc>
 emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]
 emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]
+emojineer <easm-check|easm-dump|easm-info> <file.easm>
+emojineer easm-run <file.easm> [execution-policy]
 ```
 
 File/project compilation uses the normal package-aware module linker. The debugger and REPL execute through the production VM, not alternate evaluators.
@@ -48,13 +50,15 @@ File/project compilation uses the normal package-aware module linker. The debugg
 --clock-ms <i64>
 ```
 
-`--grant` is repeatable. Runtime grants are accepted only by `run`, `exec`, `debug`, and `repl`. Compile/check/format/lint/disassembly/capability inspection, LSP work, and `emji` operations do not inherit program-runtime grants.
+`--grant` is repeatable. Runtime grants are accepted by `run`, `exec`, `debug`, `repl`, and `easm-run`. Compile/check/format/lint/disassembly/capability/interop/EASM inspection, LSP work, and `emji` operations do not inherit program-runtime grants.
 
 Default execution has no Train 20 host grants. `--sandbox` is hard zero-host-capability mode and rejects grants. `--deterministic` accepts only `clock` and `random`; `--seed` and `--clock-ms` configure their reproducible VM-local state. See [CAPABILITIES.md](CAPABILITIES.md).
 
 `capabilities` compiles source or reads EMJBC and reports the exact whole-program capability mask without executing it.
 
 `interop` compiles source or reads EMJBC and reports verifier-visible typed adapter imports and exported function surfaces without executing the program or accepting runtime grants. See [INTEROP.md](INTEROP.md).
+
+`easm-check` parses and verifies `EASM1`; `easm-dump` emits canonical reparsable EASM; `easm-info` reports typed buffers/imports/exports and authority requirements; `easm-run` invokes the no-argument export named `main`. The inspection commands reject execution-policy flags. `easm-run` accepts them, but the CLI intentionally supplies no ambient interop adapter registry. See [EASM.md](EASM.md).
 
 ## Core `emji` project workflow
 
@@ -127,6 +131,6 @@ JSON schemas are `emojineer.registry-search.v1`, `emojineer.registry-package-inf
 There are two deliberately separate authority planes:
 
 1. `emji` package-manager authority may perform explicit registry reads/publication without granting anything to programs.
-2. Emojineer VM authority starts empty and receives only explicit Train 20 execution grants; Train 21 adapter calls are checked against the same authority before instruction zero.
+2. Emojineer execution authority starts empty and receives only explicit Train 20 execution grants; Train 21 adapter calls and Train 22 EASM imports are preflighted against that authority before effects.
 
-Neither plane implicitly inherits the other. Imported dependencies contribute to the linked program's required capability mask, and the VM checks the entire mask before the first instruction executes.
+Neither plane implicitly inherits the other. Imported dependencies contribute to the linked high-level program's required capability mask. EASM computes its own verified import capability union and derives each exposed low-level export's adapter contract from the imports that export actually calls.
