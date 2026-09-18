@@ -1,0 +1,149 @@
+[train]
+name        = "emojineer_1_0_productization"
+title       = "Emojineer 1.0 Productization Arc"
+description = """
+Turn the post-0.22 sovereign language engine into a product a new user can
+install, learn, use, share, and trust. The 1.0 arc covers distribution,
+editor UX, practical application semantics, bytes/encoding, onboarding,
+browser execution, native Emojineer web markup, and release hardening.
+
+Retro profiles/targets remain a future domain unless portability requires
+specific groundwork. Emoji Stories and breakable physical-note secret-code
+schemes are explicitly reserved for Emojineer 2.0/post-1.0.
+"""
+created     = "2026-09-18"
+status      = "planned"
+
+[[cars]]
+id             = "product_contract"
+bead           = "emj-qmg.1"
+title          = "Define the Emojineer 1.0 product contract and domain boundary"
+parallel_start = true
+depends_on     = []
+summary        = """
+Define the install-to-first-program user journey, supported platforms,
+compatibility promises, 1.0 in-scope domains, explicit non-goals, and the
+2.0 Emoji Stories reservation. Make the roadmap and product contract agree.
+"""
+[[cars]]
+id             = "distribution"
+bead           = "emj-qmg.2"
+title          = "Ship installable cross-platform Emojineer distributions"
+parallel_start = true
+depends_on     = ["product_contract"]
+summary        = """
+Build repeatable Windows/Linux/macOS release artifacts around emojineer,
+emji, and emojineer-lsp with checksums, release metadata, PATH/install smoke
+tests, clean uninstall/cleanup checks, and signing hooks that do not require
+secrets for local qualification.
+"""
+
+[[cars]]
+id             = "editor_experience"
+bead           = "emj-qmg.3"
+title          = "Package the Emojineer editor experience"
+parallel_start = true
+depends_on     = ["product_contract"]
+summary        = """
+Package the production LSP for VS Code/Cursor-compatible use with semantic
+presentation, run/check/fmt/debug commands, accessibility text, and a
+searchable semantic palette that inserts canonical emoji tokens without
+creating an ASCII source dialect.
+"""
+[[cars]]
+id             = "practical_data_model"
+bead           = "emj-qmg.4"
+title          = "Close practical application data-model gaps"
+parallel_start = true
+depends_on     = ["product_contract"]
+summary        = """
+Land the smallest coherent ordinary-language data model needed for real
+programs: named records/structures, keyed values, and richer explicit
+error/result semantics, integrated through parser/compiler/VM/bytecode,
+tooling, packages, and compatibility tests.
+"""
+
+[[cars]]
+id             = "practical_host_io"
+bead           = "emj-qmg.5"
+title          = "Close practical CLI and host-I/O gaps"
+parallel_start = true
+depends_on     = ["product_contract"]
+summary        = """
+Extend the existing default-deny capability model so normal programs can
+receive command-line arguments and perform the minimum filesystem write,
+directory, and richer network request operations needed by useful CLI tools
+without adding ambient authority or weakening sandbox/deterministic truth.
+"""
+[[cars]]
+id             = "encoding"
+bead           = "emj-qmg.6"
+title          = "Add first-class bytes and encoding utilities"
+parallel_start = true
+depends_on     = ["product_contract"]
+summary        = """
+Add a bounded bytes/text boundary plus explicit codecs and malformed-input
+semantics, with Unicode/grapheme round-trip coverage. Encoding is a 1.0
+domain; Emoji Stories and secret-note codecs are explicitly not implemented
+by this car.
+"""
+
+[[cars]]
+id             = "learning"
+bead           = "emj-qmg.7"
+title          = "Build the five-minute tour, templates, and real example corpus"
+parallel_start = false
+depends_on     = ["distribution", "editor_experience", "practical_data_model", "practical_host_io", "encoding"]
+summary        = """
+Create an Install -> five-minute tour -> first project -> package use ->
+reference path, useful emji init templates, and executable examples covering
+real CLI/data/game/network/package work plus CER, interop, and EASM.
+"""
+[[cars]]
+id             = "browser_playground"
+bead           = "emj-qmg.8"
+title          = "Deliver the browser playground and universal try-it path"
+parallel_start = true
+depends_on     = ["distribution", "practical_data_model", "practical_host_io", "encoding"]
+summary        = """
+Provide a no-install browser playground that runs real sovereign Emojineer
+semantics rather than a JavaScript reimplementation, with sandboxed execution,
+stdout/diagnostics, curated examples, reproducible sharing, and VM/browser
+equivalence tests.
+"""
+
+[[cars]]
+id             = "web_markup"
+bead           = "emj-qmg.9"
+title          = "Design and build Emojineer-native web markup"
+parallel_start = false
+depends_on     = ["browser_playground", "practical_data_model", "practical_host_io", "encoding"]
+summary        = """
+Define a typed document/DOM IR first, then native emoji markup that lowers to
+semantic accessible web output. Emojineer source is the markup itself, not
+front matter around HTML; interactive behavior uses explicit browser host ABI
+surfaces instead of becoming a hidden JavaScript dialect.
+"""
+[[cars]]
+id             = "release_hardening"
+bead           = "emj-qmg.10"
+title          = "Qualify Emojineer 1.0 release readiness"
+parallel_start = false
+depends_on     = ["distribution", "editor_experience", "practical_data_model", "practical_host_io", "encoding", "learning", "browser_playground", "web_markup"]
+summary        = """
+Freeze feature work and prove the complete 1.0 product: compatibility policy,
+old artifact/bytecode behavior, hostile-input or fuzz coverage, clean
+Windows/Linux/macOS installs, editor/playground/web/package/debugger/runtime
+journeys, representative applications, release notes, and upgrade guidance.
+"""
+
+[meta]
+one_liner = "Turn Emojineer 0.22 into an installable, learnable, practical, browser-capable, web-authoring product and qualify 1.0."
+prior_car = "Train 22 — Low-level Emojineer / EASM landed via PR #30 at main b1dbfe3f8738a70f14282aec8cc63c8c6bfb7cd3."
+watch = """
+Do not create a new Git worktree without Justin's explicit confirmation.
+Do not pull Emoji Stories or physical-note secret coding into 1.0.
+Do not fake browser execution with a second language implementation.
+Preserve sovereign compiler/runtime semantics, default-deny authority,
+package provenance, and exact-state qualification across the train.
+"""
