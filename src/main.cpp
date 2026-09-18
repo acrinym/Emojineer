@@ -3,6 +3,7 @@
 #include "emojineer/cer.hpp"
 #include "emojineer/debugger.hpp"
 #include "emojineer/disassembler.hpp"
+#include "emojineer/easm.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/module.hpp"
 #include "emojineer/interop.hpp"
@@ -51,7 +52,7 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.21\n"
+        << "Emojineer 0.22\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...] [execution-policy]\n"
         << "  emojineer stdlib\n"
@@ -64,6 +65,8 @@ void usage() {
         << "  emojineer disasm <file.emjbc>\n"
         << "  emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]\n"
         << "  emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]\n"
+        << "  emojineer <easm-check|easm-dump|easm-info> <file.easm>\n"
+        << "  emojineer easm-run <file.easm> [execution-policy]\n"
         << "execution-policy:\n"
         << "  --grant <filesystem|network|process|clock|random|host|all>  repeatable\n"
         << "  --sandbox                 hard zero-host-authority mode\n"
@@ -200,6 +203,37 @@ void print_interop_contract(const emojineer::Chunk& chunk) {
     }
 }
 
+std::string render_easm_signature(const std::vector<emojineer::EasmScalarType>& parameters,
+                                  emojineer::EasmScalarType result) {
+    std::string out = "(";
+    for (std::size_t i = 0; i < parameters.size(); ++i) {
+        if (i) out += ", ";
+        out += emojineer::easm_scalar_type_name(parameters[i]);
+    }
+    out += ") -> ";
+    out += emojineer::easm_scalar_type_name(result);
+    return out;
+}
+
+void print_easm_info(const emojineer::EasmProgram& program) {
+    std::cout << "required capabilities: " << emojineer::capability_mask_string(program.required_capabilities) << '\n';
+    std::cout << "buffers: " << program.buffers.size() << '\n';
+    for (const auto& buffer : program.buffers)
+        std::cout << "  " << buffer.name << ' ' << emojineer::easm_buffer_type_name(buffer.type) << '[' << buffer.elements << "]\n";
+    std::cout << "imports: " << program.imports.size() << '\n';
+    for (const auto& import : program.imports)
+        std::cout << "  " << import.internal_name << " -> " << import.external_name << ' ' << render_easm_signature(import.parameters, import.result) << " capabilities=" << emojineer::capability_mask_string(import.required_capabilities) << '\n';
+    std::cout << "exports: " << program.exports.size() << '\n';
+    for (const auto& export_info : program.exports) {
+        const auto& function = program.functions.at(export_info.function_index);
+        std::cout << "  " << export_info.external_name << " <- " << function.name << ' ' << render_easm_signature(function.parameters, function.result) << " capabilities=" << emojineer::capability_mask_string(emojineer::easm_export_capabilities(program, export_info.external_name)) << '\n';
+    }
+}
+
+std::string easm_scalar_string(const emojineer::EasmScalar& scalar) {
+    return std::visit([](const auto& value) { return emojineer::value_to_string(emojineer::Value{value}); }, scalar);
+}
+
 emojineer::Chunk read_chunk(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     if (!input) throw std::runtime_error("cannot open '" + path.string() + "'");
@@ -229,6 +263,31 @@ int main(int argc, char** argv) {
         }
 
         if (!cli.input) throw std::runtime_error("missing input");
+
+        if (cli.command == "easm-check" || cli.command == "easm-dump" ||
+            cli.command == "easm-info" || cli.command == "easm-run") {
+            if (!cli.cer.empty() || cli.output)
+                throw std::runtime_error(cli.command + " does not accept source CER or -o options");
+            auto program = emojineer::parse_easm(read_text(*cli.input));
+            if (cli.command == "easm-check") {
+                reject_execution_policy_options(cli, "easm-check");
+                std::cout << "✅ " << cli.input->string() << " is valid EASM1\n";
+                return 0;
+            }
+            if (cli.command == "easm-dump") {
+                reject_execution_policy_options(cli, "easm-dump");
+                std::cout << emojineer::render_easm(program);
+                return 0;
+            }
+            if (cli.command == "easm-info") {
+                reject_execution_policy_options(cli, "easm-info");
+                print_easm_info(program);
+                return 0;
+            }
+            emojineer::EasmVM vm(execution_policy_for(cli));
+            std::cout << easm_scalar_string(vm.invoke_export(program, "main", {})) << '\n';
+            return 0;
+        }
 
         if (cli.command == "exec" || cli.command == "disasm") {
             if (!cli.cer.empty() || cli.output) {

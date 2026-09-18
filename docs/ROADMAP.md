@@ -207,17 +207,28 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - dedicated C++ and real-CLI tests cover v9 round-trip, forged metadata, zero-effect denial, deterministic adapters, ABI bounds/failures, dependency authority propagation, and direct/ABI equivalence;
 - no second Emojineer interpreter and no ambient host authority.
 
-## Next product train
-
 ### Train 22 — Low-level Emojineer / EASM
 
-Define typed buffers/memory, a low-level instruction representation, verifier/sandbox boundaries, and a high-level/low-level ABI that composes with Train 21 instead of bypassing it.
+- textual `EASM1` low-level representation with strict parsing and canonical reparsable rendering;
+- statically typed `i64`, `f64`, and `bool` register files plus explicit typed function signatures;
+- bounded zero-initialized `u8`, `i64`, and `f64` buffers with checked indexing and typed load/store instructions;
+- checked signed-integer arithmetic, finite floating-point operations, typed comparisons, labels/branches, returns, and instruction fuel;
+- verifier enforcement for table/memory/register/instruction bounds, register/opcode typing, jump targets, import signatures, export targets, and exact inferred capability metadata;
+- explicit low-level imports through the existing Train 21 `InteropRegistry` and deterministic `EMJABI1` codec rather than direct host callbacks;
+- per-export capability and deterministic eligibility derived from the imports actually called by that export;
+- `bind_easm_export` exposes low-level exports back to high-level Emojineer as ordinary Train 21 adapters, preserving outer capability/binding preflight;
+- strict locale-independent numeric parsing and exact binary64 canonical round-tripping;
+- `emojineer easm-check`, `easm-dump`, `easm-info`, and `easm-run`, plus a real `.easm` example;
+- dedicated C++ and real-CLI acceptance tests cover typed memory, control flow/fuel, verifier failures, zero-effect authority denial, determinism propagation, high-level→EASM ABI composition, capability-contract mismatch, numeric bounds, and direct/ABI equivalence;
+- no EMJBC bump, ambient FFI, raw-pointer exposure, direct syscall surface, or second high-level Emojineer implementation.
+
+## Next product train
+
+### Train 23 — Semantic compression and metaprogramming research
+
+Carefully specify macro/semantic-compression mechanisms inspired by earlier SCL ideas. Expansion should produce ordinary Emojineer semantics and remain inspectable by tooling.
 
 ## Later product trains
-
-### Semantic compression and metaprogramming research
-
-Carefully specified macro/semantic-compression mechanisms inspired by earlier SCL ideas. Expansion should produce ordinary Emojineer semantics and remain inspectable by tooling.
 
 ### Native backend
 
