@@ -101,6 +101,7 @@ jobs:
         run: |
           cd packages
           for f in *; do
+            [ -f "$f" ] || continue
             case "$f" in
               *.sha256) ;;
               *) cmake -E sha256sum "$f" > "$f.sha256" ;;
