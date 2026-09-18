@@ -154,34 +154,24 @@ Validation includes strict manifest parsing, root entry-file existence/package-a
 
 Package graph failures and source-module cycle failures remain distinct layers.
 
-## Deterministic lockfile v2
+## Deterministic lockfile v3
 
 ```text
 emji lock
 emji lock path/to/project
+emji sync
 ```
 
-v0.14 continues to write local/path lock format 2:
+The current writer emits lock format 3 for both path and registry dependencies.
+Records are deterministic, sorted, and timestamp-free. Path records carry
+checkout-relative paths and content SHA-256. Registry records additionally bind
+the registry identity/endpoint, requested version range, selected exact version,
+content SHA-256, artifact SHA-256, materialized store path, and dependency edges.
 
-```text
-lock_version = 2
-manifest_hash = "..."
-package = "signal_lab"
-version = "0.1.0"
-entry = "src/main.emoji"
-dependency_count = 1
-
-[[dependency]]
-name = "mathkit"
-version = "0.4.0"
-path = "../mathkit"
-content_sha256 = "..."
-dependencies = ""
-```
-
-Records are deterministic, sorted, checkout-relative, and timestamp-free. `manifest_hash` remains FNV-1a-64 as a drift marker; dependency content is pinned by SHA-256.
-
-Registry locking is **not** encoded into this format yet. Train 15 must carry source kind, registry endpoint/identity, requirement, selected version, content SHA-256, artifact SHA-256, and dependency edges together rather than overloading local-path records ambiguously.
+Format-2 locks were a pre-registry development format. They are not part of the
+1.x portability promise; regenerate them with `emji lock` or `emji sync`.
+See [REMOTE_DEPENDENCIES.md](REMOTE_DEPENDENCIES.md) and
+[COMPATIBILITY_1_X.md](COMPATIBILITY_1_X.md).
 
 ## Relationship between projects, modules, artifacts, and registries
 

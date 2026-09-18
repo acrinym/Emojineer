@@ -1281,7 +1281,12 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
             }
         }
     }
-    
+
+    if (lock.version != "3") {
+        const auto shown = lock.version.empty() ? std::string("<missing>") : lock.version;
+        throw std::runtime_error("unsupported project lock format " + shown +
+                                 "; regenerate with emji lock or emji sync");
+    }
     return lock;
 }
 

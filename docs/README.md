@@ -25,6 +25,10 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 - [Host/WASM interop](INTEROP.md) - typed imports/exports, deterministic EMJABI1 marshaling, adapter contracts, and VM export invocation.
 - [Low-level Emojineer / EASM](EASM.md) - EASM1 syntax, typed registers/buffers, verifier/runtime bounds, and Train 21 ABI composition.
 - [Emojineer 1.0 product contract](PRODUCT_1_0_CONTRACT.md) - install-to-first-program goals, compatibility promises, 1.0 domains, and explicit non-goals.
+- [1.x compatibility policy](COMPATIBILITY_1_X.md) - frozen source, EMJBC, package, capability, ABI, EASM, and registry compatibility rules.
+- [1.0 release notes](RELEASE_NOTES_1_0.md) - release-candidate feature and compatibility summary.
+- [Upgrading to 1.0](UPGRADING_TO_1_0.md) - project/lock, bytecode, capability, tooling, and deployment migration checklist.
+- [1.0 release readiness](RELEASE_READINESS.md) - Car 10 qualification evidence and remaining release blockers.
 - [Product roadmap](ROADMAP.md) - landed and future product trains.
 
 ## Focused references

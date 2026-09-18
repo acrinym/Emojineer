@@ -1,6 +1,7 @@
 name: release-packages
 
 on:
+  pull_request:
   workflow_dispatch:
   push:
     tags:
@@ -25,6 +26,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify release metadata and 1.x license gate
+        shell: bash
+        run: |
+          args=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            args+=(--tag "$GITHUB_REF_NAME")
+          fi
+          python scripts/release/verify-release-metadata.py "${args[@]}"
 
       - name: Install Linux dependencies
         if: matrix.triplet == 'linux'

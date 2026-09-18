@@ -168,6 +168,9 @@ if(BUILD_TESTING)
  add_executable(emojineer_web_tests tests/web_tests.cpp)
  target_link_libraries(emojineer_web_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_web_tests COMMAND emojineer_web_tests)
+ add_executable(emojineer_release_hardening_tests tests/release_hardening_tests.cpp)
+ target_link_libraries(emojineer_release_hardening_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_release_hardening_tests COMMAND emojineer_release_hardening_tests)
  add_test(NAME emojineer_capability_cli
           COMMAND ${CMAKE_COMMAND}
                   -DEMOJINEER=$<TARGET_FILE:emojineer>
