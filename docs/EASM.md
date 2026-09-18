@@ -2,7 +2,7 @@
 
 Train 22 adds `EASM1`, a verified low-level representation for explicit scalar registers, bounded typed buffers, control flow, and typed host imports. EASM is not a second high-level Emojineer language and does not bypass Train 20/21 authority. High-level `.emoji` source still compiles to EMJBC and runs on the production Emojineer VM.
 
-EASM is currently a textual `.easm` representation. Train 22 does **not** change EMJBC, so the current EMJBC writer remains version 9.
+EASM is currently a textual `.easm` representation. Train 22 itself did **not** change EMJBC; its landing writer was v9. The later 1.0 practical-runtime foundation advances the ordinary Emojineer writer to v10, while EASM remains a separate verified representation that composes through EMJABI1.
 
 ## File structure
 

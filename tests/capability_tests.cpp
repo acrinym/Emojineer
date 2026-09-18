@@ -76,13 +76,16 @@ void test_intrinsic_compilation_and_mask() {
         "📝 ⚙️ 🫴 📜true📜 🤲\n"
         "📝 🕰️ 🫴 🤲\n"
         "📝 🎲 🫴 10 🤲\n"
-        "📝 🖥️ 🫴 📜PATH📜 🤲\n");
+        "📝 🖥️ 🫴 📜PATH📜 🤲\n"
+        "📝 ✍️ 🫴 📜out.txt📜 📜x📜 🤲\n"
+        "📝 📁 🫴 📜out-dir📜 🤲\n"
+        "📝 🛰️ 🫴 📜POST📜 📜https://example.test📜 📜x📜 🤲\n");
     require(chunk.required_capabilities == emojineer::all_capabilities_mask(),
             "all native facilities should produce the full required-capability mask");
     std::size_t host_calls = 0;
     for (const auto& instruction : chunk.code)
         if (instruction.op == emojineer::OpCode::HostCall) ++host_calls;
-    require(host_calls == 6, "each native facility should lower to HostCall");
+    require(host_calls == 9, "each native facility should lower to HostCall");
     require(emojineer::capability_mask_string(chunk.required_capabilities) ==
                 "filesystem, network, process, clock, random, host",
             "capability rendering should be deterministic");
@@ -103,13 +106,23 @@ void test_bytecode_current_version_and_verifier_binding() {
     emojineer::write_bytecode(chunk, encoded);
     const auto bytes = encoded.str();
     require(bytes.size() > 7, "encoded bytecode should contain a header");
-    require(static_cast<unsigned char>(bytes[5]) == 9 && static_cast<unsigned char>(bytes[6]) == 0,
-            "current bytecode writer should emit EMJBC v9");
+    require(static_cast<unsigned char>(bytes[5]) == 10 && static_cast<unsigned char>(bytes[6]) == 0,
+            "current bytecode writer should emit EMJBC v10");
 
     std::istringstream input(bytes, std::ios::binary);
     const auto decoded = emojineer::read_bytecode(input);
     require(decoded.required_capabilities == emojineer::capability_mask(emojineer::Capability::Clock),
             "current round-trip should preserve required capabilities");
+
+    auto v10_facility = compile_text("📝 📁 🫴 📜compat-dir📜 🤲\n");
+    std::ostringstream v10_encoded(std::ios::binary);
+    emojineer::write_bytecode(v10_facility, v10_encoded);
+    auto forged_v9 = v10_encoded.str();
+    forged_v9[5] = 9;
+    forged_v9[6] = 0;
+    std::istringstream forged_v9_input(forged_v9, std::ios::binary);
+    expect_error([&] { (void)emojineer::read_bytecode(forged_v9_input); },
+                 "native facility operand is not available in this bytecode version");
 
     auto dishonest = chunk;
     dishonest.required_capabilities = 0;

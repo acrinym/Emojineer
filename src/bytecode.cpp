@@ -1,6 +1,7 @@
 #include "emojineer/bytecode.hpp"
 #include "emojineer/capability.hpp"
 #include "emojineer/interop.hpp"
+#include "emojineer/intrinsic.hpp"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -15,7 +16,7 @@
 #include <stdexcept>
 #include <unordered_set>
 namespace emojineer { namespace {
-constexpr char Magic[]={'E','M','J','B','C'};constexpr std::uint16_t CurrentVersion=9;constexpr std::uint32_t MaxConstants=1'000'000,MaxFunctions=100'000,MaxInstructions=10'000'000,MaxStringBytes=64*1024*1024,MaxSourceFiles=1'000'000,MaxInteropEntries=100'000,MaxInteropParameters=1024;
+constexpr char Magic[]={'E','M','J','B','C'};constexpr std::uint16_t CurrentVersion=10;constexpr std::uint32_t MaxConstants=1'000'000,MaxFunctions=100'000,MaxInstructions=10'000'000,MaxStringBytes=64*1024*1024,MaxSourceFiles=1'000'000,MaxInteropEntries=100'000,MaxInteropParameters=1024;
 void write_u8(std::ostream&o,std::uint8_t v){o.put(static_cast<char>(v));if(!o)throw std::runtime_error("failed to write bytecode");}void write_u16(std::ostream&o,std::uint16_t v){write_u8(o,v&255);write_u8(o,(v>>8)&255);}void write_u32(std::ostream&o,std::uint32_t v){for(unsigned s=0;s<32;s+=8)write_u8(o,(v>>s)&255);}void write_u64(std::ostream&o,std::uint64_t v){for(unsigned s=0;s<64;s+=8)write_u8(o,(v>>s)&255);}std::uint8_t read_u8(std::istream&i){int v=i.get();if(v==std::char_traits<char>::eof())throw std::runtime_error("truncated bytecode");return static_cast<std::uint8_t>(v);}std::uint16_t read_u16(std::istream&i){return static_cast<std::uint16_t>(read_u8(i))|static_cast<std::uint16_t>(read_u8(i)<<8);}std::uint32_t read_u32(std::istream&i){std::uint32_t v=0;for(unsigned s=0;s<32;s+=8)v|=static_cast<std::uint32_t>(read_u8(i))<<s;return v;}std::uint64_t read_u64(std::istream&i){std::uint64_t v=0;for(unsigned s=0;s<64;s+=8)v|=static_cast<std::uint64_t>(read_u8(i))<<s;return v;}
 void write_string(std::ostream&o,const std::string&v){if(v.size()>MaxStringBytes)throw std::runtime_error("string too large for bytecode");write_u32(o,static_cast<std::uint32_t>(v.size()));o.write(v.data(),static_cast<std::streamsize>(v.size()));if(!o)throw std::runtime_error("failed to write bytecode string");}std::string read_string(std::istream&i){auto n=read_u32(i);if(n>MaxStringBytes)throw std::runtime_error("bytecode string exceeds safety limit");std::string v(n,'\0');i.read(v.data(),static_cast<std::streamsize>(n));if(!i)throw std::runtime_error("truncated bytecode string");return v;}
 OpCode decode_v1(std::uint8_t raw){switch(raw){case 0:return OpCode::Constant;case 1:return OpCode::LoadGlobal;case 2:return OpCode::StoreGlobal;case 3:return OpCode::AssertNumber;case 4:return OpCode::AssertString;case 5:return OpCode::AssertBool;case 6:return OpCode::Add;case 7:return OpCode::Subtract;case 8:return OpCode::Multiply;case 9:return OpCode::Divide;case 10:return OpCode::Modulo;case 11:return OpCode::AddInt;case 12:return OpCode::SubtractInt;case 13:return OpCode::MultiplyInt;case 14:return OpCode::Equal;case 15:return OpCode::Less;case 16:return OpCode::Greater;case 17:return OpCode::Negate;case 18:return OpCode::Not;case 19:return OpCode::ReadLine;case 20:return OpCode::Print;case 21:return OpCode::JumpIfFalse;case 22:return OpCode::Jump;case 23:return OpCode::Halt;default:throw std::runtime_error("invalid opcode in v1 bytecode");}}
@@ -62,14 +63,18 @@ InteropSignature read_signature(std::istream& input) {
     return signature;
 }
 std::string array_to_string(const ArrayPtr&a){if(!a)return"<null-array>";std::ostringstream o;o<<'[';for(std::size_t i=0;i<a->elements.size();++i){if(i)o<<", ";o<<value_to_string(a->elements[i]);}o<<']';return o.str();}
+std::string record_to_string(const RecordPtr&r){if(!r)return"<null-record>";std::ostringstream o;o<<r->type_name<<'{';bool first=true;for(const auto&[key,value]:r->fields){if(!first)o<<", ";first=false;o<<key<<": "<<value_to_string(value);}o<<'}';return o.str();}
+std::string result_to_string(const ResultPtr&r){if(!r)return"<null-result>";return std::string(r->ok?"ok(":"error(")+value_to_string(r->payload)+')';}
+std::string bytes_to_string(const BytesPtr&b){if(!b)return"<null-bytes>";std::ostringstream o;o<<"bytes["<<std::hex<<std::setfill('0');for(std::size_t i=0;i<b->bytes.size();++i){if(i)o<<' ';o<<std::setw(2)<<static_cast<unsigned>(b->bytes[i]);}o<<']';return o.str();}
 } // namespace
-std::int32_t Chunk::add_constant(Value value){if(constants.size()>=MaxConstants)throw std::runtime_error("too many constants");if(std::holds_alternative<ArrayPtr>(value))throw std::runtime_error("arrays cannot be stored in the bytecode constant pool");constants.push_back(std::move(value));return static_cast<std::int32_t>(constants.size()-1);}
+std::int32_t Chunk::add_constant(Value value){if(constants.size()>=MaxConstants)throw std::runtime_error("too many constants");if(std::holds_alternative<ArrayPtr>(value)||std::holds_alternative<RecordPtr>(value)||std::holds_alternative<ResultPtr>(value)||std::holds_alternative<BytesPtr>(value))throw std::runtime_error("compound values cannot be stored in the bytecode constant pool");constants.push_back(std::move(value));return static_cast<std::int32_t>(constants.size()-1);}
 void verify_bytecode(const Chunk& c) {
     if (c.constants.size() > MaxConstants || c.functions.size() > MaxFunctions || c.code.size() > MaxInstructions)
         throw std::runtime_error("bytecode exceeds safety limit");
     for (const auto& value : c.constants)
-        if (std::holds_alternative<ArrayPtr>(value))
-            throw std::runtime_error("array found in bytecode constant pool");
+        if (std::holds_alternative<ArrayPtr>(value) || std::holds_alternative<RecordPtr>(value) ||
+            std::holds_alternative<ResultPtr>(value) || std::holds_alternative<BytesPtr>(value))
+            throw std::runtime_error("compound value found in bytecode constant pool");
 
     std::unordered_set<std::string> names;
     for (const auto& f : c.functions) {
@@ -148,6 +153,10 @@ void verify_bytecode(const Chunk& c) {
                     throw std::runtime_error("invalid interop import operand");
                 inferred_capabilities |= c.interop_imports[static_cast<std::size_t>(ins.operand)].required_capabilities;
                 break;
+            case OpCode::IntrinsicCall:
+                if (!intrinsic_from_operand(ins.operand))
+                    throw std::runtime_error("invalid intrinsic operand");
+                break;
             default:
                 break;
         }
@@ -186,7 +195,7 @@ void write_bytecode(const Chunk& c, std::ostream& o) {
     write_u32(o, static_cast<std::uint32_t>(c.constants.size()));
     for (const auto& v : c.constants) {
         if (auto* n = std::get_if<double>(&v)) { write_u8(o, 1); write_u64(o, std::bit_cast<std::uint64_t>(*n)); }
-        else if (auto* integer = std::get_if<std::int64_t>(&v)) { write_u8(o, 4); write_u64(o, static_cast<std::uint64_t>(*integer)); }
+        else if (auto* integer = std::get_if<std::int64_t>(&v)) { write_u8(o, 4); write_u64(o, std::bit_cast<std::uint64_t>(*integer)); }
         else if (auto* b = std::get_if<bool>(&v)) { write_u8(o, 2); write_u8(o, *b ? 1 : 0); }
         else if (auto* s = std::get_if<std::string>(&v)) { write_u8(o, 3); write_string(o, *s); }
         else throw std::runtime_error("unsupported constant value in bytecode");
@@ -247,7 +256,7 @@ Chunk read_bytecode(std::istream& i) {
             case 1: c.constants.emplace_back(std::bit_cast<double>(read_u64(i))); break;
             case 2: { auto b = read_u8(i); if (b > 1) throw std::runtime_error("invalid boolean constant in bytecode"); c.constants.emplace_back(b != 0); break; }
             case 3: c.constants.emplace_back(read_string(i)); break;
-            case 4: c.constants.emplace_back(static_cast<std::int64_t>(read_u64(i))); break;
+            case 4: c.constants.emplace_back(std::bit_cast<std::int64_t>(read_u64(i))); break;
             default: throw std::runtime_error("invalid constant tag in bytecode");
         }
     }
@@ -281,11 +290,17 @@ Chunk read_bytecode(std::istream& i) {
             const auto max = version == 2 ? static_cast<std::uint8_t>(OpCode::Halt)
                 : (version <= 7 ? static_cast<std::uint8_t>(OpCode::SetIndex)
                    : (version == 8 ? static_cast<std::uint8_t>(OpCode::HostCall)
-                                   : static_cast<std::uint8_t>(OpCode::InteropCall)));
+                      : (version == 9 ? static_cast<std::uint8_t>(OpCode::InteropCall)
+                                      : static_cast<std::uint8_t>(OpCode::IntrinsicCall))));
             if (raw > max) throw std::runtime_error("invalid opcode in bytecode");
             op = static_cast<OpCode>(raw);
         }
-        c.code.push_back({op, std::bit_cast<std::int32_t>(read_u32(i)), read_u32(i)});
+        const auto operand = std::bit_cast<std::int32_t>(read_u32(i));
+        const auto line = read_u32(i);
+        if (version < 10 && op == OpCode::HostCall &&
+            operand > static_cast<std::int32_t>(NativeFacility::HostEnvironment))
+            throw std::runtime_error("native facility operand is not available in this bytecode version");
+        c.code.push_back({op, operand, line});
     }
 
     // v6 has exact ranges/context; v4-v5 degrade deterministically to point locations.
@@ -341,7 +356,7 @@ Chunk read_bytecode(std::istream& i) {
     verify_bytecode(c);
     return c;
 }
-std::string opcode_name(OpCode op){switch(op){case OpCode::Constant:return"Constant";case OpCode::LoadGlobal:return"LoadGlobal";case OpCode::StoreGlobal:return"StoreGlobal";case OpCode::LoadLocal:return"LoadLocal";case OpCode::StoreLocal:return"StoreLocal";case OpCode::AssertNumber:return"AssertNumber";case OpCode::AssertString:return"AssertString";case OpCode::AssertBool:return"AssertBool";case OpCode::Add:return"Add";case OpCode::Subtract:return"Subtract";case OpCode::Multiply:return"Multiply";case OpCode::Divide:return"Divide";case OpCode::Modulo:return"Modulo";case OpCode::AddInt:return"AddInt";case OpCode::SubtractInt:return"SubtractInt";case OpCode::MultiplyInt:return"MultiplyInt";case OpCode::Equal:return"Equal";case OpCode::Less:return"Less";case OpCode::Greater:return"Greater";case OpCode::Negate:return"Negate";case OpCode::Not:return"Not";case OpCode::ReadLine:return"ReadLine";case OpCode::Print:return"Print";case OpCode::JumpIfFalse:return"JumpIfFalse";case OpCode::Jump:return"Jump";case OpCode::Call:return"Call";case OpCode::Return:return"Return";case OpCode::Halt:return"Halt";case OpCode::AssertArray:return"AssertArray";case OpCode::MakeArray:return"MakeArray";case OpCode::Index:return"Index";case OpCode::Length:return"Length";case OpCode::Append:return"Append";case OpCode::SetIndex:return"SetIndex";case OpCode::HostCall:return"HostCall";case OpCode::InteropCall:return"InteropCall";}return"Unknown";}
-std::string value_to_string(const Value&v){if(auto*n=std::get_if<double>(&v)){std::ostringstream o;if(std::isfinite(*n)&&std::floor(*n)==*n)o<<std::fixed<<std::setprecision(0)<<*n;else o<<std::setprecision(15)<<*n;return o.str();}if(auto*i=std::get_if<std::int64_t>(&v))return std::to_string(*i);if(auto*b=std::get_if<bool>(&v))return*b?"✅":"❌";if(auto*s=std::get_if<std::string>(&v))return*s;return array_to_string(std::get<ArrayPtr>(v));}
-bool values_equal(const Value&a,const Value&b){if(a.index()!=b.index())return false;if(auto*x=std::get_if<std::int64_t>(&a))return*x==std::get<std::int64_t>(b);if(auto*x=std::get_if<double>(&a))return*x==std::get<double>(b);if(auto*x=std::get_if<bool>(&a))return*x==std::get<bool>(b);if(auto*x=std::get_if<std::string>(&a))return*x==std::get<std::string>(b);auto x=std::get<ArrayPtr>(a),y=std::get<ArrayPtr>(b);if(!x||!y)return x==y;if(x->elements.size()!=y->elements.size())return false;for(std::size_t i=0;i<x->elements.size();++i)if(!values_equal(x->elements[i],y->elements[i]))return false;return true;}
+std::string opcode_name(OpCode op){switch(op){case OpCode::Constant:return"Constant";case OpCode::LoadGlobal:return"LoadGlobal";case OpCode::StoreGlobal:return"StoreGlobal";case OpCode::LoadLocal:return"LoadLocal";case OpCode::StoreLocal:return"StoreLocal";case OpCode::AssertNumber:return"AssertNumber";case OpCode::AssertString:return"AssertString";case OpCode::AssertBool:return"AssertBool";case OpCode::Add:return"Add";case OpCode::Subtract:return"Subtract";case OpCode::Multiply:return"Multiply";case OpCode::Divide:return"Divide";case OpCode::Modulo:return"Modulo";case OpCode::AddInt:return"AddInt";case OpCode::SubtractInt:return"SubtractInt";case OpCode::MultiplyInt:return"MultiplyInt";case OpCode::Equal:return"Equal";case OpCode::Less:return"Less";case OpCode::Greater:return"Greater";case OpCode::Negate:return"Negate";case OpCode::Not:return"Not";case OpCode::ReadLine:return"ReadLine";case OpCode::Print:return"Print";case OpCode::JumpIfFalse:return"JumpIfFalse";case OpCode::Jump:return"Jump";case OpCode::Call:return"Call";case OpCode::Return:return"Return";case OpCode::Halt:return"Halt";case OpCode::AssertArray:return"AssertArray";case OpCode::MakeArray:return"MakeArray";case OpCode::Index:return"Index";case OpCode::Length:return"Length";case OpCode::Append:return"Append";case OpCode::SetIndex:return"SetIndex";case OpCode::HostCall:return"HostCall";case OpCode::InteropCall:return"InteropCall";case OpCode::IntrinsicCall:return"IntrinsicCall";}return"Unknown";}
+std::string value_to_string(const Value&v){if(auto*n=std::get_if<double>(&v)){std::ostringstream o;if(std::isfinite(*n)&&std::floor(*n)==*n)o<<std::fixed<<std::setprecision(0)<<*n;else o<<std::setprecision(15)<<*n;return o.str();}if(auto*i=std::get_if<std::int64_t>(&v))return std::to_string(*i);if(auto*b=std::get_if<bool>(&v))return*b?"✅":"❌";if(auto*s=std::get_if<std::string>(&v))return*s;if(auto*a=std::get_if<ArrayPtr>(&v))return array_to_string(*a);if(auto*r=std::get_if<RecordPtr>(&v))return record_to_string(*r);if(auto*r=std::get_if<ResultPtr>(&v))return result_to_string(*r);return bytes_to_string(std::get<BytesPtr>(v));}
+bool values_equal(const Value&a,const Value&b){if(a.index()!=b.index())return false;if(auto*x=std::get_if<std::int64_t>(&a))return*x==std::get<std::int64_t>(b);if(auto*x=std::get_if<double>(&a))return*x==std::get<double>(b);if(auto*x=std::get_if<bool>(&a))return*x==std::get<bool>(b);if(auto*x=std::get_if<std::string>(&a))return*x==std::get<std::string>(b);if(auto*x=std::get_if<ArrayPtr>(&a)){auto y=std::get<ArrayPtr>(b);if(!*x||!y)return *x==y;if((*x)->elements.size()!=y->elements.size())return false;for(std::size_t i=0;i<(*x)->elements.size();++i)if(!values_equal((*x)->elements[i],y->elements[i]))return false;return true;}if(auto*x=std::get_if<RecordPtr>(&a)){auto y=std::get<RecordPtr>(b);if(!*x||!y)return *x==y;if((*x)->type_name!=y->type_name||(*x)->fields.size()!=y->fields.size())return false;auto yi=y->fields.begin();for(auto xi=(*x)->fields.begin();xi!=(*x)->fields.end();++xi,++yi)if(xi->first!=yi->first||!values_equal(xi->second,yi->second))return false;return true;}if(auto*x=std::get_if<ResultPtr>(&a)){auto y=std::get<ResultPtr>(b);if(!*x||!y)return *x==y;return (*x)->ok==y->ok&&values_equal((*x)->payload,y->payload);}auto x=std::get<BytesPtr>(a),y=std::get<BytesPtr>(b);if(!x||!y)return x==y;return x->bytes==y->bytes;}
 } // namespace emojineer

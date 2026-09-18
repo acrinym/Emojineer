@@ -31,7 +31,8 @@ void encode_value(Writer&w,const Value&v,std::size_t depth,std::size_t&elements)
     if(auto p=std::get_if<std::int64_t>(&v)){w.u8(static_cast<std::uint8_t>(ValueTag::Integer));w.u64(std::bit_cast<std::uint64_t>(*p));return;}
     if(auto p=std::get_if<double>(&v)){if(!std::isfinite(*p))throw std::runtime_error("interop ABI rejects non-finite numbers");w.u8(static_cast<std::uint8_t>(ValueTag::Number));w.u64(std::bit_cast<std::uint64_t>(*p));return;}
     if(auto p=std::get_if<bool>(&v)){w.u8(static_cast<std::uint8_t>(ValueTag::Bool));w.u8(*p?1:0);return;} if(auto p=std::get_if<std::string>(&v)){w.u8(static_cast<std::uint8_t>(ValueTag::String));w.text(*p);return;}
-    auto a=std::get<ArrayPtr>(v);if(!a)throw std::runtime_error("interop ABI rejects null arrays");if(a->elements.size()>MaxElements)throw std::runtime_error("interop ABI array exceeds element limit");w.u8(static_cast<std::uint8_t>(ValueTag::Array));w.u32(static_cast<std::uint32_t>(a->elements.size()));for(const auto&e:a->elements)encode_value(w,e,depth+1,elements);
+    if(auto p=std::get_if<ArrayPtr>(&v)){auto a=*p;if(!a)throw std::runtime_error("interop ABI rejects null arrays");if(a->elements.size()>MaxElements)throw std::runtime_error("interop ABI array exceeds element limit");w.u8(static_cast<std::uint8_t>(ValueTag::Array));w.u32(static_cast<std::uint32_t>(a->elements.size()));for(const auto&e:a->elements)encode_value(w,e,depth+1,elements);return;}
+    throw std::runtime_error("interop ABI does not support this value type");
 }
 Value decode_value(Reader&r,std::size_t depth,std::size_t&elements){
     if(depth>MaxDepth)throw std::runtime_error("interop ABI nesting exceeds 64 levels");

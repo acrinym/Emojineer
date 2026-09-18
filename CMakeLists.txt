@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Emojineer VERSION 0.22.0 LANGUAGES CXX)
+project(Emojineer VERSION 0.23.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -21,6 +21,7 @@ add_library(emojineer_core
     src/registry_discovery.cpp
     src/authenticated_publication.cpp
     src/capability.cpp
+    src/intrinsic.cpp
     src/interop.cpp
     src/easm.cpp
     src/bytecode.cpp
@@ -114,6 +115,9 @@ if(BUILD_TESTING)
  add_executable(emojineer_easm_tests tests/easm_tests.cpp)
  target_link_libraries(emojineer_easm_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_easm_tests COMMAND emojineer_easm_tests)
+ add_executable(emojineer_practical_runtime_tests tests/practical_runtime_tests.cpp)
+ target_link_libraries(emojineer_practical_runtime_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_practical_runtime_tests COMMAND emojineer_practical_runtime_tests)
  add_test(NAME emojineer_capability_cli
           COMMAND ${CMAKE_COMMAND}
                   -DEMOJINEER=$<TARGET_FILE:emojineer>
@@ -135,6 +139,11 @@ if(BUILD_TESTING)
                   -DEMJI=$<TARGET_FILE:emji>
                   -DLSP=$<TARGET_FILE:emojineer-lsp>
                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/version_cli.cmake)
+ add_test(NAME emojineer_practical_cli
+          COMMAND ${CMAKE_COMMAND}
+                  -DEMOJINEER=$<TARGET_FILE:emojineer>
+                  -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/practical-cli
+                  -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/practical_cli.cmake)
 endif()
 
 include(cmake/Packaging.cmake)

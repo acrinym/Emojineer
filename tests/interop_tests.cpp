@@ -36,8 +36,9 @@ void test_v9_roundtrip_and_verifier_binding(){
 📝 🧮 🫴 2 🤲
 )");
  require(c.required_capabilities==emojineer::capability_mask(emojineer::Capability::Network),"interop call contributes capability mask");
- std::ostringstream encoded(std::ios::binary);emojineer::write_bytecode(c,encoded);auto bytes=encoded.str();require(static_cast<unsigned char>(bytes[5])==9&&static_cast<unsigned char>(bytes[6])==0,"writer emits EMJBC v9");
+ std::ostringstream encoded(std::ios::binary);emojineer::write_bytecode(c,encoded);auto bytes=encoded.str();require(static_cast<unsigned char>(bytes[5])==10&&static_cast<unsigned char>(bytes[6])==0,"current writer emits EMJBC v10 while preserving v9 interop tables");
  std::istringstream input(bytes,std::ios::binary);auto decoded=emojineer::read_bytecode(input);require(decoded.interop_imports.size()==1,"import survives roundtrip");require(decoded.interop_imports[0].external_name=="fixture.net","external name survives roundtrip");
+ auto v9=bytes;v9[5]=9;v9[6]=0;std::istringstream v9_input(v9,std::ios::binary);auto decoded_v9=emojineer::read_bytecode(v9_input);require(decoded_v9.interop_imports.size()==1&&decoded_v9.interop_imports[0].external_name=="fixture.net","reader must preserve real EMJBC v9 interop compatibility");
  auto trailing=bytes+std::string("x",1);std::istringstream trailing_input(trailing,std::ios::binary);expect_error([&]{(void)emojineer::read_bytecode(trailing_input);},"trailing content");
  auto dishonest=c;dishonest.required_capabilities=0;expect_error([&]{emojineer::verify_bytecode(dishonest);},"does not match");
  auto invalid=c;for(auto&i:invalid.code)if(i.op==emojineer::OpCode::InteropCall){i.operand=999;break;}expect_error([&]{emojineer::verify_bytecode(invalid);},"invalid interop import operand");
@@ -63,6 +64,7 @@ void test_missing_and_deterministic_binding(){
 void test_abi_roundtrip_and_bounds(){
  emojineer::InteropSignature sig{{emojineer::InteropType::Array},emojineer::InteropType::Array};auto inner=std::make_shared<emojineer::ArrayValue>();inner->elements={std::int64_t{7},std::int64_t{-9223372036854775807LL-1},2.5,true,std::string("hi")};auto outer=std::make_shared<emojineer::ArrayValue>();outer->elements={inner,std::string("tail")};std::vector<emojineer::Value> args{outer};auto request=emojineer::encode_interop_request(sig,args);auto decoded=emojineer::decode_interop_request(sig,request);require(emojineer::values_equal(decoded[0],args[0]),"request codec preserves nested values and signed numeric subtypes");auto response=emojineer::encode_interop_success(emojineer::InteropType::Array,decoded[0]);require(emojineer::values_equal(emojineer::decode_interop_response(emojineer::InteropType::Array,response),args[0]),"response codec is equivalent");
  auto failure=emojineer::encode_interop_failure("boom");expect_error([&]{(void)emojineer::decode_interop_response(emojineer::InteropType::Array,failure);},"boom");
+ auto record=std::make_shared<emojineer::RecordValue>();record->type_name="AbiBoundary";record->fields["x"]=std::int64_t{1};auto compound=std::make_shared<emojineer::ArrayValue>();compound->elements.push_back(record);expect_error([&]{(void)emojineer::encode_interop_success(emojineer::InteropType::Array,compound);},"does not support this value type");
  emojineer::Value deep=std::make_shared<emojineer::ArrayValue>();for(int i=0;i<66;++i){auto next=std::make_shared<emojineer::ArrayValue>();next->elements.push_back(deep);deep=next;}expect_error([&]{(void)emojineer::encode_interop_success(emojineer::InteropType::Array,deep);},"nesting");
 }
 

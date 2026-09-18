@@ -3,7 +3,7 @@
 #include <string_view>
 
 #ifndef EMOJINEER_VERSION
-#define EMOJINEER_VERSION "0.22.0"
+#define EMOJINEER_VERSION "0.23.0"
 #endif
 
 namespace emojineer {

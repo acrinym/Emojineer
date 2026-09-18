@@ -2161,6 +2161,10 @@ void test_e2e_real_completion() {
     assert((body.find("🔢") != std::string::npos || body.find("📚") != std::string::npos ||
             body.find("📜") != std::string::npos || body.find("🧺") != std::string::npos) &&
            "Completion must include Emojineer type keywords");
+    assert(body.find("🧬") != std::string::npos &&
+           "Completion must include 1.0 pure runtime intrinsics");
+    assert(body.find("🛰️") != std::string::npos &&
+           "Completion must include capability-gated practical host facilities");
 
     // Shutdown and exit
     server.sendMessage(R"({"jsonrpc":"2.0","id":4,"method":"shutdown","params":null})");

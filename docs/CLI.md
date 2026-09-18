@@ -1,6 +1,6 @@
 # Emojineer CLI and Toolchain
 
-Emojineer 0.22 builds three native C++ executables:
+Emojineer 0.23 builds three native C++ executables:
 
 - `emojineer` - source, bytecode, formatting, REPL, capability inspection, execution, and source-level debugging;
 - `emji` - project/package/registry workflow, authenticated publication, remote dependency sync, and package discovery;
@@ -26,11 +26,11 @@ ctest --test-dir build-release --output-on-failure
 emojineer repl [--cer registry.json ...] [execution-policy]
 emojineer stdlib
 emojineer debug <source-or-project> [--cer registry.json ...] [execution-policy]
-emojineer run <file.emoji> [--cer registry.json ...] [execution-policy]
+emojineer run <file.emoji> [--cer registry.json ...] [execution-policy] [-- arg ...]
 emojineer <check|explain|dump|lint> <file.emoji> [--cer registry.json ...]
 emojineer fmt <file.emoji> [-o file.emoji] [--cer registry.json ...]
 emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]
-emojineer exec <file.emjbc> [execution-policy]
+emojineer exec <file.emjbc> [execution-policy] [-- arg ...]
 emojineer disasm <file.emjbc>
 emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]
 emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]
@@ -52,7 +52,7 @@ File/project compilation uses the normal package-aware module linker. The debugg
 
 `--grant` is repeatable. Runtime grants are accepted by `run`, `exec`, `debug`, `repl`, and `easm-run`. Compile/check/format/lint/disassembly/capability/interop/EASM inspection, LSP work, and `emji` operations do not inherit program-runtime grants.
 
-Default execution has no Train 20 host grants. `--sandbox` is hard zero-host-capability mode and rejects grants. `--deterministic` accepts only `clock` and `random`; `--seed` and `--clock-ms` configure their reproducible VM-local state. See [CAPABILITIES.md](CAPABILITIES.md).
+Default execution has no Train 20 host grants. `--sandbox` is hard zero-host-capability mode and rejects grants. `--deterministic` accepts only `clock` and `random`; `--seed` and `--clock-ms` configure their reproducible VM-local state. For `run` or `exec`, a literal `--` ends tool options and passes the remaining strings as explicit program arguments available through `🧳 🫴 🤲`; these arguments are invocation input rather than a capability grant. See [CAPABILITIES.md](CAPABILITIES.md) and [PRACTICAL_RUNTIME.md](PRACTICAL_RUNTIME.md).
 
 `capabilities` compiles source or reads EMJBC and reports the exact whole-program capability mask without executing it.
 

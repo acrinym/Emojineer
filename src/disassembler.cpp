@@ -1,6 +1,7 @@
 #include "emojineer/disassembler.hpp"
 #include "emojineer/capability.hpp"
 #include "emojineer/interop.hpp"
+#include "emojineer/intrinsic.hpp"
 
 #include <iomanip>
 #include <ostream>
@@ -53,6 +54,8 @@ void disassemble(const Chunk& chunk, std::ostream& out) {
             if (const auto facility = native_facility_from_operand(ins.operand)) out << " native=" << native_facility_name(*facility);
         } else if (ins.op == OpCode::InteropCall && ins.operand >= 0 && static_cast<std::size_t>(ins.operand) < chunk.interop_imports.size()) {
             out << " interop=" << chunk.interop_imports[static_cast<std::size_t>(ins.operand)].external_name;
+        } else if (ins.op == OpCode::IntrinsicCall) {
+            if (const auto intrinsic = intrinsic_from_operand(ins.operand)) out << " intrinsic=" << intrinsic_name(*intrinsic);
         }
         out << " line=" << ins.line << '\n';
     }

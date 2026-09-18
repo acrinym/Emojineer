@@ -8,7 +8,7 @@ Emojineer is not emoji syntax painted over Python, JavaScript, C++, or another h
 UTF-8 .emoji → grapheme lexer → parser → AST → package-aware module linker → EMJBC → Emojineer VM
 ```
 
-Current language/toolchain version: **0.22**.
+Current language/toolchain version: **0.23**.
 
 ## What works now
 
@@ -38,6 +38,8 @@ Product Trains 1 through 22 provide:
 - an explicit default-deny host capability model with EMJBC v8 verifier-bound authority metadata, filesystem/network/process/clock/random/host facilities, whole-program preflight, and sandboxed/deterministic execution modes;
 - a typed host/WASM interop layer with `🔌` imports, `📡` exports, deterministic `EMJABI1` value marshaling, verifier-visible EMJBC v9 metadata, capability-controlled adapters, and production-VM export invocation;
 - low-level `EASM1` with statically typed `i64`/`f64`/`bool` registers, bounded `u8`/`i64`/`f64` buffers, verified control flow, fuel-bounded execution, explicit imports/exports, and a high-level/low-level ABI that composes through Train 21 rather than bypassing it.
+
+The active 1.0 productization arc has also landed its first 0.23 foundations: installable CPack/release layouts, a VS Code/Cursor extension around the production LSP, named record and explicit result values, bounded bytes with UTF-8/hex/Base64 codecs, explicit `--` program arguments, filesystem write/directory facilities, richer bounded HTTPS requests, and EMJBC v10 verifier-visible intrinsics.
 
 ## Package workflow
 
@@ -137,6 +139,7 @@ ctest --test-dir build --output-on-failure
 ./build/emojineer easm-info examples/lowlevel.easm
 ./build/emojineer easm-run examples/lowlevel.easm
 ./build/emojineer run app.emoji --grant filesystem
+./build/emojineer run cli.emoji -- alpha "two words"
 ./build/emojineer run simulation.emoji --deterministic --grant clock --grant random --seed 7 --clock-ms 1000
 ./build/emojineer repl
 ```
@@ -149,7 +152,7 @@ Key references:
 
 - [`docs/LANGUAGE.md`](docs/LANGUAGE.md) — current language reference and grammar;
 - [`docs/STDLIB.md`](docs/STDLIB.md) — native standard-library modules;
-- [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1-v9 compatibility, verifier, source provenance, and VM contract;
+- [`docs/BYTECODE.md`](docs/BYTECODE.md) — EMJBC v1-v10 compatibility, verifier, source provenance, and VM contract;
 - [`docs/CLI.md`](docs/CLI.md) — full command-line/toolchain guide;
 - [`docs/MODULES.md`](docs/MODULES.md) — local, package, and standard module/import/export semantics;
 - [`docs/PROJECTS.md`](docs/PROJECTS.md) — `emji` projects, local/remote dependencies, package imports, graph inspection, and locks;

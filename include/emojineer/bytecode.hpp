@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <iosfwd>
+#include <map>
 #include <memory>
 #include <string>
 #include <variant>
@@ -8,10 +9,19 @@
 #include <vector>
 namespace emojineer {
 struct ArrayValue;
+struct RecordValue;
+struct ResultValue;
+struct BytesValue;
 using ArrayPtr=std::shared_ptr<ArrayValue>;
-using Value=std::variant<std::int64_t,double,bool,std::string,ArrayPtr>;
+using RecordPtr=std::shared_ptr<RecordValue>;
+using ResultPtr=std::shared_ptr<ResultValue>;
+using BytesPtr=std::shared_ptr<BytesValue>;
+using Value=std::variant<std::int64_t,double,bool,std::string,ArrayPtr,RecordPtr,ResultPtr,BytesPtr>;
 struct ArrayValue{std::vector<Value> elements;};
-enum class OpCode:std::uint8_t{Constant,LoadGlobal,StoreGlobal,LoadLocal,StoreLocal,AssertNumber,AssertString,AssertBool,Add,Subtract,Multiply,Divide,Modulo,AddInt,SubtractInt,MultiplyInt,Equal,Less,Greater,Negate,Not,ReadLine,Print,JumpIfFalse,Jump,Call,Return,Halt,AssertArray,MakeArray,Index,Length,Append,SetIndex,HostCall,InteropCall};
+struct RecordValue{std::string type_name;std::map<std::string,Value> fields;};
+struct ResultValue{bool ok{false};Value payload{false};};
+struct BytesValue{std::vector<std::uint8_t> bytes;};
+enum class OpCode:std::uint8_t{Constant,LoadGlobal,StoreGlobal,LoadLocal,StoreLocal,AssertNumber,AssertString,AssertBool,Add,Subtract,Multiply,Divide,Modulo,AddInt,SubtractInt,MultiplyInt,Equal,Less,Greater,Negate,Not,ReadLine,Print,JumpIfFalse,Jump,Call,Return,Halt,AssertArray,MakeArray,Index,Length,Append,SetIndex,HostCall,InteropCall,IntrinsicCall};
 struct Instruction{OpCode op{OpCode::Halt};std::int32_t operand{0};std::uint32_t line{0};};
 struct FunctionInfo{std::string name;std::uint32_t entry{0};std::uint32_t arity{0};std::uint32_t local_count{0};std::vector<std::string> parameter_names;std::vector<std::string> local_names;};
 
@@ -60,7 +70,7 @@ struct Chunk{
 
     /// Append a serializable constant and return its stable pool index.
     ///
-    /// Rejects arrays and pool growth beyond the bytecode safety bound.
+    /// Rejects compound runtime values and pool growth beyond the bytecode safety bound.
     std::int32_t add_constant(Value value);
 };
 
@@ -70,13 +80,14 @@ struct Chunk{
 /// source-map, provenance, function, or instruction metadata is rejected first.
 void write_bytecode(const Chunk& chunk,std::ostream& out);
 
-/// Parse bounded EMJBC v1-v9 input and verify the resulting chunk before return.
+/// Parse bounded EMJBC v1-v10 input and verify the resulting chunk before return.
 Chunk read_bytecode(std::istream& in);
 
 /// Validate structural safety independently of source parsing.
 ///
-/// In v9-era chunks this includes recomputing the exact capability union from
-/// HostCall and InteropCall instructions and requiring it to equal required_capabilities.
+/// In v9+ chunks this includes recomputing the exact capability union from
+/// HostCall and InteropCall instructions and requiring it to equal required_capabilities;
+/// v10 IntrinsicCall is verified separately because pure intrinsics require no host grant.
 void verify_bytecode(const Chunk& chunk);
 
 /// Return the stable diagnostic/disassembly name for an opcode.

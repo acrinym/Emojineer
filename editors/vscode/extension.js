@@ -44,9 +44,16 @@ semanticTokens.push(
 semanticTokens.push(
   ["📚", "array", "array type or literal"],
   ["🔎", "index", "read collection element"],
-  ["📏", "length", "collection or text length"],
-  ["📎", "append", "return array with appended value"],
-  ["🧷", "set index", "return array with replaced element"]
+  ["📏", "length", "collection, record, bytes, or text length"],
+  ["📎", "append", "return collection with appended value"],
+  ["🧷", "set index", "return collection or record with replaced value"],
+  ["🗃️", "record create", "create a named record from key/value pairs"],
+  ["🏷️", "record type", "read a record type name"],
+  ["🗝️", "record keys", "read sorted record keys"],
+  ["🟢", "result ok", "create a successful result"],
+  ["🔴", "result error", "create an error result"],
+  ["👌", "result is ok", "test whether a result is successful"],
+  ["🎁", "result payload", "read a result payload"]
 );
 
 function executable(name) {
@@ -67,6 +74,19 @@ function currentFile() {
   }
   return editor.document.uri.fsPath;
 }
+
+semanticTokens.push(
+  ["🧬", "UTF-8 encode", "encode text as bytes"],
+  ["🗣️", "UTF-8 decode", "decode valid UTF-8 bytes"],
+  ["🔡", "hex encode", "encode bytes as hexadecimal text"],
+  ["🔣", "hex decode", "decode hexadecimal text as bytes"],
+  ["📨", "base64 encode", "encode bytes as Base64"],
+  ["📩", "base64 decode", "decode Base64 text as bytes"],
+  ["🧳", "program arguments", "read explicit arguments supplied after --"],
+  ["✍️", "filesystem write", "write bounded text with filesystem capability"],
+  ["📁", "create directory", "create directories with filesystem capability"],
+  ["🛰️", "network request", "perform bounded HTTPS request with network capability"]
+);
 
 async function runTool(command, title) {
   const file = currentFile();

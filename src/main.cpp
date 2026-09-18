@@ -49,6 +49,7 @@ struct Cli {
     bool deterministic{false};
     std::optional<std::uint64_t> seed;
     std::optional<std::int64_t> clock_ms;
+    std::vector<std::string> program_arguments;
 };
 
 void usage() {
@@ -58,11 +59,11 @@ void usage() {
         << "  emojineer repl [--cer registry.json ...] [execution-policy]\n"
         << "  emojineer stdlib\n"
         << "  emojineer debug <source-or-project> [--cer registry.json ...] [execution-policy]\n"
-        << "  emojineer run <file.emoji> [--cer registry.json ...] [execution-policy]\n"
+        << "  emojineer run <file.emoji> [--cer registry.json ...] [execution-policy] [-- arg ...]\n"
         << "  emojineer <check|explain|dump|lint> <file.emoji> [--cer registry.json ...]\n"
         << "  emojineer fmt <file.emoji> [-o file.emoji] [--cer registry.json ...]\n"
         << "  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n"
-        << "  emojineer exec <file.emjbc> [execution-policy]\n"
+        << "  emojineer exec <file.emjbc> [execution-policy] [-- arg ...]\n"
         << "  emojineer disasm <file.emjbc>\n"
         << "  emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]\n"
         << "  emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]\n"
@@ -130,11 +131,16 @@ Cli parse_cli(int argc, char** argv) {
         } else if (arg == "--clock-ms") {
             if (++i >= argc) throw std::runtime_error("--clock-ms requires a value");
             cli.clock_ms = parse_i64(argv[i], "--clock-ms");
+        } else if (arg == "--") {
+            for (++i; i < argc; ++i) cli.program_arguments.emplace_back(argv[i]);
+            break;
         } else {
             throw std::runtime_error("unknown option '" + arg + "'");
         }
     }
 
+    if (!cli.program_arguments.empty() && cli.command != "run" && cli.command != "exec")
+        throw std::runtime_error("program arguments after -- are accepted only by run or exec");
     return cli;
 }
 
@@ -305,7 +311,8 @@ int main(int argc, char** argv) {
                 emojineer::disassemble(chunk, std::cout);
                 return 0;
             }
-            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli));
+            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli), nullptr,
+                               cli.program_arguments);
             vm.execute(chunk);
             return 0;
         }
@@ -384,7 +391,8 @@ int main(int argc, char** argv) {
         if (cli.command == "run") {
             if (cli.output) throw std::runtime_error("run does not accept -o");
             auto chunk = emojineer::compile_file(*cli.input, std::move(registry));
-            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli));
+            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli), nullptr,
+                               cli.program_arguments);
             vm.execute(chunk);
             return 0;
         }

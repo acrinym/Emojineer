@@ -25,7 +25,7 @@ requireTrue(extension.includes('command: executable("emojineer-lsp")'),
   "extension must launch the production LSP");
 requireTrue(extension.includes("Semantic Palette"),
   "semantic palette is missing");
-for (const glyph of ["🐍","📝","🤔","🔁","🛠️","📦","📚","🔌","📡"]) {
+for (const glyph of ["🐍","📝","🤔","🔁","🛠️","📦","📚","🔌","📡","🗃️","🧬","🧳","✍️","📁","🛰️"]) {
   requireTrue(extension.includes(glyph), "semantic palette missing " + glyph);
 }
 JSON.parse(fs.readFileSync(path.join(root, "language-configuration.json"), "utf8"));

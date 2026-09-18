@@ -1,5 +1,6 @@
 #include "emojineer/module.hpp"
 #include "emojineer/capability.hpp"
+#include "emojineer/intrinsic.hpp"
 
 #include "emojineer/ast.hpp"
 #include "emojineer/compiler.hpp"
@@ -264,6 +265,8 @@ void analyze_unit(ModuleUnit& unit) {
         if (auto* interop_import = dynamic_cast<ast::InteropImportDecl*>(stmt.get())) {
             if (native_facility_from_identifier(interop_import->name))
                 throw std::runtime_error("module '" + unit.identity + "': interop import cannot shadow a native facility");
+            if (intrinsic_from_identifier(interop_import->name))
+                throw std::runtime_error("module '" + unit.identity + "': interop import cannot shadow a language intrinsic");
             if (!unit.interop_imports.insert(interop_import->name).second)
                 throw std::runtime_error("module '" + unit.identity + "': duplicate interop import");
             continue;
@@ -277,6 +280,10 @@ void analyze_unit(ModuleUnit& unit) {
             if (auto native = native_facility_from_identifier(fn->name))
                 throw std::runtime_error("module '" + unit.identity + "' line " + std::to_string(fn->line) +
                                          ": reserved native facility emoji '" + native_facility_glyph(*native) +
+                                         "' cannot be defined as a function");
+            if (auto intrinsic = intrinsic_from_identifier(fn->name))
+                throw std::runtime_error("module '" + unit.identity + "' line " + std::to_string(fn->line) +
+                                         ": reserved language intrinsic emoji '" + intrinsic_glyph(*intrinsic) +
                                          "' cannot be defined as a function");
             unit.functions.insert(fn->name);
             std::unordered_set<std::string> locals(fn->parameters.begin(), fn->parameters.end());
@@ -460,7 +467,7 @@ void rewrite_expr(ast::Expr& expr, ModuleUnit& unit,
     }
     if (auto* call = dynamic_cast<ast::CallExpr*>(&expr)) {
         for (auto& arg : call->arguments) rewrite_expr(*arg, unit, locals);
-        if (native_facility_from_identifier(call->callee)) return;
+        if (native_facility_from_identifier(call->callee) || intrinsic_from_identifier(call->callee)) return;
         if (unit.interop_imports.contains(call->callee)) {
             call->callee = internal_name(unit, call->callee);
             return;

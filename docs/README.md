@@ -18,6 +18,7 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 - [Source debugger](DEBUGGER.md) - source breakpoints, stepping, frames, values, and provenance.
 - [Package discovery](PACKAGE_DISCOVERY.md) - deterministic search, package metadata, release filtering, and reverse dependencies.
 - [Capability model and native facilities](CAPABILITIES.md) - default-deny host authority, grants, EMJBC binding, sandbox, and deterministic execution.
+- [Practical 1.0 runtime](PRACTICAL_RUNTIME.md) - records, explicit results, bytes/codecs, argv, write/directory, and richer HTTPS request facilities.
 - [Host/WASM interop](INTEROP.md) - typed imports/exports, deterministic EMJABI1 marshaling, adapter contracts, and VM export invocation.
 - [Low-level Emojineer / EASM](EASM.md) - EASM1 syntax, typed registers/buffers, verifier/runtime bounds, and Train 21 ABI composition.
 - [Emojineer 1.0 product contract](PRODUCT_1_0_CONTRACT.md) - install-to-first-program goals, compatibility promises, 1.0 domains, and explicit non-goals.
@@ -35,7 +36,7 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 ## Current implemented product level
 
-The compiler/toolchain reports Emojineer **0.22**. Product Trains **1 through 22** are implemented on this train.
+The compiler/toolchain reports Emojineer **0.23**. Product Trains **1 through 22** are landed, and the 1.0 productization arc is in progress.
 
 The product now includes the sovereign language/compiler/VM core; functions and collections; CER; REPL/source tooling; project workflow; modules; native standard modules; local and remote package dependency graphs; immutable `.emjpkg` artifacts; verified file/HTTPS registry reads; reproducible materialization and lock v3; authenticated HTTPS publication; native C++ LSP/editor integration; the source-level debugger; deterministic package search/discovery with stable/prerelease filtering and reverse-dependency queries; the default-deny capability/native-facility model with EMJBC v8 verifier/runtime enforcement; typed host/WASM interop with verifier-visible EMJBC v9 imports/exports plus deterministic EMJABI1 marshaling; and low-level `EASM1` with typed registers, bounded typed buffers, verifier-enforced control flow, fuel-bounded execution, and explicit composition through Train 21 adapters.
 
@@ -45,7 +46,7 @@ The documentation describes implemented behavior unless a section is explicitly 
 
 - `.emoji` - Emojineer UTF-8 source.
 - `.easm` - verified low-level `EASM1` text with typed registers, buffers, imports, functions, and exports.
-- `.emjbc` - serialized Emojineer bytecode; current writer v9 includes deterministic debug/provenance metadata, an exact verifier-bound required-capability mask, and typed interop import/export metadata.
+- `.emjbc` - serialized Emojineer bytecode; current writer v10 includes deterministic debug/provenance metadata, the exact verifier-bound authority mask, v9 typed interop metadata, and verifier-visible v10 intrinsic/facility operands.
 - `.emjpkg` - deterministic immutable package source artifact.
 - `emojineer.toml` - strict package/project manifest with local/path and registry dependency declarations.
 - `emojineer.lock` - deterministic lock v3 provenance for path and registry dependencies.

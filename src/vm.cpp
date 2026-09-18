@@ -1,5 +1,8 @@
 #include "emojineer/vm.hpp"
 #include "emojineer/unicode.hpp"
+#include "emojineer/intrinsic.hpp"
+#include "emojineer/version.hpp"
+#include <unicode/utf8.h>
 #include <algorithm>
 #include <chrono>
 #include <climits>
@@ -72,7 +75,11 @@ std::int64_t checked_mul(std::int64_t a, std::int64_t b, std::uint32_t line, Fai
 }
 
 constexpr std::size_t MaxFilesystemReadBytes = 16 * 1024 * 1024;
+constexpr std::size_t MaxFilesystemWriteBytes = 16 * 1024 * 1024;
 constexpr std::size_t MaxNetworkReadBytes = 1024 * 1024;
+constexpr std::size_t MaxNetworkRequestBytes = 1024 * 1024;
+constexpr std::size_t MaxBytesValue = 16 * 1024 * 1024;
+constexpr std::size_t MaxRecordFields = 65'536;
 
 std::string require_native_string(const Value& value, const std::string& facility) {
     if (const auto* text = std::get_if<std::string>(&value)) return *text;
@@ -90,8 +97,153 @@ std::uint64_t require_positive_bound(const Value& value) {
     throw std::runtime_error("random.int requires a positive whole-number bound");
 }
 
+std::size_t require_index(const Value& value, std::size_t size, std::string_view operation) {
+    double raw = 0;
+    if (const auto* d = std::get_if<double>(&value)) raw = *d;
+    else if (const auto* i = std::get_if<std::int64_t>(&value)) raw = static_cast<double>(*i);
+    else throw std::runtime_error(std::string(operation) + " index must be a whole number");
+    if (!std::isfinite(raw) || std::floor(raw) != raw || raw < 0 || raw >= static_cast<double>(size))
+        throw std::runtime_error(std::string(operation) + " index out of range");
+    return static_cast<std::size_t>(raw);
+}
+
+std::uint8_t require_byte(const Value& value, std::string_view operation) {
+    std::int64_t raw = -1;
+    if (const auto* i = std::get_if<std::int64_t>(&value)) raw = *i;
+    else if (const auto* d = std::get_if<double>(&value)) {
+        if (!std::isfinite(*d) || std::floor(*d) != *d || *d < 0 || *d > 255)
+            throw std::runtime_error(std::string(operation) + " requires a byte value 0..255");
+        raw = static_cast<std::int64_t>(*d);
+    } else throw std::runtime_error(std::string(operation) + " requires a byte value 0..255");
+    if (raw < 0 || raw > 255) throw std::runtime_error(std::string(operation) + " requires a byte value 0..255");
+    return static_cast<std::uint8_t>(raw);
+}
+
+bool valid_utf8(std::string_view text) {
+    if (text.size() > static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) return false;
+    int32_t index = 0;
+    const auto length = static_cast<int32_t>(text.size());
+    while (index < length) {
+        UChar32 codepoint = 0;
+        U8_NEXT(text.data(), index, length, codepoint);
+        if (codepoint < 0) return false;
+    }
+    return true;
+}
+
+const BytesPtr& require_bytes_ref(const Value& value, std::string_view operation) {
+    const auto* bytes = std::get_if<BytesPtr>(&value);
+    if (!bytes || !*bytes) throw std::runtime_error(std::string(operation) + " requires bytes");
+    return *bytes;
+}
+
+const RecordPtr& require_record_ref(const Value& value, std::string_view operation) {
+    const auto* record = std::get_if<RecordPtr>(&value);
+    if (!record || !*record) throw std::runtime_error(std::string(operation) + " requires a record");
+    return *record;
+}
+
+const ResultPtr& require_result_ref(const Value& value, std::string_view operation) {
+    const auto* result = std::get_if<ResultPtr>(&value);
+    if (!result || !*result) throw std::runtime_error(std::string(operation) + " requires a result");
+    return *result;
+}
+
+std::string hex_encode(const BytesPtr& value) {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string output;
+    output.reserve(value->bytes.size() * 2);
+    for (const auto byte : value->bytes) {
+        output.push_back(digits[byte >> 4]);
+        output.push_back(digits[byte & 0x0f]);
+    }
+    return output;
+}
+
+int hex_digit(unsigned char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+BytesPtr hex_decode(std::string_view text) {
+    if ((text.size() % 2) != 0) throw std::runtime_error("encoding.hex-decode requires an even number of hex digits");
+    if (text.size() / 2 > MaxBytesValue) throw std::runtime_error("decoded bytes exceed 16 MiB limit");
+    auto output = std::make_shared<BytesValue>();
+    output->bytes.reserve(text.size() / 2);
+    for (std::size_t i = 0; i < text.size(); i += 2) {
+        const int high = hex_digit(static_cast<unsigned char>(text[i]));
+        const int low = hex_digit(static_cast<unsigned char>(text[i + 1]));
+        if (high < 0 || low < 0) throw std::runtime_error("encoding.hex-decode rejected non-hex input");
+        output->bytes.push_back(static_cast<std::uint8_t>((high << 4) | low));
+    }
+    return output;
+}
+
+std::string base64_encode(const BytesPtr& value) {
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string output;
+    output.reserve(((value->bytes.size() + 2) / 3) * 4);
+    for (std::size_t i = 0; i < value->bytes.size(); i += 3) {
+        const std::uint32_t a = value->bytes[i];
+        const std::uint32_t b = i + 1 < value->bytes.size() ? value->bytes[i + 1] : 0;
+        const std::uint32_t c = i + 2 < value->bytes.size() ? value->bytes[i + 2] : 0;
+        const std::uint32_t block = (a << 16) | (b << 8) | c;
+        output.push_back(alphabet[(block >> 18) & 63]);
+        output.push_back(alphabet[(block >> 12) & 63]);
+        output.push_back(i + 1 < value->bytes.size() ? alphabet[(block >> 6) & 63] : '=');
+        output.push_back(i + 2 < value->bytes.size() ? alphabet[block & 63] : '=');
+    }
+    return output;
+}
+
+int base64_digit(unsigned char ch) {
+    if (ch >= 'A' && ch <= 'Z') return ch - 'A';
+    if (ch >= 'a' && ch <= 'z') return ch - 'a' + 26;
+    if (ch >= '0' && ch <= '9') return ch - '0' + 52;
+    if (ch == '+') return 62;
+    if (ch == '/') return 63;
+    return -1;
+}
+
+BytesPtr base64_decode(std::string_view text) {
+    if ((text.size() % 4) != 0) throw std::runtime_error("encoding.base64-decode requires canonical length");
+    const std::size_t padding = text.empty() ? 0 :
+        (text.back() == '=' ? (text.size() > 1 && text[text.size() - 2] == '=' ? 2 : 1) : 0);
+    const std::size_t decoded = (text.size() / 4) * 3 - padding;
+    if (decoded > MaxBytesValue) throw std::runtime_error("decoded bytes exceed 16 MiB limit");
+    auto output = std::make_shared<BytesValue>();
+    output->bytes.reserve(decoded);
+    for (std::size_t i = 0; i < text.size(); i += 4) {
+        const bool last = i + 4 == text.size();
+        const int a = base64_digit(static_cast<unsigned char>(text[i]));
+        const int b = base64_digit(static_cast<unsigned char>(text[i + 1]));
+        const bool pad2 = text[i + 2] == '=';
+        const bool pad3 = text[i + 3] == '=';
+        const int c = pad2 ? 0 : base64_digit(static_cast<unsigned char>(text[i + 2]));
+        const int d = pad3 ? 0 : base64_digit(static_cast<unsigned char>(text[i + 3]));
+        if (a < 0 || b < 0 || c < 0 || d < 0 || (!last && (pad2 || pad3)) || (pad2 && !pad3))
+            throw std::runtime_error("encoding.base64-decode rejected non-canonical input");
+        const std::uint32_t block = (static_cast<std::uint32_t>(a) << 18) |
+                                    (static_cast<std::uint32_t>(b) << 12) |
+                                    (static_cast<std::uint32_t>(c) << 6) |
+                                    static_cast<std::uint32_t>(d);
+        output->bytes.push_back(static_cast<std::uint8_t>((block >> 16) & 255));
+        if (!pad2) output->bytes.push_back(static_cast<std::uint8_t>((block >> 8) & 255));
+        if (!pad3) output->bytes.push_back(static_cast<std::uint8_t>(block & 255));
+        if (last) {
+            if (pad2 && (b & 0x0f) != 0) throw std::runtime_error("encoding.base64-decode rejected non-canonical padding bits");
+            if (!pad2 && pad3 && (c & 0x03) != 0) throw std::runtime_error("encoding.base64-decode rejected non-canonical padding bits");
+        }
+    }
+    return output;
+}
+
 std::string read_host_text(const std::string& raw_path) {
-    if (raw_path.empty()) throw std::runtime_error("filesystem.read-text path cannot be empty");
+    if (raw_path.empty() || raw_path.size() > 32 * 1024 || raw_path.find('\0') != std::string::npos)
+        throw std::runtime_error("filesystem.read-text requires a bounded non-empty path");
     const std::filesystem::path path(raw_path);
 #ifdef _WIN32
     struct HandleGuard {
@@ -162,6 +314,71 @@ std::string read_host_text(const std::string& raw_path) {
 #endif
 }
 
+void write_host_text(const std::string& raw_path, const std::string& text) {
+    if (raw_path.empty() || raw_path.size() > 32 * 1024 || raw_path.find('\0') != std::string::npos)
+        throw std::runtime_error("filesystem.write-text requires a bounded non-empty path");
+    if (text.size() > MaxFilesystemWriteBytes)
+        throw std::runtime_error("filesystem.write-text exceeds 16 MiB limit");
+    const std::filesystem::path path(raw_path);
+#ifdef _WIN32
+    struct HandleGuard {
+        HANDLE handle{INVALID_HANDLE_VALUE};
+        ~HandleGuard() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+    };
+    HandleGuard file{CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                                 nullptr, CREATE_ALWAYS,
+                                 FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+    if (file.handle == INVALID_HANDLE_VALUE)
+        throw std::runtime_error("filesystem.write-text cannot open requested path");
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(file.handle, &info) ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
+        throw std::runtime_error("filesystem.write-text requires a regular non-reparse file");
+    std::size_t offset = 0;
+    while (offset < text.size()) {
+        const DWORD request = static_cast<DWORD>(std::min<std::size_t>(text.size() - offset, 1u << 20));
+        DWORD written = 0;
+        if (!WriteFile(file.handle, text.data() + offset, request, &written, nullptr) || written == 0)
+            throw std::runtime_error("filesystem.write-text failed while writing path");
+        offset += written;
+    }
+#else
+    struct FdGuard {
+        int fd{-1};
+        ~FdGuard() { if (fd >= 0) ::close(fd); }
+    };
+    int flags = O_WRONLY | O_CREAT | O_TRUNC | O_NONBLOCK;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+#ifdef O_NOFOLLOW
+    flags |= O_NOFOLLOW;
+#endif
+    FdGuard file{::open(path.c_str(), flags, 0666)};
+    if (file.fd < 0) throw std::runtime_error("filesystem.write-text cannot open requested path");
+    struct stat status{};
+    if (::fstat(file.fd, &status) != 0 || !S_ISREG(status.st_mode))
+        throw std::runtime_error("filesystem.write-text requires a regular file");
+    std::size_t offset = 0;
+    while (offset < text.size()) {
+        const auto count = ::write(file.fd, text.data() + offset, text.size() - offset);
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) throw std::runtime_error("filesystem.write-text failed while writing path");
+        offset += static_cast<std::size_t>(count);
+    }
+#endif
+}
+
+void create_host_directory(const std::string& raw_path) {
+    if (raw_path.empty() || raw_path.size() > 32 * 1024 || raw_path.find('\0') != std::string::npos)
+        throw std::runtime_error("filesystem.create-directory requires a bounded non-empty path");
+    std::error_code error;
+    std::filesystem::create_directories(std::filesystem::path(raw_path), error);
+    if (error) throw std::runtime_error("filesystem.create-directory failed: " + error.message());
+    if (!std::filesystem::is_directory(std::filesystem::path(raw_path), error) || error)
+        throw std::runtime_error("filesystem.create-directory did not produce a directory");
+}
+
 bool valid_environment_name(const std::string& name) {
     if (name.empty() || name.size() > 256) return false;
     const auto first = static_cast<unsigned char>(name.front());
@@ -215,7 +432,8 @@ std::string https_get(const std::string& url) {
     curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, "Emojineer/0.22");
+    const std::string user_agent = "Emojineer/" + std::string(emojineer::version);
+    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, user_agent.c_str());
 #if LIBCURL_VERSION_NUM >= 0x075500
     curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS_STR, "https");
 #else
@@ -233,12 +451,67 @@ std::string https_get(const std::string& url) {
     return buffer.data;
 #endif
 }
+
+std::string https_request(const std::string& method, const std::string& url, const std::string& body) {
+    if (method != "GET" && method != "POST" && method != "PUT" &&
+        method != "PATCH" && method != "DELETE")
+        throw std::runtime_error("network.request method must be GET, POST, PUT, PATCH, or DELETE");
+    if (body.size() > MaxNetworkRequestBytes)
+        throw std::runtime_error("network.request body exceeds 1 MiB limit");
+    if (method == "GET" && !body.empty())
+        throw std::runtime_error("network.request GET body must be empty");
+    if (url.size() > 8192 || url.rfind("https://", 0) != 0)
+        throw std::runtime_error("network.request requires a bounded https:// URL");
+    const auto authority_end = url.find('/', 8);
+    const auto authority = url.substr(8, authority_end == std::string::npos ? std::string::npos : authority_end - 8);
+    if (authority.empty() || authority.find('@') != std::string::npos ||
+        url.find('\r') != std::string::npos || url.find('\n') != std::string::npos)
+        throw std::runtime_error("network.request rejected URL authority");
+#ifndef EMOJINEER_HAVE_CURL
+    throw std::runtime_error("network.request is unavailable because this build has no libcurl support");
+#else
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(curl_easy_init(), &curl_easy_cleanup);
+    if (!handle) throw std::runtime_error("network.request could not initialize libcurl");
+    CurlBuffer buffer;
+    const std::string user_agent = "Emojineer/" + std::string(emojineer::version);
+    curl_easy_setopt(handle.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle.get(), CURLOPT_CUSTOMREQUEST, method.c_str());
+    curl_easy_setopt(handle.get(), CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(handle.get(), CURLOPT_MAXREDIRS, 0L);
+    curl_easy_setopt(handle.get(), CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(handle.get(), CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(handle.get(), CURLOPT_USERAGENT, user_agent.c_str());
+#if LIBCURL_VERSION_NUM >= 0x075500
+    curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS_STR, "https");
+#else
+    curl_easy_setopt(handle.get(), CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
+#endif
+    if (!body.empty()) {
+        curl_easy_setopt(handle.get(), CURLOPT_POSTFIELDS, body.data());
+        curl_easy_setopt(handle.get(), CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(body.size()));
+    }
+    curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, curl_write);
+    curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, &buffer);
+    const auto result = curl_easy_perform(handle.get());
+    if (buffer.overflow) throw std::runtime_error("network.request response exceeds 1 MiB limit");
+    if (result != CURLE_OK)
+        throw std::runtime_error(std::string("network.request failed: ") + curl_easy_strerror(result));
+    long status = 0;
+    curl_easy_getinfo(handle.get(), CURLINFO_RESPONSE_CODE, &status);
+    if (status < 200 || status >= 300)
+        throw std::runtime_error("network.request received HTTP status " + std::to_string(status));
+    return buffer.data;
+#endif
+}
 } // anonymous namespace
 
 VM::VM(std::istream& i, std::ostream& o, std::uint64_t fuel, ExecutionPolicy policy,
-       const InteropRegistry* interop)
+       const InteropRegistry* interop, std::vector<std::string> program_arguments)
     : input_(i), output_(o), fuel_(fuel), remaining_fuel_(fuel), policy_(std::move(policy)),
-      interop_registry_(interop) {
+      interop_registry_(interop), program_arguments_(std::move(program_arguments)) {
     validate_execution_policy(policy_);
     deterministic_random_state_ = policy_.deterministic_seed ? policy_.deterministic_seed : 0x9E3779B97F4A7C15ULL;
     deterministic_clock_ms_ = policy_.deterministic_clock_ms;
@@ -659,6 +932,10 @@ void VM::run_execution_loop() {
                 execute_interop_call(ins.operand, line);
                 break;
 
+            case OpCode::IntrinsicCall:
+                execute_intrinsic_call(ins.operand, line);
+                break;
+
             case OpCode::Return: {
                 if (frames_.empty())
                     runtime_error(line, "Return executed outside a function");
@@ -692,16 +969,26 @@ void VM::run_execution_loop() {
             
             case OpCode::Index: {
                 Value iv = pop(line), cv = pop(line);
-                auto* ap = std::get_if<ArrayPtr>(&cv);
-                if (!ap || !*ap) runtime_error(line, "🔎 requires an array");
-                double raw;
-                if (auto* d = std::get_if<double>(&iv)) raw = *d;
-                else if (auto* i = std::get_if<std::int64_t>(&iv)) raw = static_cast<double>(*i);
-                else runtime_error(line, "🔎 index must be a whole number");
-                if (!std::isfinite(raw) || std::floor(raw) != raw || raw < 0 || raw >= static_cast<double>((*ap)->elements.size()))
-                    runtime_error(line, "🔎 array index out of range");
-                stack_.push_back((*ap)->elements[static_cast<std::size_t>(raw)]);
-                break;
+                if (auto* ap = std::get_if<ArrayPtr>(&cv)) {
+                    if (!*ap) runtime_error(line, "🔎 received a null array");
+                    stack_.push_back((*ap)->elements[require_index(iv, (*ap)->elements.size(), "🔎 array")]);
+                    break;
+                }
+                if (auto* bp = std::get_if<BytesPtr>(&cv)) {
+                    if (!*bp) runtime_error(line, "🔎 received null bytes");
+                    stack_.emplace_back(static_cast<std::int64_t>((*bp)->bytes[require_index(iv, (*bp)->bytes.size(), "🔎 bytes")]));
+                    break;
+                }
+                if (auto* rp = std::get_if<RecordPtr>(&cv)) {
+                    if (!*rp) runtime_error(line, "🔎 received a null record");
+                    const auto* key = std::get_if<std::string>(&iv);
+                    if (!key) runtime_error(line, "🔎 record index must be text");
+                    const auto found = (*rp)->fields.find(*key);
+                    if (found == (*rp)->fields.end()) runtime_error(line, "🔎 record has no field '" + *key + "'");
+                    stack_.push_back(found->second);
+                    break;
+                }
+                runtime_error(line, "🔎 requires an array, bytes, or record");
             }
             
             case OpCode::Length: {
@@ -711,36 +998,66 @@ void VM::run_execution_loop() {
                     stack_.emplace_back(static_cast<double>((*ap)->elements.size()));
                 } else if (auto* text = std::get_if<std::string>(&v)) {
                     stack_.emplace_back(static_cast<double>(segment_graphemes(*text).size()));
+                } else if (auto* bp = std::get_if<BytesPtr>(&v)) {
+                    if (!*bp) runtime_error(line, "📏 received null bytes");
+                    stack_.emplace_back(static_cast<double>((*bp)->bytes.size()));
+                } else if (auto* rp = std::get_if<RecordPtr>(&v)) {
+                    if (!*rp) runtime_error(line, "📏 received a null record");
+                    stack_.emplace_back(static_cast<double>((*rp)->fields.size()));
                 } else {
-                    runtime_error(line, "📏 requires an array or text value");
+                    runtime_error(line, "📏 requires an array, text, bytes, or record value");
                 }
                 break;
             }
             
             case OpCode::Append: {
                 Value value = pop(line), cv = pop(line);
-                auto* ap = std::get_if<ArrayPtr>(&cv);
-                if (!ap || !*ap) runtime_error(line, "📎 requires an array");
-                auto next = std::make_shared<ArrayValue>(**ap);
-                next->elements.push_back(std::move(value));
-                stack_.emplace_back(std::move(next));
-                break;
+                if (auto* ap = std::get_if<ArrayPtr>(&cv)) {
+                    if (!*ap) runtime_error(line, "📎 received a null array");
+                    auto next = std::make_shared<ArrayValue>(**ap);
+                    next->elements.push_back(std::move(value));
+                    stack_.emplace_back(std::move(next));
+                    break;
+                }
+                if (auto* bp = std::get_if<BytesPtr>(&cv)) {
+                    if (!*bp) runtime_error(line, "📎 received null bytes");
+                    if ((*bp)->bytes.size() >= MaxBytesValue) runtime_error(line, "📎 bytes exceed 16 MiB limit");
+                    auto next = std::make_shared<BytesValue>(**bp);
+                    next->bytes.push_back(require_byte(value, "📎 bytes"));
+                    stack_.emplace_back(std::move(next));
+                    break;
+                }
+                runtime_error(line, "📎 requires an array or bytes");
             }
             
             case OpCode::SetIndex: {
                 Value value = pop(line), iv = pop(line), cv = pop(line);
-                auto* ap = std::get_if<ArrayPtr>(&cv);
-                if (!ap || !*ap) runtime_error(line, "🧷 requires an array");
-                double raw;
-                if (auto* d = std::get_if<double>(&iv)) raw = *d;
-                else if (auto* i = std::get_if<std::int64_t>(&iv)) raw = static_cast<double>(*i);
-                else runtime_error(line, "🧷 index must be a whole number");
-                if (!std::isfinite(raw) || std::floor(raw) != raw || raw < 0 || raw >= static_cast<double>((*ap)->elements.size()))
-                    runtime_error(line, "🧷 array index out of range");
-                auto next = std::make_shared<ArrayValue>(**ap);
-                next->elements[static_cast<std::size_t>(raw)] = std::move(value);
-                stack_.emplace_back(std::move(next));
-                break;
+                if (auto* ap = std::get_if<ArrayPtr>(&cv)) {
+                    if (!*ap) runtime_error(line, "🧷 received a null array");
+                    auto next = std::make_shared<ArrayValue>(**ap);
+                    next->elements[require_index(iv, next->elements.size(), "🧷 array")] = std::move(value);
+                    stack_.emplace_back(std::move(next));
+                    break;
+                }
+                if (auto* bp = std::get_if<BytesPtr>(&cv)) {
+                    if (!*bp) runtime_error(line, "🧷 received null bytes");
+                    auto next = std::make_shared<BytesValue>(**bp);
+                    next->bytes[require_index(iv, next->bytes.size(), "🧷 bytes")] = require_byte(value, "🧷 bytes");
+                    stack_.emplace_back(std::move(next));
+                    break;
+                }
+                if (auto* rp = std::get_if<RecordPtr>(&cv)) {
+                    if (!*rp) runtime_error(line, "🧷 received a null record");
+                    const auto* key = std::get_if<std::string>(&iv);
+                    if (!key || key->empty() || key->size() > 256 || !valid_utf8(*key))
+                        runtime_error(line, "🧷 record key must be 1..256 bytes of valid UTF-8 text");
+                    auto next = std::make_shared<RecordValue>(**rp);
+                    next->fields[*key] = std::move(value);
+                    if (next->fields.size() > MaxRecordFields) runtime_error(line, "🧷 record exceeds 65536 field limit");
+                    stack_.emplace_back(std::move(next));
+                    break;
+                }
+                runtime_error(line, "🧷 requires an array, bytes, or record");
             }
             
             case OpCode::Halt:
@@ -847,9 +1164,125 @@ void VM::execute_host_call(std::int32_t operand, std::uint32_t line) {
                 stack_.emplace_back(value ? std::string(value) : std::string{});
                 return;
             }
+            case NativeFacility::FilesystemWriteText:
+                write_host_text(require_native_string(args[0], native_facility_name(*facility)),
+                                require_native_string(args[1], native_facility_name(*facility)));
+                stack_.emplace_back(true);
+                return;
+            case NativeFacility::FilesystemCreateDirectory:
+                create_host_directory(require_native_string(args[0], native_facility_name(*facility)));
+                stack_.emplace_back(true);
+                return;
+            case NativeFacility::NetworkRequest:
+                stack_.emplace_back(https_request(
+                    require_native_string(args[0], native_facility_name(*facility)),
+                    require_native_string(args[1], native_facility_name(*facility)),
+                    require_native_string(args[2], native_facility_name(*facility))));
+                return;
         }
     } catch (const std::exception& error) {
         runtime_error(line, native_facility_name(*facility) + ": " + error.what());
+    }
+}
+
+void VM::execute_intrinsic_call(std::int32_t operand, std::uint32_t line) {
+    const auto intrinsic = intrinsic_from_operand(operand);
+    if (!intrinsic) runtime_error(line, "invalid intrinsic operand");
+    const auto arity = intrinsic_arity(*intrinsic);
+    if (stack_.size() < arity) runtime_error(line, "not enough intrinsic arguments on VM stack");
+    std::vector<Value> args(arity);
+    for (std::size_t n = arity; n > 0; --n) args[n - 1] = pop(line);
+
+    try {
+        switch (*intrinsic) {
+            case Intrinsic::RecordCreate: {
+                const auto type = require_native_string(args[0], intrinsic_name(*intrinsic));
+                if (type.empty() || type.size() > 256 || !valid_utf8(type))
+                    throw std::runtime_error("record type name must be 1..256 bytes of valid UTF-8");
+                const auto* pairs = std::get_if<ArrayPtr>(&args[1]);
+                if (!pairs || !*pairs) throw std::runtime_error("record.create requires a key/value array");
+                if (((*pairs)->elements.size() % 2) != 0)
+                    throw std::runtime_error("record.create key/value array must contain pairs");
+                if ((*pairs)->elements.size() / 2 > MaxRecordFields)
+                    throw std::runtime_error("record exceeds 65536 field limit");
+                auto record = std::make_shared<RecordValue>();
+                record->type_name = type;
+                for (std::size_t i = 0; i < (*pairs)->elements.size(); i += 2) {
+                    const auto* key = std::get_if<std::string>(&(*pairs)->elements[i]);
+                    if (!key || key->empty() || key->size() > 256 || !valid_utf8(*key))
+                        throw std::runtime_error("record keys must be 1..256 bytes of valid UTF-8");
+                    if (!record->fields.emplace(*key, (*pairs)->elements[i + 1]).second)
+                        throw std::runtime_error("record.create rejects duplicate field '" + *key + "'");
+                }
+                stack_.emplace_back(std::move(record));
+                return;
+            }
+            case Intrinsic::RecordType:
+                stack_.emplace_back(require_record_ref(args[0], intrinsic_name(*intrinsic))->type_name);
+                return;
+            case Intrinsic::RecordKeys: {
+                const auto& record = require_record_ref(args[0], intrinsic_name(*intrinsic));
+                auto keys = std::make_shared<ArrayValue>();
+                keys->elements.reserve(record->fields.size());
+                for (const auto& [key, ignored] : record->fields) {
+                    (void)ignored;
+                    keys->elements.emplace_back(key);
+                }
+                stack_.emplace_back(std::move(keys));
+                return;
+            }
+            case Intrinsic::ResultOk:
+            case Intrinsic::ResultError: {
+                auto result = std::make_shared<ResultValue>();
+                result->ok = *intrinsic == Intrinsic::ResultOk;
+                result->payload = std::move(args[0]);
+                stack_.emplace_back(std::move(result));
+                return;
+            }
+            case Intrinsic::ResultIsOk:
+                stack_.emplace_back(require_result_ref(args[0], intrinsic_name(*intrinsic))->ok);
+                return;
+            case Intrinsic::ResultPayload:
+                stack_.push_back(require_result_ref(args[0], intrinsic_name(*intrinsic))->payload);
+                return;
+            case Intrinsic::Utf8Encode: {
+                const auto text = require_native_string(args[0], intrinsic_name(*intrinsic));
+                if (!valid_utf8(text)) throw std::runtime_error("encoding.utf8-encode requires valid UTF-8 text");
+                if (text.size() > MaxBytesValue) throw std::runtime_error("encoded bytes exceed 16 MiB limit");
+                auto bytes = std::make_shared<BytesValue>();
+                bytes->bytes.assign(text.begin(), text.end());
+                stack_.emplace_back(std::move(bytes));
+                return;
+            }
+            case Intrinsic::Utf8Decode: {
+                const auto& bytes = require_bytes_ref(args[0], intrinsic_name(*intrinsic));
+                std::string text(bytes->bytes.begin(), bytes->bytes.end());
+                if (!valid_utf8(text)) throw std::runtime_error("encoding.utf8-decode rejected malformed UTF-8");
+                stack_.emplace_back(std::move(text));
+                return;
+            }
+            case Intrinsic::HexEncode:
+                stack_.emplace_back(hex_encode(require_bytes_ref(args[0], intrinsic_name(*intrinsic))));
+                return;
+            case Intrinsic::HexDecode:
+                stack_.emplace_back(hex_decode(require_native_string(args[0], intrinsic_name(*intrinsic))));
+                return;
+            case Intrinsic::Base64Encode:
+                stack_.emplace_back(base64_encode(require_bytes_ref(args[0], intrinsic_name(*intrinsic))));
+                return;
+            case Intrinsic::Base64Decode:
+                stack_.emplace_back(base64_decode(require_native_string(args[0], intrinsic_name(*intrinsic))));
+                return;
+            case Intrinsic::ProgramArguments: {
+                auto values = std::make_shared<ArrayValue>();
+                values->elements.reserve(program_arguments_.size());
+                for (const auto& argument : program_arguments_) values->elements.emplace_back(argument);
+                stack_.emplace_back(std::move(values));
+                return;
+            }
+        }
+    } catch (const std::exception& error) {
+        runtime_error(line, intrinsic_name(*intrinsic) + ": " + error.what());
     }
 }
 

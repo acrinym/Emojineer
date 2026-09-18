@@ -72,6 +72,9 @@ enum class NativeFacility : std::int32_t {
     ClockMillis = 3,
     RandomInt = 4,
     HostEnvironment = 5,
+    FilesystemWriteText = 6,
+    FilesystemCreateDirectory = 7,
+    NetworkRequest = 8,
 };
 
 /// Parse a CLI-facing capability name or supported short alias.
