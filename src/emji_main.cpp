@@ -19,7 +19,7 @@ void usage() {
     std::cerr
         << "emji " << emojineer::version << "\n"
         << "usage:\n"
-        << "  emji init <directory> [--name project_name]\n"
+        << "  emji init <directory> [--name project_name] [--template hello|cli|data|network]\n"
         << "  emji check [directory]\n"
         << "  emji lock [directory]\n"
         << "  emji show [directory]\n"
@@ -244,18 +244,27 @@ int main(int argc, char** argv) {
             if (argc < 3) throw std::runtime_error("init requires a target directory");
             const std::filesystem::path root = argv[2];
             std::optional<std::string> name;
+            emojineer::ProjectTemplate project_template = emojineer::ProjectTemplate::Hello;
+            bool template_set = false;
             for (int i = 3; i < argc; ++i) {
                 const std::string arg = argv[i];
                 if (arg == "--name") {
                     if (++i >= argc) throw std::runtime_error("--name requires a project name");
                     name = argv[i];
+                } else if (arg == "--template") {
+                    if (template_set) throw std::runtime_error("init accepts only one --template");
+                    if (++i >= argc) throw std::runtime_error("--template requires hello, cli, data, or network");
+                    const auto parsed = emojineer::parse_project_template(argv[i]);
+                    if (!parsed) throw std::runtime_error("unknown project template '" + std::string(argv[i]) + "'");
+                    project_template = *parsed;
+                    template_set = true;
                 } else {
                     throw std::runtime_error("unknown init option '" + arg + "'");
                 }
             }
             std::string project_name = name.value_or(root.filename().string());
             if (project_name.empty() || project_name == ".") project_name = "emojineer-project";
-            emojineer::initialize_project(root, project_name);
+            emojineer::initialize_project(root, project_name, project_template);
             const auto manifest = emojineer::load_project_manifest(root / "emojineer.toml");
             emojineer::write_project_lock(root, manifest);
             std::cout << "✅ initialized " << manifest.name << " in " << root.string() << '\n';

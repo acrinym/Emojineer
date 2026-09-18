@@ -1,0 +1,31 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background: #0e1014;
+  color: #f4f6fb;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #242a36, #0e1014 48%); }
+main { width: min(1180px, 94vw); margin: 0 auto; padding: 2rem 0 4rem; }
+header { display: flex; justify-content: space-between; gap: 2rem; align-items: flex-start; }
+h1 { margin: .15rem 0 .5rem; font-size: clamp(2rem, 5vw, 4rem); }
+.eyebrow { margin: 0; text-transform: uppercase; letter-spacing: .16em; opacity: .7; }
+#runtime-status { padding: .55rem .8rem; border: 1px solid #515a6d; border-radius: 999px; white-space: nowrap; }
+.toolbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin: 1.5rem 0 1rem; }
+button, select { font: inherit; border: 1px solid #4e596d; border-radius: .55rem; background: #1c2230; color: inherit; padding: .65rem .8rem; }
+button:not(:disabled) { cursor: pointer; }
+button:disabled { opacity: .5; }
+.workspace { display: grid; grid-template-columns: 1.2fr .8fr; gap: 1rem; }
+.pane { min-width: 0; background: rgba(17, 21, 29, .92); border: 1px solid #343c4c; border-radius: .8rem; padding: 1rem; }
+label, h2 { font-weight: 700; }
+textarea { width: 100%; min-height: 56vh; margin-top: .55rem; resize: vertical; border: 1px solid #3a4457; border-radius: .6rem; background: #090b0f; color: #f8fafc; padding: 1rem; font: 1rem/1.55 "Cascadia Code", "Segoe UI Emoji", monospace; }
+pre { min-height: 9rem; max-height: 28vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #090b0f; border-radius: .55rem; padding: .85rem; }
+.output-pane h2 { margin: .25rem 0 .45rem; font-size: 1rem; text-transform: uppercase; letter-spacing: .08em; }
+.note { color: #abb4c5; font-size: .9rem; }
+#diagnostic:not(:empty) { border: 1px solid #9c4d5e; }
+@media (max-width: 820px) {
+  header { display: block; }
+  #runtime-status { display: inline-block; margin-top: .75rem; }
+  .workspace { grid-template-columns: 1fr; }
+  textarea { min-height: 45vh; }
+}

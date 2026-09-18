@@ -2,6 +2,9 @@
 
 #include <unicode/brkiter.h>
 #include <unicode/normalizer2.h>
+#include <unicode/putil.h>
+#include <unicode/uclean.h>
+#include <unicode/udata.h>
 #include <unicode/uchar.h>
 #include <unicode/unistr.h>
 
@@ -13,7 +16,29 @@
 namespace emojineer {
 namespace {
 
+void ensure_icu_runtime_data() {
+#ifdef __EMSCRIPTEN__
+    static const bool configured = [] {
+        UErrorCode status = U_ZERO_ERROR;
+        u_setDataDirectory("/icu/");
+        udata_setFileAccess(UDATA_FILES_FIRST, &status);
+        if (U_FAILURE(status)) {
+            throw std::runtime_error(std::string("unable to configure ICU browser data access: ") +
+                                     u_errorName(status));
+        }
+        u_init(&status);
+        if (U_FAILURE(status)) {
+            throw std::runtime_error(std::string("unable to initialize ICU browser data: ") +
+                                     u_errorName(status));
+        }
+        return true;
+    }();
+    (void)configured;
+#endif
+}
+
 icu::UnicodeString from_utf8(const std::string& text) {
+    ensure_icu_runtime_data();
     return icu::UnicodeString::fromUTF8(icu::StringPiece(text));
 }
 
@@ -39,6 +64,7 @@ icu::UnicodeString remove_variation_selectors(const icu::UnicodeString& input) {
 } // namespace
 
 std::string canonicalize_token(const std::string& utf8) {
+    ensure_icu_runtime_data();
     UErrorCode status = U_ZERO_ERROR;
     const icu::Normalizer2* nfc = icu::Normalizer2::getNFCInstance(status);
     if (U_FAILURE(status)) {
@@ -55,11 +81,13 @@ std::string canonicalize_token(const std::string& utf8) {
 }
 
 std::vector<Grapheme> segment_graphemes(const std::string& utf8) {
+    ensure_icu_runtime_data();
     UErrorCode status = U_ZERO_ERROR;
     std::unique_ptr<icu::BreakIterator> breaker(
         icu::BreakIterator::createCharacterInstance(icu::Locale::getRoot(), status));
     if (U_FAILURE(status) || !breaker) {
-        throw std::runtime_error("unable to initialize ICU grapheme iterator");
+        throw std::runtime_error(std::string("unable to initialize ICU grapheme iterator: ") +
+                                 u_errorName(status));
     }
 
     icu::UnicodeString text = from_utf8(utf8);

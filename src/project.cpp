@@ -372,7 +372,42 @@ std::string project_manifest_hash(const ProjectManifest& manifest) {
     return out.str();
 }
 
-void initialize_project(const std::filesystem::path& root, const std::string& name) {
+std::optional<ProjectTemplate> parse_project_template(std::string_view name) {
+    if (name == "hello") return ProjectTemplate::Hello;
+    if (name == "cli") return ProjectTemplate::Cli;
+    if (name == "data") return ProjectTemplate::Data;
+    if (name == "network") return ProjectTemplate::Network;
+    return std::nullopt;
+}
+
+std::string project_template_name(ProjectTemplate value) {
+    switch (value) {
+        case ProjectTemplate::Hello: return "hello";
+        case ProjectTemplate::Cli: return "cli";
+        case ProjectTemplate::Data: return "data";
+        case ProjectTemplate::Network: return "network";
+    }
+    throw std::runtime_error("unknown project template");
+}
+
+std::string project_template_source(ProjectTemplate value) {
+    switch (value) {
+        case ProjectTemplate::Hello:
+            return "📝 📜Hello from Emojineer 🚀📜\n";
+        case ProjectTemplate::Cli:
+            return "🐍 🎒 🟰 🧳 🫴 🤲\n📝 📏 🎒\n📝 🎒\n";
+        case ProjectTemplate::Data:
+            return "🐍 🧑 🟰 🗃️ 🫴 📜Person📜 📚 🫴 📜name📜 📜Ada📜 📜age📜 37 🤲 🤲\n"
+                   "📝 🔎 🫴 🧑 📜name📜 🤲\n"
+                   "📝 🧷 🫴 🧑 📜age📜 38 🤲\n";
+        case ProjectTemplate::Network:
+            return "📝 🛰️ 🫴 📜GET📜 📜https://example.com📜 📜📜 🤲\n";
+    }
+    throw std::runtime_error("unknown project template");
+}
+
+void initialize_project(const std::filesystem::path& root, const std::string& name,
+                        ProjectTemplate project_template) {
     ProjectManifest manifest{name, "0.1.0", std::filesystem::path("src/main.emoji"), {}, {}};
     validate_manifest(manifest);
     const auto manifest_path = root / "emojineer.toml";
@@ -383,7 +418,7 @@ void initialize_project(const std::filesystem::path& root, const std::string& na
     write_text(manifest_path, canonical_manifest_text(manifest));
     const auto entry_path = root / manifest.entry;
     if (!std::filesystem::exists(entry_path)) {
-        write_text(entry_path, "📝 📜Hello from Emojineer 🚀📜\n");
+        write_text(entry_path, project_template_source(project_template));
     }
 }
 

@@ -19,7 +19,12 @@ Initialize one with:
 ```text
 emji init my-project
 emji init my-project --name signal_lab
+emji init my-tool --template cli
+emji init my-data-app --template data
+emji init my-fetcher --template network
 ```
+
+First-party templates are `hello` (default), `cli`, `data`, and `network`.
 
 ## Manifest
 

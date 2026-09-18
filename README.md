@@ -109,7 +109,7 @@ Only the current package's declared **direct** dependencies are available throug
 
 ## Install or build
 
-Published release artifacts are intended to be usable without a C++ toolchain; see [`docs/INSTALL.md`](docs/INSTALL.md). The supported VS Code/Cursor package is documented in [`docs/EDITOR.md`](docs/EDITOR.md).
+Published release artifacts are intended to be usable without a C++ toolchain; see [`docs/INSTALL.md`](docs/INSTALL.md). New users can then follow [`docs/FIVE_MINUTE_TOUR.md`](docs/FIVE_MINUTE_TOUR.md), or use the static WebAssembly browser path described in [`docs/PLAYGROUND.md`](docs/PLAYGROUND.md). The supported VS Code/Cursor package is documented in [`docs/EDITOR.md`](docs/EDITOR.md).
 
 Source-build requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`). libcurl is optional and enables HTTPS registry reads/publication/discovery plus the explicitly granted `🌐` runtime facility; local file registries and all non-network language behavior remain available without it.
 
