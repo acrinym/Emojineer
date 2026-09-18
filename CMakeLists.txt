@@ -23,6 +23,7 @@ add_library(emojineer_core
     src/registry_discovery.cpp
     src/authenticated_publication.cpp
     src/browser_runtime.cpp
+    src/web.cpp
     src/capability.cpp
     src/intrinsic.cpp
     src/interop.cpp
@@ -164,6 +165,9 @@ if(BUILD_TESTING)
  add_executable(emojineer_browser_runtime_tests tests/browser_runtime_tests.cpp)
  target_link_libraries(emojineer_browser_runtime_tests PRIVATE emojineer_core)
  add_test(NAME emojineer_browser_runtime_tests COMMAND emojineer_browser_runtime_tests)
+ add_executable(emojineer_web_tests tests/web_tests.cpp)
+ target_link_libraries(emojineer_web_tests PRIVATE emojineer_core)
+ add_test(NAME emojineer_web_tests COMMAND emojineer_web_tests)
  add_test(NAME emojineer_capability_cli
           COMMAND ${CMAKE_COMMAND}
                   -DEMOJINEER=$<TARGET_FILE:emojineer>
@@ -197,6 +201,12 @@ if(BUILD_TESTING)
                   -DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
                   -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/examples-cli
                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/examples_cli.cmake)
+ add_test(NAME emojineer_web_cli
+          COMMAND ${CMAKE_COMMAND}
+                  -DEMOJINEER=$<TARGET_FILE:emojineer>
+                  -DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+                  -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/web-cli
+                  -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/web_cli.cmake)
 endif()
 
 include(cmake/Packaging.cmake)

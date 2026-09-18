@@ -20,6 +20,9 @@ button:disabled { opacity: .5; }
 label, h2 { font-weight: 700; }
 textarea { width: 100%; min-height: 56vh; margin-top: .55rem; resize: vertical; border: 1px solid #3a4457; border-radius: .6rem; background: #090b0f; color: #f8fafc; padding: 1rem; font: 1rem/1.55 "Cascadia Code", "Segoe UI Emoji", monospace; }
 pre { min-height: 9rem; max-height: 28vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #090b0f; border-radius: .55rem; padding: .85rem; }
+#behavior { min-height: 14rem; margin-top: .55rem; }
+#behavior-panel { margin-top: 1rem; }
+#web-preview { width: 100%; min-height: 34rem; border: 1px solid #3a4457; border-radius: .55rem; background: white; }
 .output-pane h2 { margin: .25rem 0 .45rem; font-size: 1rem; text-transform: uppercase; letter-spacing: .08em; }
 .note { color: #abb4c5; font-size: .9rem; }
 #diagnostic:not(:empty) { border: 1px solid #9c4d5e; }

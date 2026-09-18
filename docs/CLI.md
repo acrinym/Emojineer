@@ -36,6 +36,8 @@ emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]
 emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]
 emojineer <easm-check|easm-dump|easm-info> <file.easm>
 emojineer easm-run <file.easm> [execution-policy]
+emojineer <web-check|web-dump|web-bindings> <file.emjweb>
+emojineer web-build <file.emjweb> [-o page.html]
 ```
 
 File/project compilation uses the normal package-aware module linker. The debugger and REPL execute through the production VM, not alternate evaluators.
@@ -59,6 +61,8 @@ Default execution has no Train 20 host grants. `--sandbox` is hard zero-host-cap
 `interop` compiles source or reads EMJBC and reports verifier-visible typed adapter imports and exported function surfaces without executing the program or accepting runtime grants. See [INTEROP.md](INTEROP.md).
 
 `easm-check` parses and verifies `EASM1`; `easm-dump` emits canonical reparsable EASM; `easm-info` reports typed buffers/imports/exports and authority requirements; `easm-run` invokes the no-argument export named `main`. The inspection commands reject execution-policy flags. `easm-run` accepts them, but the CLI intentionally supplies no ambient interop adapter registry. See [EASM.md](EASM.md).
+
+`web-check` verifies native `.emjweb` markup; `web-dump` emits the typed `emojineer.web-ir.v1` document IR; `web-bindings` emits explicit browser event/export/target bindings; and `web-build` lowers the verified document to semantic HTML. These are authoring/build commands and do not accept runtime grants. See [WEB.md](WEB.md).
 
 ## Core `emji` project workflow
 

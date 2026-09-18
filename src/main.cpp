@@ -12,6 +12,7 @@
 #include "emojineer/stdlib.hpp"
 #include "emojineer/vm.hpp"
 #include "emojineer/version.hpp"
+#include "emojineer/web.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -69,6 +70,8 @@ void usage() {
         << "  emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]\n"
         << "  emojineer <easm-check|easm-dump|easm-info> <file.easm>\n"
         << "  emojineer easm-run <file.easm> [execution-policy]\n"
+        << "  emojineer <web-check|web-dump|web-bindings> <file.emjweb>\n"
+        << "  emojineer web-build <file.emjweb> [-o page.html]\n"
         << "execution-policy:\n"
         << "  --grant <filesystem|network|process|clock|random|host|all>  repeatable\n"
         << "  --sandbox                 hard zero-host-authority mode\n"
@@ -274,6 +277,32 @@ int main(int argc, char** argv) {
         }
 
         if (!cli.input) throw std::runtime_error("missing input");
+
+        if (cli.command == "web-check" || cli.command == "web-dump" ||
+            cli.command == "web-bindings" || cli.command == "web-build") {
+            reject_execution_policy_options(cli, cli.command);
+            if (!cli.cer.empty())
+                throw std::runtime_error(cli.command + " does not accept source CER");
+            if (cli.command != "web-build" && cli.output)
+                throw std::runtime_error(cli.command + " does not accept -o");
+            const auto document = emojineer::parse_web_document(read_text(*cli.input));
+            if (cli.command == "web-check") {
+                std::cout << "✅ " << cli.input->string() << " is valid Emojineer web markup\n";
+                return 0;
+            }
+            if (cli.command == "web-dump") {
+                std::cout << emojineer::render_web_document_ir(document);
+                return 0;
+            }
+            if (cli.command == "web-bindings") {
+                std::cout << emojineer::render_web_bindings_json(document) << '\n';
+                return 0;
+            }
+            const auto html = emojineer::render_web_document_html(document);
+            if (cli.output) write_text(*cli.output, html);
+            else std::cout << html;
+            return 0;
+        }
 
         if (cli.command == "easm-check" || cli.command == "easm-dump" ||
             cli.command == "easm-info" || cli.command == "easm-run") {

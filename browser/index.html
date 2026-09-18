@@ -28,6 +28,10 @@
       <div class="pane">
         <label for="source">Emojineer source</label>
         <textarea id="source" spellcheck="false" aria-describedby="sandbox-note"></textarea>
+        <div id="behavior-panel" hidden>
+          <label for="behavior">Emojineer behavior exports</label>
+          <textarea id="behavior" spellcheck="false"></textarea>
+        </div>
         <p id="sandbox-note" class="note">Host capabilities are denied in this browser runtime.</p>
       </div>
       <div class="pane output-pane">
@@ -36,6 +40,8 @@
         <h2>diagnostics</h2>
         <pre id="diagnostic" aria-live="polite"></pre>
         <p id="capabilities" class="note"></p>
+        <h2 id="preview-heading" hidden>web preview</h2>
+        <iframe id="web-preview" title="Rendered Emojineer web page" sandbox="allow-same-origin" hidden></iframe>
       </div>
     </section>
   </main>

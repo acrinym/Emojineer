@@ -164,6 +164,7 @@ Key references:
 - [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) — default-deny runtime authority, native facilities, grants, sandbox, and deterministic execution;
 - [`docs/INTEROP.md`](docs/INTEROP.md) — typed host/WASM imports/exports, EMJABI1, adapter contracts, and verifier/runtime boundaries;
 - [`docs/EASM.md`](docs/EASM.md) — low-level EASM1 syntax, typed memory/registers, verifier/runtime rules, and Train 21 composition;
+- [`docs/WEB.md`](docs/WEB.md) — Emojineer-native web markup, typed document IR, semantic HTML, and explicit browser behavior bindings;
 - [`docs/CER.md`](docs/CER.md) — Custom Emoji Registry;
 - [`docs/PRODUCT_1_0_CONTRACT.md`](docs/PRODUCT_1_0_CONTRACT.md) — 1.0 install/use/compatibility contract and explicit post-1.0 boundaries;
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — landed and next product trains.
