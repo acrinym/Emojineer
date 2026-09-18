@@ -22,7 +22,12 @@ const factory = require(modulePath);
     "🐍 🫶🏻 🟰 📜heart-hands-ok📜\n📝 🫶🏻\n"
   );
   if (!unicode14.ok || unicode14.stdout !== "handshake-ok\nheart-hands-ok\n") {
-    throw new Error(`browser Unicode parity failed: ${JSON.stringify(unicode14)}`);
+    throw new Error(`browser Unicode 14 parity failed: ${JSON.stringify(unicode14)}`);
+  }
+
+  const unicode15 = run("🐍 🩷 🟰 📜pink-heart-ok📜\n📝 🩷\n");
+  if (!unicode15.ok || unicode15.stdout !== "pink-heart-ok\n") {
+    throw new Error(`browser Unicode 15 parity failed: ${JSON.stringify(unicode15)}`);
   }
 
   const denied = run("📝 🌐 🫴 📜https://example.com📜 🤲\n");
