@@ -11,6 +11,7 @@
 #include "emojineer/source_tools.hpp"
 #include "emojineer/stdlib.hpp"
 #include "emojineer/vm.hpp"
+#include "emojineer/version.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -52,7 +53,7 @@ struct Cli {
 
 void usage() {
     std::cerr
-        << "Emojineer 0.22\n"
+        << "Emojineer " << emojineer::version << "\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...] [execution-policy]\n"
         << "  emojineer stdlib\n"
@@ -244,6 +245,10 @@ emojineer::Chunk read_chunk(const std::filesystem::path& path) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string(argv[1]) == "--version") {
+            std::cout << "emojineer " << emojineer::version << '\n';
+            return 0;
+        }
         Cli cli = parse_cli(argc, argv);
 
         if (cli.command == "repl") {

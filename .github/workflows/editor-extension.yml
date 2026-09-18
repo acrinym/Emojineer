@@ -1,0 +1,37 @@
+name: editor-extension
+
+on:
+  pull_request:
+    paths:
+      - "editors/vscode/**"
+      - ".github/workflows/editor-extension.yml"
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Install extension dependencies
+        working-directory: editors/vscode
+        run: npm ci
+
+      - name: Validate extension package
+        working-directory: editors/vscode
+        run: npm test
+
+      - name: Build VSIX
+        working-directory: editors/vscode
+        run: npm run package
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: emojineer-vscode
+          path: editors/vscode/*.vsix

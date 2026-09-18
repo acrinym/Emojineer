@@ -4,6 +4,8 @@ Emojineer is a sovereign emoji-native programming language. Its source is parsed
 
 ## Start here
 
+- [Install Emojineer](INSTALL.md) - release artifacts, installed layout, and clean install/uninstall paths.
+- [Editor experience](EDITOR.md) - VS Code/Cursor extension, production LSP, and semantic emoji palette.
 - [Language reference](LANGUAGE.md) - source model, tokens, grammar, values, functions, collections, control flow, and module imports.
 - [CLI and toolchain](CLI.md) - language, project, package, registry, discovery, LSP, and debugger entry points.
 - [EMJBC bytecode](BYTECODE.md) - bytecode format, verifier limits, source metadata, and VM execution model.

@@ -105,9 +105,11 @@ Given a declared dependency named `mathkit`, import one of its modules explicitl
 
 Only the current package's declared **direct** dependencies are available through `pkg:`. Transitive packages do not become ambient imports, and normal relative imports cannot cross into dependency-owned source trees.
 
-## Build
+## Install or build
 
-Requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`). libcurl is optional and enables HTTPS registry reads/publication/discovery plus the explicitly granted `🌐` runtime facility; local file registries and all non-network language behavior remain available without it.
+Published release artifacts are intended to be usable without a C++ toolchain; see [`docs/INSTALL.md`](docs/INSTALL.md). The supported VS Code/Cursor package is documented in [`docs/EDITOR.md`](docs/EDITOR.md).
+
+Source-build requirements: C++20, CMake 3.20+, and ICU 70+ (`uc` + `i18n`). libcurl is optional and enables HTTPS registry reads/publication/discovery plus the explicitly granted `🌐` runtime facility; local file registries and all non-network language behavior remain available without it.
 
 ```bash
 cmake -S . -B build

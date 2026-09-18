@@ -8,3 +8,7 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Editor build outputs
+editors/vscode/node_modules/
+editors/vscode/*.vsix

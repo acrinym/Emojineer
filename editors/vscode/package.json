@@ -1,0 +1,62 @@
+{
+  "name": "emojineer",
+  "displayName": "Emojineer",
+  "description": "Editor support for the sovereign emoji-native Emojineer language",
+  "version": "0.22.0",
+  "publisher": "acrinym",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/acrinym/Emojineer.git",
+    "directory": "editors/vscode"
+  },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:emojineer"],
+  "main": "./extension.js",
+  "scripts": {
+    "test": "node tests/validate-package.js",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.2.2"
+  },
+  "contributes": {
+    "languages": [{
+      "id": "emojineer",
+      "aliases": ["Emojineer", "emoji"],
+      "extensions": [".emoji"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "emojineer",
+      "scopeName": "source.emojineer",
+      "path": "./syntaxes/emojineer.tmLanguage.json"
+    }],
+    "commands": [
+      { "command": "emojineer.run", "title": "Emojineer: Run Current File" },
+      { "command": "emojineer.check", "title": "Emojineer: Check Current File" },
+      { "command": "emojineer.format", "title": "Emojineer: Format Current File" },
+      { "command": "emojineer.debug", "title": "Emojineer: Debug Current File" },
+      { "command": "emojineer.semanticPalette", "title": "Emojineer: Insert Semantic Emoji" }
+    ],
+    "configuration": {
+      "title": "Emojineer",
+      "properties": {
+        "emojineer.toolchainPath": {
+          "type": "string",
+          "default": "",
+          "description": "Directory containing emojineer, emji, and emojineer-lsp. Empty uses PATH."
+        },
+        "emojineer.lspPath": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit emojineer-lsp executable path. Overrides toolchainPath."
+        }
+      }
+    }
+  }
+}

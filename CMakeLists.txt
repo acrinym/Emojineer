@@ -34,6 +34,7 @@ add_library(emojineer_core
     src/debugger.cpp
 )
 target_include_directories(emojineer_core PUBLIC include)
+target_compile_definitions(emojineer_core PUBLIC EMOJINEER_VERSION="${PROJECT_VERSION}")
 target_link_libraries(emojineer_core PUBLIC ICU::uc ICU::i18n)
 if(CURL_FOUND)
  target_link_libraries(emojineer_core PRIVATE CURL::libcurl)
@@ -128,4 +129,12 @@ if(BUILD_TESTING)
                   -DEMOJINEER=$<TARGET_FILE:emojineer>
                   -DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/easm-cli
                   -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/easm_cli.cmake)
+ add_test(NAME emojineer_version_cli
+          COMMAND ${CMAKE_COMMAND}
+                  -DEMOJINEER=$<TARGET_FILE:emojineer>
+                  -DEMJI=$<TARGET_FILE:emji>
+                  -DLSP=$<TARGET_FILE:emojineer-lsp>
+                  -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/version_cli.cmake)
 endif()
+
+include(cmake/Packaging.cmake)

@@ -4,6 +4,7 @@
 #include "emojineer/project.hpp"
 #include "emojineer/registry_transport.hpp"
 #include "emojineer/registry_discovery.hpp"
+#include "emojineer/version.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -16,7 +17,7 @@ namespace {
 
 void usage() {
     std::cerr
-        << "emji 0.22\n"
+        << "emji " << emojineer::version << "\n"
         << "usage:\n"
         << "  emji init <directory> [--name project_name]\n"
         << "  emji check [directory]\n"
@@ -229,6 +230,10 @@ emojineer::PackageGraphReport package_report(const std::filesystem::path& root) 
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string(argv[1]) == "--version") {
+            std::cout << "emji " << emojineer::version << '\n';
+            return 0;
+        }
         if (argc < 2) {
             usage();
             return 2;
