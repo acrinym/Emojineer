@@ -54,30 +54,31 @@ bool under_dependency(const std::filesystem::path& path,
 std::string package_hash(const std::filesystem::path& root,
                          const ProjectManifest& manifest,
                          const std::vector<std::filesystem::path>& dependency_roots) {
+    const auto canonical_root = std::filesystem::canonical(root);
     std::vector<std::pair<std::string, std::string>> sources;
-    std::filesystem::recursive_directory_iterator it(root), end;
+    std::filesystem::recursive_directory_iterator it(canonical_root), end;
     for (; it != end; ++it) {
         const auto path = it->path();
         if (it->is_directory()) {
-            if (path == root / ".emojineer") {
+            if (path == canonical_root / ".emojineer") {
                 it.disable_recursion_pending();
                 continue;
             }
             std::error_code ec;
             const auto canonical = std::filesystem::canonical(path, ec);
-            if (!ec && path != root && under_dependency(canonical, dependency_roots)) {
+            if (!ec && path != canonical_root && under_dependency(canonical, dependency_roots)) {
                 it.disable_recursion_pending();
             }
             continue;
         }
         if (!it->is_regular_file() || path.extension() != ".emoji") continue;
         const auto canonical = std::filesystem::canonical(path);
-        if (!within(root, canonical)) {
+        if (!within(canonical_root, canonical)) {
             throw std::runtime_error("package '" + manifest.name +
                                      "' contains a source symlink that escapes its root");
         }
         if (under_dependency(canonical, dependency_roots)) continue;
-        sources.emplace_back(std::filesystem::relative(canonical, root).generic_string(),
+        sources.emplace_back(std::filesystem::relative(canonical, canonical_root).generic_string(),
                              read_text(canonical));
     }
     std::sort(sources.begin(), sources.end(),
@@ -178,8 +179,9 @@ void validate_offline_registry_lock(const ProjectManifest& root_manifest,
 
 std::string registry_package_hash(const std::filesystem::path& root,
                                  const ProjectManifest& manifest) {
+    const auto canonical_root = std::filesystem::canonical(root);
     std::vector<std::pair<std::string, std::string>> sources;
-    std::filesystem::recursive_directory_iterator it(root), end;
+    std::filesystem::recursive_directory_iterator it(canonical_root), end;
     for (; it != end; ++it) {
         const auto path = it->path();
         if (it->is_directory()) {
@@ -187,11 +189,11 @@ std::string registry_package_hash(const std::filesystem::path& root,
         }
         if (!it->is_regular_file() || path.extension() != ".emoji") continue;
         const auto canonical = std::filesystem::canonical(path);
-        if (!within(root, canonical)) {
+        if (!within(canonical_root, canonical)) {
             throw std::runtime_error("package '" + manifest.name +
                                      "' contains a source symlink that escapes its root");
         }
-        sources.emplace_back(std::filesystem::relative(canonical, root).generic_string(),
+        sources.emplace_back(std::filesystem::relative(canonical, canonical_root).generic_string(),
                              read_text(canonical));
     }
     std::sort(sources.begin(), sources.end(),
