@@ -304,7 +304,8 @@ void test_registry_dependency_offline_resolution() {
     require(mylib->source_kind == emojineer::DependencyKind::Registry, 
             "mylib should be resolved as registry package");
     require(mylib->version == "1.0.0", "mylib version should match");
-    require(mylib->root == pkg_path, "mylib root should be the materialized store path");
+    require(mylib->root == std::filesystem::canonical(pkg_path),
+            "mylib root should be the canonical materialized store path");
     require(mylib->registry_alias == "origin", "mylib registry alias should be set");
     require(mylib->registry_id == "origin-id", "mylib registry id should be set");
     require(mylib->store_path == pkg_path, "mylib store_path should be set");

@@ -315,8 +315,8 @@ void test_package_import_error_preserves_importer_source() {
         (void)emojineer::compile_file(entry, {}, root.path);
     } catch (const emojineer::SourceLocationException& error) {
         caught = true;
-        require(error.sourcePath == imported,
-                "package import failure must belong to imported module path");
+        require(error.sourcePath == std::filesystem::canonical(imported),
+                "package import failure must belong to canonical imported module path");
         require(error.sourceIdentity.find("child.emoji") != std::string::npos,
                 "package import failure must preserve imported module identity");
         require(error.line == 2, "package import failure must preserve import line");
