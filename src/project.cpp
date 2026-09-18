@@ -776,7 +776,7 @@ ProjectLock manifest_to_lock_with_resolved_deps(
         dep.registry_endpoint = resolved.registry_endpoint;
         dep.requirement = resolved.requirement;
         dep.artifact_sha256 = resolved.artifact_sha256;
-        dep.store_path = resolved.store_path;
+        dep.store_path = resolved.store_path.generic_string();
         dep.content_sha256 = resolved.content_sha256;
         
         // Extract dependency names from the resolved dependency's dependencies
@@ -874,7 +874,9 @@ std::vector<ResolvedRegistryDependency> resolve_registry_dependencies_impl(
                             resolved_dep.requirement = lock_dep.requirement.value_or("");
                             resolved_dep.artifact_sha256 = lock_dep.artifact_sha256.value_or("");
                             resolved_dep.content_sha256 = lock_dep.content_sha256.value_or("");
-                            resolved_dep.store_path = lock_dep.store_path.value_or(std::filesystem::path());
+                            resolved_dep.store_path = lock_dep.store_path
+                                ? std::filesystem::path(*lock_dep.store_path)
+                                : std::filesystem::path{};
                             
                             // Load dependencies from embedded manifest if available
                             // Corrupted manifest failures must propagate in BOTH online and offline modes
@@ -1258,7 +1260,7 @@ ProjectLock load_project_lock(const std::filesystem::path& lock_path) {
                 else if (key == "registry_endpoint") current_dep->registry_endpoint = value;
                 else if (key == "requirement") current_dep->requirement = value;
                 else if (key == "artifact_sha256") current_dep->artifact_sha256 = value;
-                else if (key == "store_path") current_dep->store_path = std::filesystem::path(value);
+                else if (key == "store_path") current_dep->store_path = value;
                 else if (key == "dependencies") {
                     // Parse comma-separated dependencies
                     std::string deps = value;
