@@ -298,10 +298,11 @@ private:
         return nullptr;
     }
 
-    void visit(const std::filesystem::path& root,
+    void visit(const std::filesystem::path& raw_root,
                const ProjectManifest& manifest,
                std::vector<std::string>& stack,
                DependencyKind source_kind) {
+        const auto root = std::filesystem::canonical(raw_root);
         const std::string root_key = root.generic_string();
         if (auto state = states_.find(root_key); state != states_.end()) {
             if (state->second == VisitState::Done) return;
