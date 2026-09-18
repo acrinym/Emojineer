@@ -1,0 +1,3 @@
+{"id":"int-c363ea720ba0173f6d9cfc1a4ae9fda6","kind":"field_change","created_at":"2026-09-18T05:44:51.1246015Z","actor":"acrinym","issue_id":"emj-qmg","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}
+{"id":"int-156e9742e740b93df2729abb8d646bd0","kind":"field_change","created_at":"2026-09-18T05:44:52.5122734Z","actor":"acrinym","issue_id":"emj-qmg.1","extra":{"field":"status","new_value":"in_progress","old_value":"open"}}
+{"id":"int-e9c65eaaf7cd0d701f3c29c30a856d14","kind":"field_change","created_at":"2026-09-18T05:47:12.8904468Z","actor":"acrinym","issue_id":"emj-qmg.1","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"1.0 product/domain contract documented and roadmap aligned"}}

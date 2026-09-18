@@ -12,7 +12,7 @@ specific groundwork. Emoji Stories and breakable physical-note secret-code
 schemes are explicitly reserved for Emojineer 2.0/post-1.0.
 """
 created     = "2026-09-18"
-status      = "planned"
+status      = "in_progress"
 
 [[cars]]
 id             = "product_contract"
