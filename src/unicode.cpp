@@ -8,6 +8,7 @@
 #include <unicode/uchar.h>
 #include <unicode/unistr.h>
 
+#include <cstdint>
 #include <iomanip>
 #include <memory>
 #include <sstream>

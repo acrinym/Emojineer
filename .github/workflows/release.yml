@@ -61,7 +61,7 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.triplet }}" = "windows" ]; then
-            cmake -S . -B build-release -G "Visual Studio 17 2022" -A x64 "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+            cmake -S . -B build-release -G "Visual Studio 18 2026" -A x64 "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}" -DVCPKG_TARGET_TRIPLET=x64-windows-static
           elif [ "${{ matrix.triplet }}" = "macos" ]; then
             cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release "-DICU_ROOT=${ICU_ROOT}" "-DCURL_ROOT=${CURL_ROOT}"
           else
