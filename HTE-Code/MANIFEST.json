@@ -1,0 +1,198 @@
+{
+  "schema": "hte-code-repo-bundle/1.1",
+  "generated_from": "D:\\github\\HTE-Code",
+  "repo": "D:\\github\\Emojineer",
+  "origin": "https://github.com/acrinym/Emojineer.git",
+  "head_at_generation": "b1dbfe3f8738a70f14282aec8cc63c8c6bfb7cd3",
+  "baseline": {
+    "central_path": "D:\\github\\HTE-Code\\core\\HTE-Code-v2.0-Depth5.md",
+    "sha256": "8499c642f5246003ae6328a8ed3b1543fcd77046ccf81722d000497b86e4e5b4"
+  },
+  "packs": [
+    {
+      "id": "language.cpp",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\languages\\cpp\\CONCERNS.md",
+          "sha256": "dd9f19642322d22994f12c6fba16fb2f24769ccf4cb311a435b80aad4a2de554"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\languages\\cpp\\DEPTH5.md",
+          "sha256": "d5d182523c2659dc89dfb8ad8df41cbc46f34bfa4869a31199f21bd54376ced6"
+        },
+        {
+          "name": "FULL-COVERAGE.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\languages\\cpp\\FULL-COVERAGE.md",
+          "sha256": "4629dfce35a6576d92396fb7c435a608570070c88bbf115049b547e7ef7d13ea"
+        }
+      ]
+    },
+    {
+      "id": "language.cpp-header",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\languages\\cpp-header\\CONCERNS.md",
+          "sha256": "e278280411d8e9a74643c82ee4e794087966a38af70e98e6b206de3a71603244"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\languages\\cpp-header\\DEPTH5.md",
+          "sha256": "ceb6c823534912a20c4303c9cd718d5df271b9411bdaa2efeee819bffc4fc996"
+        },
+        {
+          "name": "FULL-COVERAGE.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\languages\\cpp-header\\FULL-COVERAGE.md",
+          "sha256": "18c6257c15a07ff0ae0bb529eb65774a0e551b0d96a92f85cca89a0a68cc2a0e"
+        }
+      ]
+    },
+    {
+      "id": "compiler.c-cpp-compiler-unspecified",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\compilers\\c-cpp-compiler-unspecified\\CONCERNS.md",
+          "sha256": "2d54d601f3d3a131d13932a949a212c887a3ad3a313503c8f3ed397c73491a45"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\compilers\\c-cpp-compiler-unspecified\\DEPTH5.md",
+          "sha256": "a8e676a83c9ce09190fd16944b63a3177c213104156f4892e553d768f08a07da"
+        }
+      ]
+    },
+    {
+      "id": "runtime.native",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\runtimes\\native\\CONCERNS.md",
+          "sha256": "885c69fd212d752401417a45ad5f67c64b65e2e38b5520ac1f862845f234a72a"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\runtimes\\native\\DEPTH5.md",
+          "sha256": "19d6ed14f9008e4cc4cd23fd33f4496741d3236e064c1081a32a0dc1a18be1af"
+        },
+        {
+          "name": "GAPS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\runtimes\\native\\GAPS.md",
+          "sha256": "394930c31f0be34eae92e771f540c41b222aa7e7625df0835adbf6769df32951"
+        }
+      ]
+    },
+    {
+      "id": "toolchain.cmake",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\toolchains\\cmake\\CONCERNS.md",
+          "sha256": "e5c3169451aa7b3250e6e1bd9d28c6f1402fb12adc754c6d3596c3eb12fa0fb5"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\toolchains\\cmake\\DEPTH5.md",
+          "sha256": "65582912db1604abbc647380c1ec846236980d9d5f3855fd7ca2964f934f322d"
+        },
+        {
+          "name": "GAPS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\toolchains\\cmake\\GAPS.md",
+          "sha256": "01c6a8e4c88531e4d252dc8787b3210cd7d348befa4a0aad188898831007a67d"
+        }
+      ]
+    },
+    {
+      "id": "format.markdown",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\formats\\markdown\\CONCERNS.md",
+          "sha256": "3d11d132127e2546450dd409098a98a3099896267c338d201be518812148fe96"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\formats\\markdown\\DEPTH5.md",
+          "sha256": "ad09e7392c7463a70cd0326711f2be1de584d95db2549bc6039fd91d47959e99"
+        },
+        {
+          "name": "FULL-COVERAGE.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\formats\\markdown\\FULL-COVERAGE.md",
+          "sha256": "4f4d544b048c947c012e18edd7fd6ca0a02f1b2d2b3c97d03d16efa617e61d16"
+        },
+        {
+          "name": "GAPS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\formats\\markdown\\GAPS.md",
+          "sha256": "e3c52aff1bc3b5d08ff2352211a9a041d25e60d2d62c938ba7e81127520084b8"
+        }
+      ]
+    },
+    {
+      "id": "format.json",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\formats\\json\\CONCERNS.md",
+          "sha256": "92d79c2ce94d6dfdf6bde0f8393aa62020a12313a23e7fbdd19d5dd9251072a4"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\formats\\json\\DEPTH5.md",
+          "sha256": "3efe12b8c6fca48f648a50ea4ebe9a4dfc317548e379091fab1aee603e8a4df6"
+        },
+        {
+          "name": "GAPS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\formats\\json\\GAPS.md",
+          "sha256": "b0a3c4e90174242ac2f725fbccc66edcdacafbb4a11b5f484bd61f361594ead7"
+        }
+      ]
+    },
+    {
+      "id": "protocol.json-rpc",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\protocols\\json-rpc\\CONCERNS.md",
+          "sha256": "6e852b9cbf389838ad9ad76d31bf655e5315b14a79556a1be8e11e03f5b702e0"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\protocols\\json-rpc\\DEPTH5.md",
+          "sha256": "5a9b73b0170c0d259d141b21310608a779508f5ffecc4b648d49532261200795"
+        },
+        {
+          "name": "FULL-COVERAGE.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\protocols\\json-rpc\\FULL-COVERAGE.md",
+          "sha256": "38120bcf40393abbf979d1f36fcccf505c67a92c912f5196477102827d17e89f"
+        }
+      ]
+    },
+    {
+      "id": "protocol.http-rest",
+      "documents": [
+        {
+          "name": "CONCERNS.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\protocols\\http-rest\\CONCERNS.md",
+          "sha256": "5af719bbd8c45599d8034293f7f218f381771bc57592077eee0c924cfc1e0eda"
+        },
+        {
+          "name": "DEPTH5.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\protocols\\http-rest\\DEPTH5.md",
+          "sha256": "a15e272e3f7620b6918f5e2d8241b56a3282431f259d038549eb1859b9c77dad"
+        },
+        {
+          "name": "FULL-COVERAGE.md",
+          "central_path": "D:\\github\\HTE-Code\\packs\\protocols\\http-rest\\FULL-COVERAGE.md",
+          "sha256": "ad3e4cc927a14a23ae1a616663daab74b2db679e0dc045d15133f839213ab4c3"
+        }
+      ]
+    }
+  ],
+  "analyzer_plan": {
+    "central_path": "D:\\github\\HTE-Code\\repo-profiles\\acrinym__Emojineer\\analyzer-plan.json",
+    "sha256": "cb7b5f2e3ba1a246ce630adbaab191427db8a1db4a820535c0330a0c763bc6c8"
+  },
+  "repo_authorities": []
+}

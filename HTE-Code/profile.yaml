@@ -1,0 +1,51 @@
+schema: hte-code-repo-profile/1.0
+repository: "D:\\github\\Emojineer"
+origin: "https://github.com/acrinym/Emojineer.git"
+head_at_scan: "b1dbfe3f8738a70f14282aec8cc63c8c6bfb7cd3"
+branch_at_scan: "main"
+dirty_entries_at_scan: 1
+baseline: hte-code-v2-depth5
+central_hte_root: "D:\\github\\HTE-Code"
+baseline_contract: "D:\\github\\HTE-Code\\core\\BASELINE-CONTRACT.md"
+pack_root: "D:\\github\\HTE-Code\\packs"
+composition_mode: additive
+status: generated-from-live-repository
+inclusion_reason:
+  - "acrinym-origin"
+  - "explicit-override:include"
+  - "override-evidence:GitHub estate target: acrinym-owned non-fork; acrinym/Emojineer"
+packs:
+  language:
+    - "language.cpp"
+    - "language.cpp-header"
+  framework: []
+  compiler:
+    - "compiler.c-cpp-compiler-unspecified"
+  runtime:
+    - "runtime.native"
+  toolchain:
+    - "toolchain.cmake"
+  platform: []
+  interop: []
+  format:
+    - "format.markdown"
+    - "format.json"
+  protocol:
+    - "protocol.json-rpc"
+    - "protocol.http-rest"
+repo_authority:
+  - no-repo-local-authority-files-discovered
+repo_invariants:
+  - discover-from-repo-authority-before-edit
+  - preserve-unrelated-dirty-work
+  - no-worktrees-without-justin-confirmation
+  - hte-depth5-baseline-always-active
+  - all-detected-packs-compose-additively
+qualification:
+  - establish-live-branch-head-dirty-state
+  - use-repo-native-build-and-test-instructions
+  - run-pack-specific-edge-campaigns-for-changed-surfaces
+  - exact-head-evidence-required-for-final-qualification
+learning:
+  motifs: []
+  superseded_motifs: []

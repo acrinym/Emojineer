@@ -1,0 +1,188 @@
+{
+  "schema": "hte-code-analyzer-plan/1.0",
+  "repo_profile": "acrinym__Emojineer",
+  "repo": "D:\\github\\Emojineer",
+  "head_at_scan": "b1dbfe3f8738a70f14282aec8cc63c8c6bfb7cd3",
+  "policy": [
+    "Candidates are not automatic execution instructions.",
+    "Repository-local AGENTS/CLAUDE/Cursor rules and build documentation take precedence.",
+    "Resolve exact tool version, configuration, target, and environment before using evidence.",
+    "Prefer repository wrappers and configured analyzers over generic candidate forms.",
+    "Static, compile, and unit-test success do not substitute for runtime/integration qualification.",
+    "Do not install tools, mutate dependencies, launch heavy GUI/emulator workloads, or touch external services merely because a candidate appears here."
+  ],
+  "resolved_languages": [
+    "cpp",
+    "cpp-header"
+  ],
+  "evidence_phases": {
+    "availability_probes": [
+      {
+        "language": "cpp",
+        "candidate": "clang++ --version"
+      },
+      {
+        "language": "cpp",
+        "candidate": "g++ --version"
+      },
+      {
+        "language": "cpp",
+        "candidate": "cl"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "clang++ --version"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "g++ --version"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "cl"
+      }
+    ],
+    "syntax_or_compile": [
+      {
+        "language": "cpp",
+        "candidate": "clang++ -fsyntax-only <translation-unit>"
+      },
+      {
+        "language": "cpp",
+        "candidate": "g++ -fsyntax-only <translation-unit>"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "compile representative template/header consumers"
+      }
+    ],
+    "static_analysis": [
+      {
+        "language": "cpp",
+        "candidate": "clang-tidy <translation-unit>"
+      },
+      {
+        "language": "cpp",
+        "candidate": "cppcheck --enable=warning,style,performance,portability <paths>"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "clang-tidy"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "include-what-you-use when configured"
+      }
+    ],
+    "tests": [
+      {
+        "language": "cpp",
+        "candidate": "repo build/test harness"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "multi-TU / macro-configuration consumer fixtures"
+      }
+    ],
+    "dynamic_analysis": [
+      {
+        "language": "cpp",
+        "candidate": "ASan"
+      },
+      {
+        "language": "cpp",
+        "candidate": "UBSan"
+      },
+      {
+        "language": "cpp",
+        "candidate": "TSan"
+      },
+      {
+        "language": "cpp",
+        "candidate": "Valgrind where supported"
+      },
+      {
+        "language": "cpp-header",
+        "candidate": "ASan/UBSan on instantiated consumers"
+      }
+    ]
+  },
+  "language_registry": {
+    "cpp": {
+      "availability_probes": [
+        "clang++ --version",
+        "g++ --version",
+        "cl"
+      ],
+      "syntax_or_compile": [
+        "clang++ -fsyntax-only <translation-unit>",
+        "g++ -fsyntax-only <translation-unit>"
+      ],
+      "static_analysis": [
+        "clang-tidy <translation-unit>",
+        "cppcheck --enable=warning,style,performance,portability <paths>"
+      ],
+      "tests": [
+        "repo build/test harness"
+      ],
+      "dynamic_analysis": [
+        "ASan",
+        "UBSan",
+        "TSan",
+        "Valgrind where supported"
+      ],
+      "notes": [
+        "Test Debug and optimized Release; ODR/ABI/linker issues require whole-build evidence."
+      ]
+    },
+    "cpp-header": {
+      "availability_probes": [
+        "clang++ --version",
+        "g++ --version",
+        "cl"
+      ],
+      "syntax_or_compile": [
+        "compile representative template/header consumers"
+      ],
+      "static_analysis": [
+        "clang-tidy",
+        "include-what-you-use when configured"
+      ],
+      "tests": [
+        "multi-TU / macro-configuration consumer fixtures"
+      ],
+      "dynamic_analysis": [
+        "ASan/UBSan on instantiated consumers"
+      ],
+      "notes": []
+    }
+  },
+  "notes": [
+    {
+      "language": "cpp",
+      "note": "Test Debug and optimized Release; ODR/ABI/linker issues require whole-build evidence."
+    }
+  ],
+  "unresolved_nonlanguage_surfaces": {
+    "frameworks": [],
+    "compilers": [
+      "c-cpp-compiler-unspecified"
+    ],
+    "runtimes": [
+      "native"
+    ],
+    "toolchains": [
+      "cmake"
+    ],
+    "platforms": [],
+    "interop": [],
+    "formats": [
+      "markdown",
+      "json"
+    ],
+    "protocols": [
+      "json-rpc",
+      "http-rest"
+    ]
+  }
+}

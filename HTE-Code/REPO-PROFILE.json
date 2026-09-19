@@ -1,0 +1,67 @@
+{
+  "schema": "hte-code-repo-profile/1.0",
+  "id": "acrinym__Emojineer",
+  "repo": "D:\\github\\Emojineer",
+  "origin": "https://github.com/acrinym/Emojineer.git",
+  "head_at_scan": "b1dbfe3f8738a70f14282aec8cc63c8c6bfb7cd3",
+  "branch_at_scan": "main",
+  "baseline": "hte-code-v2-depth5",
+  "packs": [
+    "language.cpp",
+    "language.cpp-header",
+    "compiler.c-cpp-compiler-unspecified",
+    "runtime.native",
+    "toolchain.cmake",
+    "format.markdown",
+    "format.json",
+    "protocol.json-rpc",
+    "protocol.http-rest"
+  ],
+  "languages": [
+    {
+      "name": "cpp",
+      "files": 49
+    },
+    {
+      "name": "cpp-header",
+      "files": 29
+    }
+  ],
+  "frameworks": [],
+  "compilers": [
+    "c-cpp-compiler-unspecified"
+  ],
+  "runtimes": [
+    "native"
+  ],
+  "toolchains": [
+    "cmake"
+  ],
+  "platforms": [],
+  "interop": [],
+  "formats": [
+    {
+      "name": "markdown",
+      "files": 24
+    },
+    {
+      "name": "json",
+      "files": 1
+    }
+  ],
+  "protocols": [
+    {
+      "name": "json-rpc",
+      "files": 3
+    },
+    {
+      "name": "http-rest",
+      "files": 1
+    }
+  ],
+  "inclusion_reason": [
+    "acrinym-origin",
+    "explicit-override:include",
+    "override-evidence:GitHub estate target: acrinym-owned non-fork; acrinym/Emojineer"
+  ]
+}
