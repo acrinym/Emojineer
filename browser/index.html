@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Emojineer Playground</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">Emojineer 1.0</p>
+        <h1>Browser Playground</h1>
+        <p>Real Emojineer compiler + VM, compiled to WebAssembly and permanently sandboxed.</p>
+      </div>
+      <span id="runtime-status" role="status">Loading runtime…</span>
+    </header>
+
+    <section class="toolbar" aria-label="Playground controls">
+      <label for="example">Example</label>
+      <select id="example"></select>
+      <button id="run" type="button" disabled>Run ▶</button>
+      <button id="share" type="button">Copy share link</button>
+    </section>
+
+    <section class="workspace">
+      <div class="pane">
+        <label for="source">Emojineer source</label>
+        <textarea id="source" spellcheck="false" aria-describedby="sandbox-note"></textarea>
+        <div id="behavior-panel" hidden>
+          <label for="behavior">Emojineer behavior exports</label>
+          <textarea id="behavior" spellcheck="false"></textarea>
+        </div>
+        <p id="sandbox-note" class="note">Host capabilities are denied in this browser runtime.</p>
+      </div>
+      <div class="pane output-pane">
+        <h2>stdout</h2>
+        <pre id="stdout" aria-live="polite"></pre>
+        <h2>diagnostics</h2>
+        <pre id="diagnostic" aria-live="polite"></pre>
+        <p id="capabilities" class="note"></p>
+        <h2 id="preview-heading" hidden>web preview</h2>
+        <iframe id="web-preview" title="Rendered Emojineer web page" sandbox="allow-same-origin" hidden></iframe>
+      </div>
+    </section>
+  </main>
+  <script src="emojineer-playground.js"></script>
+  <script src="playground.js"></script>
+</body>
+</html>

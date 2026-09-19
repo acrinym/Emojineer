@@ -76,6 +76,6 @@ Those names are linker metadata, not source syntax.
 
 ## Bytecode compatibility
 
-The current writer emits EMJBC v3. The reader accepts v1, v2, and v3. Module support did not require a new bytecode version because module resolution happens before bytecode generation.
+The current writer emits EMJBC v10 and the 1.x reader supports v1 through v10. Module support itself still does not require a bytecode version because module resolution happens before bytecode generation. See [BYTECODE.md](BYTECODE.md) and [COMPATIBILITY_1_X.md](COMPATIBILITY_1_X.md) for the current serialized-format contract.
 
 See [BYTECODE.md](BYTECODE.md) for the serialized format, verifier rules, opcode set, and VM execution model.

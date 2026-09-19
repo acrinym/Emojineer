@@ -1,6 +1,8 @@
 #include "emojineer/lsp.hpp"
 #include "emojineer/ast.hpp"
 #include "emojineer/compiler.hpp"
+#include "emojineer/capability.hpp"
+#include "emojineer/intrinsic.hpp"
 #include "emojineer/lexer.hpp"
 #include "emojineer/module.hpp"
 #include "emojineer/package.hpp"
@@ -1945,6 +1947,22 @@ std::optional<Hover> LanguageServer::getHover(const std::string& uri, const Posi
                     }
 
                     if (token.kind == TokenKind::Identifier) {
+                        if (auto facility = native_facility_from_identifier(token.lexeme)) {
+                            hover.contents->value =
+                                "**" + native_facility_glyph(*facility) + "**  \n" +
+                                "`" + native_facility_name(*facility) + "`  \n" +
+                                "Requires **" + capability_name(native_facility_capability(*facility)) +
+                                "** capability.";
+                            return hover;
+                        }
+                        if (auto intrinsic = intrinsic_from_identifier(token.lexeme)) {
+                            hover.contents->value =
+                                "**" + intrinsic_glyph(*intrinsic) + "**  \n" +
+                                "`" + intrinsic_name(*intrinsic) + "`  \n" +
+                                "Pure language/runtime intrinsic; arity " +
+                                std::to_string(intrinsic_arity(*intrinsic)) + ".";
+                            return hover;
+                        }
                         hover.contents->value = "Identifier: `" + token.lexeme + "`";
                         return hover;
                     }
@@ -2594,6 +2612,31 @@ std::vector<CompletionItem> LanguageServer::getCompletions(const std::string& ur
             item.kind = static_cast<int>(CompletionItemKind::Variable);
             completions.push_back(item);
         }
+    }
+
+    for (std::int32_t raw = static_cast<std::int32_t>(NativeFacility::FilesystemReadText);
+         raw <= static_cast<std::int32_t>(NativeFacility::NetworkRequest); ++raw) {
+        const auto facility = static_cast<NativeFacility>(raw);
+        const auto glyph = native_facility_glyph(facility);
+        if (!matchesPrefix(glyph)) continue;
+        CompletionItem item;
+        item.label = glyph;
+        item.detail = native_facility_name(facility) + " (" +
+                      capability_name(native_facility_capability(facility)) + " capability)";
+        item.kind = static_cast<int>(CompletionItemKind::Function);
+        completions.push_back(std::move(item));
+    }
+
+    for (std::int32_t raw = static_cast<std::int32_t>(Intrinsic::RecordCreate);
+         raw <= static_cast<std::int32_t>(Intrinsic::ProgramArguments); ++raw) {
+        const auto intrinsic = static_cast<Intrinsic>(raw);
+        const auto glyph = intrinsic_glyph(intrinsic);
+        if (!matchesPrefix(glyph)) continue;
+        CompletionItem item;
+        item.label = glyph;
+        item.detail = intrinsic_name(intrinsic);
+        item.kind = static_cast<int>(CompletionItemKind::Function);
+        completions.push_back(std::move(item));
     }
 
     for (const auto& module : standard_modules()) {

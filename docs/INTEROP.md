@@ -28,7 +28,7 @@ The exported signature must have the same arity as the target function. Current 
 
 Interop declarations are top-level metadata. Calls to a `🔌` name lower to `InteropCall`, while ordinary Emojineer functions continue to lower to `Call` and Train 20 native facilities continue to lower to `HostCall`.
 
-EMJBC v9 serializes bounded interop import/export tables. Imports carry internal/external names, required capability masks, and typed signatures. Exports carry external names, function indices, and typed signatures. The bytecode verifier checks table bounds, external-name shape/uniqueness, capability masks, signatures, export targets/arity, and every `InteropCall` operand.
+EMJBC v9 introduced bounded interop import/export tables. The current v10 writer preserves those tables unchanged while adding unrelated 1.0 runtime opcodes/facilities. Imports carry internal/external names, required capability masks, and typed signatures. Exports carry external names, function indices, and typed signatures. The bytecode verifier checks table bounds, external-name shape/uniqueness, capability masks, signatures, export targets/arity, and every `InteropCall` operand.
 
 ## Authority and adapter preflight
 
@@ -40,7 +40,7 @@ In deterministic execution mode, every referenced adapter must also be bound wit
 
 ## EMJABI1 value envelope
 
-Host/WASM calls cross through a deterministic binary request/response envelope. The codec preserves integer versus binary64 numeric subtypes internally while the source signature's `number` family accepts either. It also carries booleans, UTF-8 text, and recursively nested arrays.
+Host/WASM calls cross through a deterministic binary request/response envelope. The codec preserves integer versus binary64 numeric subtypes internally while the source signature's `number` family accepts either. It also carries booleans, UTF-8 text, and recursively nested arrays. The v1 ABI intentionally does not serialize the newer record, result, or bytes runtime values; attempting to place one anywhere inside an ABI array is rejected rather than silently changing EMJABI1.
 
 Current hard bounds are:
 

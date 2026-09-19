@@ -2,7 +2,7 @@
 
 `EMJBC` is Emojineer's owned bytecode format. It is not Python bytecode, JavaScript, JVM bytecode, WebAssembly, or serialized host-language source.
 
-The current writer emits **version 9**. The reader accepts **versions 1 through 9**.
+The current writer emits **version 10**. The reader accepts **versions 1 through 10**.
 
 ## Header and scalar encoding
 
@@ -29,6 +29,7 @@ Malformed, truncated, oversized, unknown-version, or structurally invalid byteco
 - **v7**: sorted source SHA-256 provenance table used for debugger source-drift detection.
 - **v8**: `HostCall` plus an exact serialized required-capability mask bound by the verifier to the actual native facilities present in the instruction stream.
 - **v9**: typed interop import/export tables plus `InteropCall`; adapter capability requirements participate in the same verifier-bound whole-program capability contract.
+- **v10**: `IntrinsicCall` for verifier-visible language/runtime intrinsics plus appended practical host-facility operand identities; v8/v9 host-call operands remain version-gated.
 
 Versions 1 through 7 cannot contain `HostCall` or `InteropCall`, so their required capability mask is zero. Version 8 can contain `HostCall` but has no interop tables or `InteropCall`.
 
@@ -61,9 +62,9 @@ u32 signed_operand_bits
 u32 source_line
 ```
 
-The current in-memory set includes constants, globals/locals, type assertions, arithmetic/comparison, unary operations, stdin/stdout, jumps, calls/returns, halt, collections, v8 `HostCall`, and v9 `InteropCall`.
+The current in-memory set includes constants, globals/locals, type assertions, arithmetic/comparison, unary operations, stdin/stdout, jumps, calls/returns, halt, collections, v8 `HostCall`, v9 `InteropCall`, and v10 `IntrinsicCall`.
 
-`HostCall.operand` is a closed native-facility identifier. The current facilities are filesystem read, HTTPS GET, process execution, clock milliseconds, random integer, and host environment lookup. See [CAPABILITIES.md](CAPABILITIES.md).
+`HostCall.operand` is a closed native-facility identifier. Current facilities include filesystem read/write/directory creation, bounded HTTPS GET/request operations, process execution, clock milliseconds, random integer, and host environment lookup. See [CAPABILITIES.md](CAPABILITIES.md).
 
 ## v6 source map
 
@@ -92,7 +93,7 @@ After the v8 capability mask, v9 stores bounded typed interop import and export 
 The verifier checks, among other invariants:
 
 - all safety-limit counts;
-- no arrays in the constant pool;
+- no compound array/record/result/bytes values in the constant pool;
 - function metadata integrity;
 - constant and global-string operands;
 - nonnegative local slots;
@@ -101,6 +102,7 @@ The verifier checks, among other invariants:
 - nonnegative array construction counts;
 - valid native facility operands;
 - valid interop import/export metadata and `InteropCall` indices;
+- valid v10 intrinsic operands and version-gated host-facility operands;
 - exact capability-mask/instruction agreement across native and interop calls;
 - source map and provenance invariants.
 
@@ -114,4 +116,4 @@ Default execution grants no native host capabilities. REPL and debugger executio
 
 ## Compatibility rule
 
-EMJBC advances when serialized representation or opcode compatibility requires it. Source-only or separately represented growth does not require a bytecode bump. Train 8 modules, for example, were resolved by the source linker without adding an opcode; Train 20 requires v8 because host calls and their verifier-bound authority contract are serialized semantics, and Train 21 requires v9 because typed interop imports/exports and `InteropCall` are serialized semantics. Train 22 `EASM1` is a separate verified low-level text representation that composes through Train 21 `EMJABI1`, so the EMJBC writer remains v9.
+EMJBC advances when serialized representation or opcode compatibility requires it. Source-only or separately represented growth does not require a bytecode bump. Train 8 modules, for example, were resolved by the source linker without adding an opcode; Train 20 requires v8 because host calls and their verifier-bound authority contract are serialized semantics, and Train 21 requires v9 because typed interop imports/exports and `InteropCall` are serialized semantics. Train 22 `EASM1` remains a separate verified low-level text representation. The 1.0 practical-runtime foundation requires v10 because `IntrinsicCall` and appended native-facility operands are serialized semantics; v9 interop tables remain unchanged inside v10 chunks.

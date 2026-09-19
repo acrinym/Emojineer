@@ -25,7 +25,8 @@ public:
     ///
     /// The default policy grants no Train 20 host capabilities.
     VM(std::istream& input, std::ostream& output, std::uint64_t fuel = 1'000'000,
-       ExecutionPolicy policy = {}, const InteropRegistry* interop = nullptr);
+       ExecutionPolicy policy = {}, const InteropRegistry* interop = nullptr,
+       std::vector<std::string> program_arguments = {});
 
     /// Start a new chunk or resume a paused execution of the same chunk.
     ///
@@ -115,6 +116,9 @@ private:
     /// Execute one typed interop adapter call through the deterministic ABI.
     void execute_interop_call(std::int32_t operand, std::uint32_t line);
 
+    /// Execute one pure verifier-visible language intrinsic.
+    void execute_intrinsic_call(std::int32_t operand, std::uint32_t line);
+
     /// Advance the deterministic VM-local PRNG state used only in deterministic mode.
     std::uint64_t next_deterministic_random();
 
@@ -131,6 +135,7 @@ private:
     std::uint64_t remaining_fuel_;
     ExecutionPolicy policy_;
     const InteropRegistry* interop_registry_{nullptr};
+    std::vector<std::string> program_arguments_;
     std::uint64_t deterministic_random_state_{0};
     std::int64_t deterministic_clock_ms_{0};
     std::vector<Value> stack_;

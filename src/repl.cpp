@@ -1,4 +1,5 @@
 #include "emojineer/repl.hpp"
+#include "emojineer/version.hpp"
 
 #include "emojineer/compiler.hpp"
 #include "emojineer/lexer.hpp"
@@ -35,7 +36,7 @@ int run_repl(std::istream& input, std::ostream& output, std::ostream& errors,
     std::string session;
     std::string line;
 
-    output << "Emojineer 0.22 REPL\n"
+    output << "Emojineer " << emojineer::version << " REPL\n"
            << "Enter Emojineer source, then :run. Type :help for commands.\n";
 
     while (true) {

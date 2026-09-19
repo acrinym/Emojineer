@@ -11,6 +11,8 @@
 #include "emojineer/source_tools.hpp"
 #include "emojineer/stdlib.hpp"
 #include "emojineer/vm.hpp"
+#include "emojineer/version.hpp"
+#include "emojineer/web.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -48,25 +50,28 @@ struct Cli {
     bool deterministic{false};
     std::optional<std::uint64_t> seed;
     std::optional<std::int64_t> clock_ms;
+    std::vector<std::string> program_arguments;
 };
 
 void usage() {
     std::cerr
-        << "Emojineer 0.22\n"
+        << "Emojineer " << emojineer::version << "\n"
         << "usage:\n"
         << "  emojineer repl [--cer registry.json ...] [execution-policy]\n"
         << "  emojineer stdlib\n"
         << "  emojineer debug <source-or-project> [--cer registry.json ...] [execution-policy]\n"
-        << "  emojineer run <file.emoji> [--cer registry.json ...] [execution-policy]\n"
+        << "  emojineer run <file.emoji> [--cer registry.json ...] [execution-policy] [-- arg ...]\n"
         << "  emojineer <check|explain|dump|lint> <file.emoji> [--cer registry.json ...]\n"
         << "  emojineer fmt <file.emoji> [-o file.emoji] [--cer registry.json ...]\n"
         << "  emojineer compile <file.emoji> [-o file.emjbc] [--cer registry.json ...]\n"
-        << "  emojineer exec <file.emjbc> [execution-policy]\n"
+        << "  emojineer exec <file.emjbc> [execution-policy] [-- arg ...]\n"
         << "  emojineer disasm <file.emjbc>\n"
         << "  emojineer capabilities <file.emoji|file.emjbc> [--cer registry.json ...]\n"
         << "  emojineer interop <file.emoji|file.emjbc> [--cer registry.json ...]\n"
         << "  emojineer <easm-check|easm-dump|easm-info> <file.easm>\n"
         << "  emojineer easm-run <file.easm> [execution-policy]\n"
+        << "  emojineer <web-check|web-dump|web-bindings> <file.emjweb>\n"
+        << "  emojineer web-build <file.emjweb> [-o page.html]\n"
         << "execution-policy:\n"
         << "  --grant <filesystem|network|process|clock|random|host|all>  repeatable\n"
         << "  --sandbox                 hard zero-host-authority mode\n"
@@ -129,11 +134,16 @@ Cli parse_cli(int argc, char** argv) {
         } else if (arg == "--clock-ms") {
             if (++i >= argc) throw std::runtime_error("--clock-ms requires a value");
             cli.clock_ms = parse_i64(argv[i], "--clock-ms");
+        } else if (arg == "--") {
+            for (++i; i < argc; ++i) cli.program_arguments.emplace_back(argv[i]);
+            break;
         } else {
             throw std::runtime_error("unknown option '" + arg + "'");
         }
     }
 
+    if (!cli.program_arguments.empty() && cli.command != "run" && cli.command != "exec")
+        throw std::runtime_error("program arguments after -- are accepted only by run or exec");
     return cli;
 }
 
@@ -244,6 +254,10 @@ emojineer::Chunk read_chunk(const std::filesystem::path& path) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 2 && std::string(argv[1]) == "--version") {
+            std::cout << "emojineer " << emojineer::version << '\n';
+            return 0;
+        }
         Cli cli = parse_cli(argc, argv);
 
         if (cli.command == "repl") {
@@ -263,6 +277,32 @@ int main(int argc, char** argv) {
         }
 
         if (!cli.input) throw std::runtime_error("missing input");
+
+        if (cli.command == "web-check" || cli.command == "web-dump" ||
+            cli.command == "web-bindings" || cli.command == "web-build") {
+            reject_execution_policy_options(cli, cli.command);
+            if (!cli.cer.empty())
+                throw std::runtime_error(cli.command + " does not accept source CER");
+            if (cli.command != "web-build" && cli.output)
+                throw std::runtime_error(cli.command + " does not accept -o");
+            const auto document = emojineer::parse_web_document(read_text(*cli.input));
+            if (cli.command == "web-check") {
+                std::cout << "✅ " << cli.input->string() << " is valid Emojineer web markup\n";
+                return 0;
+            }
+            if (cli.command == "web-dump") {
+                std::cout << emojineer::render_web_document_ir(document);
+                return 0;
+            }
+            if (cli.command == "web-bindings") {
+                std::cout << emojineer::render_web_bindings_json(document) << '\n';
+                return 0;
+            }
+            const auto html = emojineer::render_web_document_html(document);
+            if (cli.output) write_text(*cli.output, html);
+            else std::cout << html;
+            return 0;
+        }
 
         if (cli.command == "easm-check" || cli.command == "easm-dump" ||
             cli.command == "easm-info" || cli.command == "easm-run") {
@@ -300,7 +340,8 @@ int main(int argc, char** argv) {
                 emojineer::disassemble(chunk, std::cout);
                 return 0;
             }
-            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli));
+            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli), nullptr,
+                               cli.program_arguments);
             vm.execute(chunk);
             return 0;
         }
@@ -379,7 +420,8 @@ int main(int argc, char** argv) {
         if (cli.command == "run") {
             if (cli.output) throw std::runtime_error("run does not accept -o");
             auto chunk = emojineer::compile_file(*cli.input, std::move(registry));
-            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli));
+            emojineer::VM vm(std::cin, std::cout, 1'000'000, execution_policy_for(cli), nullptr,
+                               cli.program_arguments);
             vm.execute(chunk);
             return 0;
         }

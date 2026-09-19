@@ -222,18 +222,51 @@ Deterministic `std:<module>` imports, `std:math`, `std:arrays`, `std:text`, stan
 - dedicated C++ and real-CLI acceptance tests cover typed memory, control flow/fuel, verifier failures, zero-effect authority denial, determinism propagation, high-level→EASM ABI composition, capability-contract mismatch, numeric bounds, and direct/ABI equivalence;
 - no EMJBC bump, ambient FFI, raw-pointer exposure, direct syscall surface, or second high-level Emojineer implementation.
 
-## Next product train
+## Active 1.0 productization arc
 
-### Train 23 — Semantic compression and metaprogramming research
+The next execution arc is intentionally product-facing rather than another isolated
+language-research train. Its contract is [PRODUCT_1_0_CONTRACT.md](PRODUCT_1_0_CONTRACT.md).
 
-Carefully specify macro/semantic-compression mechanisms inspired by earlier SCL ideas. Expansion should produce ordinary Emojineer semantics and remain inspectable by tooling.
+The arc sequences:
+
+1. the 1.0 product/domain contract;
+2. installable Windows/Linux/macOS distributions;
+3. packaged VS Code/Cursor editor UX and semantic emoji insertion;
+4. practical structured-data and explicit error/result semantics;
+5. practical capability-gated CLI/filesystem/network facilities;
+6. first-class bytes and encoding utilities;
+7. a five-minute tour, templates, and real example corpus;
+8. a sandboxed browser playground running real Emojineer semantics;
+9. Emojineer-native web markup over a typed document/DOM IR; and
+10. a release-hardening compatibility/fuzz/cross-platform capstone.
+
+Emoji Stories and playful physical-note secret-code schemes are explicitly
+reserved for 2.0/post-1.0. Retro targets remain later domain work unless the
+1.0 portability effort proves a prerequisite is necessary.
 
 ## Later product trains
 
+### Semantic compression and metaprogramming research
+
+Carefully specify macro/semantic-compression mechanisms inspired by earlier SCL
+ideas. Expansion should produce ordinary Emojineer semantics and remain
+inspectable by tooling.
+
 ### Native backend
 
-Explicit IR boundary, LLVM/native compilation, equivalence testing against the VM, and preservation of language-visible behavior rather than a second dialect.
+Explicit IR boundary, LLVM/native compilation, equivalence testing against the
+VM, and preservation of language-visible behavior rather than a second dialect.
+
+### Retro targets and Emoji Stories
+
+Use the sovereign VM/EASM/encoding stack for constrained or historical targets
+without distorting the 1.0 core. Emoji Stories is a separate 2.0 design space
+for human-passable emoji encodings/puzzles, not a 1.0 programming-language
+requirement and not cryptography unless a future design actually provides it.
 
 ## Ongoing language evolution
 
-Future language additions can include records/user structures, richer error values, pattern matching, interfaces/protocols, more collection types, richer standard modules, richer immutable package description/tag metadata, and accessibility-oriented textual aliases. Each should extend the sovereign language model rather than route source through another programming language.
+Future additions can include pattern matching, interfaces/protocols, more
+collection types, richer standard modules, package description/tag metadata,
+and accessibility-oriented textual aliases. Each must extend the sovereign
+language model rather than route source through another programming language.

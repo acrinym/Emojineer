@@ -1,0 +1,25 @@
+🌐 📜Emojineer Web Demo📜 📜en📜
+🎨 📜body📜 📜font-family📜 📜system-ui📜
+🎨 📜body📜 📜max-width📜 📜48rem📜
+📑 main
+🔠 1 hero 📜Emojineer-native web markup📜
+🧾 status 📜Ready for an explicit Emojineer action.📜
+🧭 nav
+🔗 home 📜/📜 📜Home📜
+🏁
+🖼️ logo 📜/logo.png📜 📜Emojineer logo📜
+🔘 greet 📜Greet📜 web.greet status
+📝 contact web.submit status 📜Submit📜
+🏷️ email email 📧 📜Email address📜
+🏁
+📋 features 🔹
+🔹 📜Semantic HTML📜
+🔹 📜Typed inspectable document IR📜
+🔹 📜No page-side JavaScript language📜
+🏁
+📊 matrix
+📌 📜Surface📜 📜Authority📜
+📍 📜Markup📜 📜Declarative📜
+📍 📜Behavior📜 📜Sandboxed Emojineer export📜
+🏁
+🏁

@@ -1,4 +1,4 @@
-# Emojineer Language Reference - v0.22
+# Emojineer Language Reference - v0.23
 
 Emojineer is a ground-up emoji-native programming language. The implementation is currently written in C++20, but Emojineer source is **not** translated into C++, Python, JavaScript, or another language. The toolchain owns its lexer, AST, package-aware module linker, bytecode, VM, low-level EASM representation, standard library, package workflow, and semantic evolution.
 
@@ -470,9 +470,9 @@ The language does not expose implicit filesystem, network, process, shell, host 
 
 ## 18. Bytecode and VM
 
-The current compiler writes `EMJBC` version 9. The reader supports versions 1 through 9. Bytecode is verified before execution and bounded against oversized constants, strings, function tables, instruction streams, source metadata, capability metadata, and Train 21 interop tables.
+The current compiler writes `EMJBC` version 10. The reader supports versions 1 through 10. Bytecode is verified before execution and bounded against oversized constants, strings, function tables, instruction streams, source metadata, capability metadata, Train 21 interop tables, v10 intrinsic operands, and version-gated native facility operands.
 
-Modules, stdlib source, and package-qualified imports are linked before bytecode generation, so Product Trains 8, 9, and 11 do not require an EMJBC format bump. Train 22 `EASM1` is a separately verified low-level representation that composes through Train 21 `EMJABI1`; it does not alter EMJBC v9.
+Modules, stdlib source, and package-qualified imports are linked before bytecode generation, so Product Trains 8, 9, and 11 do not require an EMJBC format bump. Train 22 `EASM1` is a separately verified low-level representation that composes through Train 21 `EMJABI1`; Train 22 itself did not alter v9. The v0.23 practical-runtime foundation advances ordinary Emojineer to v10 for verifier-visible intrinsics and appended host-facility operands.
 
 See [BYTECODE.md](BYTECODE.md) for the serialized format and VM contract.
 
@@ -490,11 +490,17 @@ Train 22 adds textual `EASM1` as a separately verified low-level representation 
 
 See [EASM.md](EASM.md).
 
-## 21. Deliberate future work
+## 21. Practical v0.23 runtime values
 
-Not yet implemented as of v0.22:
+The 1.0 productization foundation adds named record values, explicit success/error result values, bounded bytes with UTF-8/hex/Base64 codecs, explicit program arguments, and additional capability-gated filesystem/network facilities. Records and bytes reuse ordinary `🔎`, `🧷`, `📏`, and (for bytes) `📎` collection behavior rather than creating a second expression model.
 
-- records/user-defined structures, interfaces/protocols, richer error values, and pattern matching;
+See [PRACTICAL_RUNTIME.md](PRACTICAL_RUNTIME.md).
+
+## 22. Deliberate future work
+
+Not yet implemented as of v0.23:
+
+- interfaces/protocols, pattern matching, and additional collection abstractions;
 - semantic-compression/macros with inspectable expansion into ordinary Emojineer semantics;
 - a native/LLVM backend with equivalence testing against the production VM.
 

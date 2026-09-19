@@ -304,7 +304,8 @@ void test_registry_dependency_offline_resolution() {
     require(mylib->source_kind == emojineer::DependencyKind::Registry, 
             "mylib should be resolved as registry package");
     require(mylib->version == "1.0.0", "mylib version should match");
-    require(mylib->root == pkg_path, "mylib root should be the materialized store path");
+    require(mylib->root == std::filesystem::canonical(pkg_path),
+            "mylib root should be the canonical materialized store path");
     require(mylib->registry_alias == "origin", "mylib registry alias should be set");
     require(mylib->registry_id == "origin-id", "mylib registry id should be set");
     require(mylib->store_path == pkg_path, "mylib store_path should be set");
@@ -902,6 +903,32 @@ void test_registry_package_content_integrity_hash_mismatch_rejected() {
     std::filesystem::remove_all(root);
 }
 
+#ifndef _WIN32
+void test_registry_hash_accepts_canonical_root_alias() {
+    const auto real_root = temp_root("canonical-root-real");
+    const auto alias_root = temp_root("canonical-root-alias");
+    std::filesystem::create_directories(real_root / "src");
+    {
+        std::ofstream manifest(real_root / "emojineer.toml");
+        manifest << "[package]\n"
+                 << "name = \"aliaspkg\"\n"
+                 << "version = \"1.0.0\"\n"
+                 << "entry = \"src/main.emoji\"\n";
+    }
+    write_source(real_root / "src" / "main.emoji", "📝 📜alias root📜\n");
+    std::filesystem::create_directory_symlink(real_root, alias_root);
+
+    const auto manifest = emojineer::load_project_manifest(alias_root / "emojineer.toml");
+    const auto direct_hash = emojineer::compute_registry_package_hash(real_root, manifest);
+    const auto alias_hash = emojineer::compute_registry_package_hash(alias_root, manifest);
+    require(alias_hash == direct_hash,
+            "registry hashing must compare canonical roots to canonical source paths");
+
+    std::filesystem::remove(alias_root);
+    std::filesystem::remove_all(real_root);
+}
+#endif
+
 } // namespace
 
 int main() {
@@ -919,6 +946,9 @@ int main() {
         test_registry_package_rejects_path_dependency();
         test_registry_package_content_integrity_valid_hash_succeeds();
         test_registry_package_content_integrity_hash_mismatch_rejected();
+#ifndef _WIN32
+        test_registry_hash_accepts_canonical_root_alias();
+#endif
         std::cout << "✅ package dependency tests passed\n";
         return 0;
     } catch (const std::exception& error) {

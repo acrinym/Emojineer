@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "emojineer/registry_transport.hpp"
@@ -84,8 +85,20 @@ enum class SyncMode {
     Offline,
 };
 
+enum class ProjectTemplate {
+    Hello,
+    Cli,
+    Data,
+    Network,
+};
+
+std::optional<ProjectTemplate> parse_project_template(std::string_view name);
+std::string project_template_name(ProjectTemplate value);
+std::string project_template_source(ProjectTemplate value);
+
 ProjectManifest load_project_manifest(const std::filesystem::path& manifest_path);
-void initialize_project(const std::filesystem::path& root, const std::string& name);
+void initialize_project(const std::filesystem::path& root, const std::string& name,
+                        ProjectTemplate project_template = ProjectTemplate::Hello);
 std::vector<ProjectDiagnostic> check_project(const std::filesystem::path& root);
 void validate_manifest(const ProjectManifest& manifest);
 std::string canonical_manifest_text(const ProjectManifest& manifest, bool include_registries = true);

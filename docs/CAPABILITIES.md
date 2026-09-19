@@ -18,6 +18,9 @@ Native facilities use ordinary Emojineer function-call syntax, but their emoji n
 | `🕰️` | `clock.millis` | `clock` | `🕰️ 🫴 🤲` | millisecond clock value |
 | `🎲` | `random.int` | `random` | `🎲 🫴 positive_bound 🤲` | integer in `[0, bound)` |
 | `🖥️` | `host.environment` | `host` | `🖥️ 🫴 name 🤲` | environment value, or empty text when unset |
+| `✍️` | `filesystem.write-text` | `filesystem` | `✍️ 🫴 path text 🤲` | `✅` after a bounded regular-file write |
+| `📁` | `filesystem.create-directory` | `filesystem` | `📁 🫴 path 🤲` | `✅` after ensuring the directory path exists |
+| `🛰️` | `network.request` | `network` | `🛰️ 🫴 method url body 🤲` | bounded HTTPS response body as text |
 
 These emoji cannot be redefined as ordinary user functions. The module linker also preserves them when they occur inside imported local, package, or standard source so dependency code cannot disguise host authority as an ordinary call.
 
@@ -109,19 +112,22 @@ Deterministic mode controls Train 20 clock/random native facilities. Program inp
 
 ### Filesystem
 
-`🗂️` performs an explicit host file read, accepts only an opened regular file, and rejects files larger than 16 MiB. Special files such as FIFOs/pipes are rejected after the opened object is inspected, so path replacement cannot bypass the file-type check or turn the VM into an unbounded blocking read. The `filesystem` grant is currently coarse: it is not a path allowlist. A granted program may request paths available to the host process under ordinary OS permissions.
+`🗂️` performs an explicit host file read, accepts only an opened regular file, and rejects files larger than 16 MiB. Read/write paths must be non-empty, contain no embedded NUL, and are bounded to 32 KiB. `✍️` writes at most 16 MiB to a regular file and rejects reparse/special-file targets where the platform exposes that distinction. `📁` creates the requested directory chain. Special files such as FIFOs/pipes are rejected by the file operations after the opened object is inspected. The `filesystem` grant is currently coarse: it is not a path allowlist. A granted program may request paths available to the host process under ordinary OS permissions.
 
 ### Network
 
-`🌐` accepts only bounded `https://` URLs. The current libcurl-backed implementation:
+`🌐` is the compatibility GET facility. `🛰️` adds bounded GET, POST, PUT,
+PATCH, and DELETE requests with an explicit body. Both accept only bounded
+`https://` URLs. The current libcurl-backed implementation:
 
 - verifies TLS peer and host;
-- rejects redirects;
-- rejects credential-bearing URL authorities;
+- rejects redirects and credential-bearing URL authorities;
 - uses bounded connection/request timeouts;
-- limits response bodies to 1 MiB.
+- limits request and response bodies to 1 MiB;
+- rejects GET requests carrying a body.
 
-If Emojineer was built without libcurl, `network.get` reports that the facility is unavailable even when the network capability was granted.
+If Emojineer was built without libcurl, network facilities report that they are
+unavailable even when the network capability was granted.
 
 The `network` grant is currently coarse. It does not provide hostname or IP allowlisting.
 

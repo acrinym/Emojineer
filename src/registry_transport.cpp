@@ -21,6 +21,10 @@
 #include <system_error>
 #include <utility>
 
+#if defined(_WIN32) && !defined(NOMINMAX)
+#define NOMINMAX
+#endif
+
 #if defined(EMOJINEER_HAVE_CURL)
 #include <curl/curl.h>
 #endif

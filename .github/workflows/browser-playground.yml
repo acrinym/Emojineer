@@ -1,0 +1,28 @@
+name: Browser Playground
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  wasm:
+    runs-on: ubuntu-latest
+    container: emscripten/emsdk:6.0.5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure browser runtime
+        run: >-
+          emcmake cmake -S . -B build-browser
+          -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release
+      - name: Build static playground
+        run: cmake --build build-browser --target emojineer-playground -j 2
+      - name: Prove real WASM runtime and sandbox boundary
+        run: node browser/smoke.cjs build-browser/emojineer-playground.js
+      - name: Verify hostable bundle
+        run: |
+          test -s build-browser/emojineer-playground.js
+          test -s build-browser/emojineer-playground.wasm
+          test -s build-browser/emojineer-playground.data
+          test -s build-browser/index.html

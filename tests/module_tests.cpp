@@ -234,7 +234,7 @@ void test_deterministic_identity_and_bytecode_compatibility() {
     emojineer::write_bytecode(a, bytes);
     bytes.seekg(0);
     const auto roundtrip = emojineer::read_bytecode(bytes);
-    require(execute(roundtrip) == "5\n", "module-linked EMJBC v3 should round-trip and execute");
+    require(execute(roundtrip) == "5\n", "module-linked current EMJBC should round-trip and execute");
 }
 
 void test_dependency_initialization_once_and_project_check() {
@@ -272,6 +272,30 @@ void test_dependency_initialization_once_and_project_check() {
 }
 
 
+void test_intrinsics_survive_module_linking() {
+    TempRoot root("intrinsics");
+    write_source(root.path / "codec.emoji",
+                 "🧩 🌲\n"
+                 "🛠️ 🧠 🫴 🍎 🤲\n"
+                 "📦 🔡 🫴 🧬 🫴 🍎 🤲 🤲\n"
+                 "🏁\n"
+                 "📤 🧠\n");
+    write_source(root.path / "main.emoji",
+                 "🧩 🚀\n"
+                 "🔗 📜codec.emoji📜\n"
+                 "📝 🧠 🫴 📜Hi📜 🤲\n");
+    require(execute(emojineer::compile_file(root.path / "main.emoji", {}, root.path)) == "4869\n",
+            "language intrinsics must remain reserved calls through module linking");
+
+    write_source(root.path / "bad.emoji",
+                 "🧩 🌋\n"
+                 "🛠️ 🧬 🫴 🍎 🤲\n"
+                 "📦 🍎\n"
+                 "🏁\n");
+    expect_error([&] { (void)emojineer::compile_file(root.path / "bad.emoji", {}, root.path); },
+                 "reserved language intrinsic");
+}
+
 void test_package_import_error_preserves_importer_source() {
     TempRoot root("package-import-source-owner");
     emojineer::initialize_project(root.path, "owner_app");
@@ -291,8 +315,8 @@ void test_package_import_error_preserves_importer_source() {
         (void)emojineer::compile_file(entry, {}, root.path);
     } catch (const emojineer::SourceLocationException& error) {
         caught = true;
-        require(error.sourcePath == imported,
-                "package import failure must belong to imported module path");
+        require(error.sourcePath == std::filesystem::canonical(imported),
+                "package import failure must belong to canonical imported module path");
         require(error.sourceIdentity.find("child.emoji") != std::string::npos,
                 "package import failure must preserve imported module identity");
         require(error.line == 2, "package import failure must preserve import line");
@@ -317,6 +341,7 @@ int main() {
         test_collisions_and_declaration_rules();
         test_deterministic_identity_and_bytecode_compatibility();
         test_dependency_initialization_once_and_project_check();
+        test_intrinsics_survive_module_linking();
         test_package_import_error_preserves_importer_source();
         std::cout << "✅ module/import tests passed\n";
         return 0;

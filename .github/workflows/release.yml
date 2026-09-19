@@ -1,0 +1,140 @@
+name: release-packages
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            triplet: linux
+          - os: macos-latest
+            triplet: macos
+          - os: windows-latest
+            triplet: windows
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify release metadata and 1.x license gate
+        shell: bash
+        run: |
+          args=()
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            args+=(--tag "$GITHUB_REF_NAME")
+          fi
+          python scripts/release/verify-release-metadata.py "${args[@]}"
+
+      - name: Install Linux dependencies
+        if: matrix.triplet == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libicu-dev libcurl4-openssl-dev
+
+      - name: Install macOS dependencies
+        if: matrix.triplet == 'macos'
+        run: |
+          brew install ninja icu4c curl
+          echo "ICU_ROOT=$(brew --prefix icu4c)" >> "$GITHUB_ENV"
+          echo "CURL_ROOT=$(brew --prefix curl)" >> "$GITHUB_ENV"
+
+      - name: Install Windows dependencies
+        if: matrix.triplet == 'windows'
+        shell: pwsh
+        run: |
+          vcpkg install icu:x64-windows-static curl:x64-windows-static
+          "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" >> $env:GITHUB_ENV
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [ "${{ matrix.triplet }}" = "windows" ]; then
+            cmake -S . -B build-release -G "Visual Studio 18 2026" -A x64 "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}" -DVCPKG_TARGET_TRIPLET=x64-windows-static
+          elif [ "${{ matrix.triplet }}" = "macos" ]; then
+            cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release "-DICU_ROOT=${ICU_ROOT}" "-DCURL_ROOT=${CURL_ROOT}"
+          else
+            cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: Build and test
+        shell: bash
+        run: |
+          if [ "${{ matrix.triplet }}" = "windows" ]; then
+            cmake --build build-release --config Release
+            ctest --test-dir build-release -C Release --output-on-failure
+          else
+            cmake --build build-release
+            ctest --test-dir build-release --output-on-failure
+          fi
+
+      - name: Install staging tree
+        shell: bash
+        run: |
+          if [ "${{ matrix.triplet }}" = "windows" ]; then
+            cmake --install build-release --config Release --prefix staging
+          else
+            cmake --install build-release --prefix staging
+          fi
+
+      - name: Installed tool smoke
+        if: matrix.triplet != 'windows'
+        shell: bash
+        run: |
+          ./staging/bin/emojineer --version
+          ./staging/bin/emji --version
+          ./staging/bin/emojineer-lsp --version
+          tmp="$(mktemp -d)"
+          ./staging/bin/emji init "$tmp/demo" --name demo
+          ./staging/bin/emojineer run "$tmp/demo/src/main.emoji"
+          rm -rf "$tmp"
+
+      - name: Installed tool smoke (Windows)
+        if: matrix.triplet == 'windows'
+        shell: pwsh
+        run: .\scripts\windows\smoke-emojineer.ps1 -Root staging
+
+      - name: Build package
+        shell: bash
+        run: |
+          if [ "${{ matrix.triplet }}" = "windows" ]; then
+            cpack --config build-release/CPackConfig.cmake -C Release -B packages
+          else
+            cpack --config build-release/CPackConfig.cmake -B packages
+          fi
+
+      - name: Package checksums
+        shell: bash
+        run: |
+          cd packages
+          for f in *; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.sha256) ;;
+              *) cmake -E sha256sum "$f" > "$f.sha256" ;;
+            esac
+          done
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: emojineer-${{ matrix.triplet }}
+          path: packages/*
+
+      - name: Publish tagged release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*
+          generate_release_notes: true

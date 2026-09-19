@@ -20,13 +20,16 @@ constexpr std::array<Capability, 6> CapabilityOrder{
     Capability::Host,
 };
 
-constexpr std::array<NativeFacility, 6> FacilityOrder{
+constexpr std::array<NativeFacility, 9> FacilityOrder{
     NativeFacility::FilesystemReadText,
     NativeFacility::NetworkGet,
     NativeFacility::ProcessRun,
     NativeFacility::ClockMillis,
     NativeFacility::RandomInt,
     NativeFacility::HostEnvironment,
+    NativeFacility::FilesystemWriteText,
+    NativeFacility::FilesystemCreateDirectory,
+    NativeFacility::NetworkRequest,
 };
 
 std::string lower_ascii(std::string_view input) {
@@ -118,6 +121,9 @@ Capability native_facility_capability(NativeFacility facility) {
         case NativeFacility::ClockMillis: return Capability::Clock;
         case NativeFacility::RandomInt: return Capability::Random;
         case NativeFacility::HostEnvironment: return Capability::Host;
+        case NativeFacility::FilesystemWriteText: return Capability::Filesystem;
+        case NativeFacility::FilesystemCreateDirectory: return Capability::Filesystem;
+        case NativeFacility::NetworkRequest: return Capability::Network;
     }
     throw std::runtime_error("unknown native facility");
 }
@@ -130,6 +136,9 @@ std::string native_facility_name(NativeFacility facility) {
         case NativeFacility::ClockMillis: return "clock.millis";
         case NativeFacility::RandomInt: return "random.int";
         case NativeFacility::HostEnvironment: return "host.environment";
+        case NativeFacility::FilesystemWriteText: return "filesystem.write-text";
+        case NativeFacility::FilesystemCreateDirectory: return "filesystem.create-directory";
+        case NativeFacility::NetworkRequest: return "network.request";
     }
     throw std::runtime_error("unknown native facility");
 }
@@ -142,6 +151,9 @@ std::string native_facility_glyph(NativeFacility facility) {
         case NativeFacility::ClockMillis: return "🕰️";
         case NativeFacility::RandomInt: return "🎲";
         case NativeFacility::HostEnvironment: return "🖥️";
+        case NativeFacility::FilesystemWriteText: return "✍️";
+        case NativeFacility::FilesystemCreateDirectory: return "📁";
+        case NativeFacility::NetworkRequest: return "🛰️";
     }
     throw std::runtime_error("unknown native facility");
 }
@@ -154,6 +166,9 @@ std::size_t native_facility_arity(NativeFacility facility) {
         case NativeFacility::ClockMillis: return 0;
         case NativeFacility::RandomInt: return 1;
         case NativeFacility::HostEnvironment: return 1;
+        case NativeFacility::FilesystemWriteText: return 2;
+        case NativeFacility::FilesystemCreateDirectory: return 1;
+        case NativeFacility::NetworkRequest: return 3;
     }
     throw std::runtime_error("unknown native facility");
 }
@@ -167,7 +182,7 @@ std::optional<NativeFacility> native_facility_from_identifier(std::string_view c
 
 std::optional<NativeFacility> native_facility_from_operand(std::int32_t operand) {
     if (operand < static_cast<std::int32_t>(NativeFacility::FilesystemReadText) ||
-        operand > static_cast<std::int32_t>(NativeFacility::HostEnvironment)) return std::nullopt;
+        operand > static_cast<std::int32_t>(NativeFacility::NetworkRequest)) return std::nullopt;
     return static_cast<NativeFacility>(operand);
 }
 
